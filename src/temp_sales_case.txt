@@ -1,0 +1,90 @@
+      case 'sales':
+        return <SalesDashboard salesData={salesData} />;
+
+      case 'roles':
+        return <RoleManagement />;
+
+      case 'farms':
+        return (
+          <Card>
+            <CardHeader className="pb-4">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+                <CardTitle>Gestión de Fincas</CardTitle>
+                <Button size="sm" onClick={() => setShowCreateFarm(true)}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Nueva Finca
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <DashboardGrid columns={2}>
+                {farms.map((farm) => (
+                  <Card key={farm.id} className="border">
+                    <CardContent className="p-4">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <h3 className="font-medium text-sm">{farm.name}</h3>
+                          <Badge 
+                            variant={farm.status === 'available' ? 'default' : 'secondary'}
+                            className="text-xs"
+                          >
+                            {farm.status === 'available' ? 'Disponible' : 'Ocupada'}
+                          </Badge>
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Propietario:</span>
+                            <span className="font-medium">{farm.owner}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Capacidad:</span>
+                            <span className="font-medium">{farm.capacity} personas</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-600">Precio/noche:</span>
+                            <span className="font-medium">${parseInt(farm.pricePerNight).toLocaleString()}</span>
+                          </div>
+                        </div>
+                        <div className="flex space-x-2">
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="flex-1"
+                            onClick={() => handleViewItem(farm, 'farm')}
+                          >
+                            <Eye className="w-3 h-3 mr-1" />
+                            Ver
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            className="flex-1"
+                          >
+                            <Edit className="w-3 h-3 mr-1" />
+                            Editar
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => handleDeleteItem(
+                              farm, 
+                              'finca', 
+                              () => handleDeleteFarm(farm.id)
+                            )}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </DashboardGrid>
+            </CardContent>
+          </Card>
+        );
+
+      default:
+        return <div>Pestaña no encontrada</div>;
+    }
+  };

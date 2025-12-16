@@ -1,0 +1,1 @@
+// This hook is no longer used - tours are managed directly in components
