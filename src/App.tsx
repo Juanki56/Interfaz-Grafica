@@ -21,7 +21,10 @@ import { UserProfile } from './components/UserProfile';
 import { ProgrammingManagement } from './components/ProgrammingManagement';
 import { WhatsAppButton } from './components/WhatsAppButton';
 import { ServicesProvider } from './hooks/useServices';
-// Mock authentication system
+import { buildApiUrl, getAuthHeaders, API_CONFIG } from './config/api.config';
+import { decodeJWT, debugToken } from './utils/jwtDecoder';
+
+// Mock authentication system (deprecated - now using real backend)
 const mockAuth = {
   users: {
     'admin@occitours.com': { id: '1', name: 'Administrador Principal', email: 'admin@occitours.com', role: 'admin', password: 'password123' },
@@ -212,50 +215,179 @@ export default function App() {
 
   const checkSession = async () => {
     try {
-      const { session } = await mockAuth.getSession();
-      if (session?.access_token && session.user) {
-        setUser(session.user);
+      const token = localStorage.getItem('token');
+      if (token) {
+        // Verificar token con el backend usando /api/auth/profile
+        const response = await fetch(buildApiUrl(API_CONFIG.AUTH.PROFILE), {
+          method: 'GET',
+          headers: getAuthHeaders()
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          // El backend retorna { success: true, perfil: {...} }
+          if (data.success && data.perfil) {
+            const nombreCompleto = data.perfil.apellido 
+              ? `${data.perfil.nombre} ${data.perfil.apellido}`
+              : data.perfil.nombre || '';
+
+            // Mapear roles del backend (español) al frontend (inglés)
+            const roleMapping: Record<string, string> = {
+              'Administrador': 'admin',
+              'Asesor': 'advisor',
+              'Guía': 'guide',
+              'Cliente': 'client',
+              'administrador': 'admin',
+              'asesor': 'advisor',
+              'guía': 'guide',
+              'guia': 'guide',
+              'cliente': 'client'
+            };
+
+            const backendRole = data.perfil.rol_nombre || 'Cliente';
+            const frontendRole = roleMapping[backendRole] || 'client';
+
+            const mappedUser = {
+              id: data.perfil.id_cliente?.toString() || data.perfil.id_empleado?.toString() || data.perfil.id_usuarios?.toString() || '',
+              name: nombreCompleto,
+              email: data.perfil.correo || '',
+              role: frontendRole, // Rol mapeado a inglés para el frontend
+              phone: data.perfil.telefono || '',
+              status: data.perfil.estado ? 'Activo' : 'Inactivo',
+              tipo_usuario: data.perfil.tipo_usuario || 'cliente'
+            };
+
+            console.log('🔄 Sesión restaurada - Rol backend:', backendRole, '→ Rol frontend:', frontendRole);
+            setUser(mappedUser);
+          }
+        } else {
+          // Token inválido, limpiar localStorage
+          localStorage.removeItem('token');
+        }
       }
     } catch (error) {
       console.error('Session check error:', error);
+      localStorage.removeItem('token');
     } finally {
       setLoading(false);
     }
   };
 
-  // Mock authentication function
+  // Backend authentication function
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      const response = await mockAuth.login(email, password);
+      console.log('🔐 Intentando login con:', { correo: email });
       
-      if (response.user && !response.error) {
-        setUser(response.user);
-        setShowLogin(false);
-        setShowRegister(false);
-        // Set default view based on role
-        if (response.user.role === 'advisor' || response.user.role === 'guide' || response.user.role === 'client') {
-          setCurrentView('profile');
-        } else {
-          setCurrentView('dashboard');
-        }
-        return true;
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.LOGIN), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          correo: email,
+          contrasena: password
+        })
+      });
+
+      const data = await response.json();
+      
+      console.log('📡 Respuesta del servidor:', {
+        status: response.status,
+        ok: response.ok,
+        data: data
+      });
+
+      if (!response.ok) {
+        console.error('❌ Login failed:', data);
+        return false;
       }
-      return false;
+
+      // Guardar token
+      localStorage.setItem('token', data.token);
+
+      // Debug: Mostrar contenido del token
+      console.log('🔐 Token guardado, decodificando...');
+      debugToken();
+
+      // Mapear los datos del usuario del backend al formato del frontend
+      const nombreCompleto = data.usuario?.apellido 
+        ? `${data.usuario.nombre} ${data.usuario.apellido}`
+        : data.usuario?.nombre || '';
+
+      // Mapear roles del backend (español) al frontend (inglés)
+      const roleMapping: Record<string, string> = {
+        'Administrador': 'admin',
+        'Asesor': 'advisor',
+        'Guía': 'guide',
+        'Cliente': 'client',
+        // También aceptar roles en minúsculas
+        'administrador': 'admin',
+        'asesor': 'advisor',
+        'guía': 'guide',
+        'guia': 'guide',
+        'cliente': 'client'
+      };
+
+      const backendRole = data.usuario?.rol || 'Cliente';
+      const frontendRole = roleMapping[backendRole] || 'client';
+
+      const mappedUser = {
+        id: data.usuario?.id?.toString() || '',
+        name: nombreCompleto,
+        email: data.usuario?.correo || email,
+        role: frontendRole, // Rol mapeado a inglés para el frontend
+        phone: data.usuario?.telefono || '',
+        status: data.usuario?.estado || 'Activo',
+        tipo_usuario: data.usuario?.tipo_usuario || 'cliente'
+      };
+
+      console.log('👤 Usuario mapeado:', mappedUser);
+      console.log('🔄 Rol backend:', backendRole, '→ Rol frontend:', frontendRole);
+
+      // Guardar usuario
+      setUser(mappedUser);
+
+      setShowLogin(false);
+      setShowRegister(false);
+      
+      // Set default view based on role (ahora usando roles en inglés)
+      if (frontendRole === 'admin') {
+        setCurrentView('dashboard');
+      } else {
+        setCurrentView('profile');
+      }
+
+      return true;
+
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('Error login:', error);
       return false;
     }
   };
 
-  // Mock registration function
+  // Backend registration function
   const register = async (name: string, email: string, password: string, role: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const response = await mockAuth.register(name, email, password, role);
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.REGISTER), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          nombre: name,
+          correo: email,
+          contrasena: password,
+          rol: role
+        })
+      });
+
+      const data = await response.json();
       
-      if (response.user && !response.error) {
-        return { success: true };
+      if (!response.ok) {
+        return { success: false, error: data.mensaje || data.error || 'Error al crear la cuenta' };
       }
-      return { success: false, error: response.error?.message || 'Error al crear la cuenta' };
+
+      return { success: true };
     } catch (error) {
       console.error('Registration error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
@@ -264,7 +396,8 @@ export default function App() {
 
   const logout = async () => {
     try {
-      await mockAuth.signOut();
+      // Limpiar token y sesión
+      localStorage.removeItem('token');
       setUser(null);
       setCurrentView('home');
       setShowLogin(false);
@@ -288,13 +421,30 @@ export default function App() {
 
   // Helper functions for admin dashboard
   const getAllUsers = () => {
-    return mockAuth.getAllUsers();
+    // Esta función ahora debería ser asíncrona y hacer fetch al backend
+    // Por ahora retorna un array vacío para evitar errores
+    console.warn('getAllUsers debe migrar a usar el backend');
+    return [];
   };
 
   const updateUserRole = async (email: string, newRole: string) => {
     try {
-      const response = await mockAuth.updateUserRole(email, newRole);
-      return response;
+      const response = await fetch(buildApiUrl(API_CONFIG.USERS.UPDATE_ROLE), {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          correo: email,
+          rol: newRole
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        return { success: false, error: data.mensaje || 'Error al actualizar el rol' };
+      }
+
+      return { success: true };
     } catch (error) {
       console.error('Update user role error:', error);
       return { success: false, error: 'Error del servidor' };
@@ -363,7 +513,26 @@ export default function App() {
   }
 
   const renderDashboard = () => {
-    switch (user?.role) {
+    // Normalizar rol (español a inglés)
+    const normalizeRole = (role: string): string => {
+      const roleMap: { [key: string]: string } = {
+        'administrador': 'admin',
+        'admin': 'admin',
+        'asesor': 'advisor',
+        'advisor': 'advisor',
+        'guia': 'guide',
+        'guía': 'guide',
+        'guide': 'guide',
+        'cliente': 'client',
+        'client': 'client'
+      };
+      return roleMap[role?.toLowerCase()] || role;
+    };
+
+    const normalizedRole = normalizeRole(user?.role || '');
+    console.log('🎭 Rol del usuario:', { original: user?.role, normalizado: normalizedRole, usuario: user });
+
+    switch (normalizedRole) {
       case 'admin':
         return <AdminDashboard />;
       case 'advisor':
@@ -373,11 +542,27 @@ export default function App() {
       case 'client':
         return <ClientDashboard />;
       default:
-        return <div>Role no reconocido</div>;
+        console.error('❌ Rol no reconocido:', normalizedRole);
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-100">
+            <div className="bg-white p-8 rounded-lg shadow-lg">
+              <h2 className="text-2xl font-bold text-red-600 mb-4">Rol no reconocido</h2>
+              <p>Rol actual: <strong>{user?.role}</strong></p>
+              <p className="mt-2">Roles válidos: admin, advisor, guide, client</p>
+              <button 
+                onClick={logout}
+                className="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+              >
+                Cerrar Sesión
+              </button>
+            </div>
+          </div>
+        );
     }
   };
 
   const renderPublicView = () => {
+    console.log('🖥️ Renderizando vista:', currentView, { user });
     switch (currentView) {
       case 'home':
         return <HomePage onViewChange={handleViewChange} />;

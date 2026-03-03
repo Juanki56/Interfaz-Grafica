@@ -64,9 +64,12 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner@2.0.3';
 import { mockBookings } from '../utils/adminMockData';
+import { reservasAPI, clientesAPI } from '../services/api';
+import { useEffect } from 'react';
 
 export function BookingsManagement() {
   const [bookings, setBookings] = useState(mockBookings);
+  const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('');
@@ -79,11 +82,74 @@ export function BookingsManagement() {
   const itemsPerPage = 10;
 
   // Mock data for dropdowns
-  const mockClients = [
+  const [mockClients, setMockClients] = useState<any[]>([
     { id: '1', name: 'Juan Pérez', document: '1234567890' },
     { id: '2', name: 'María García', document: '0987654321' },
     { id: '3', name: 'Carlos López', document: '1122334455' },
-  ];
+  ]);
+
+  // Cargar datos del backend al montar el componente
+  useEffect(() => {
+    cargarReservas();
+    cargarClientes();
+  }, []);
+
+  const cargarReservas = async () => {
+    try {
+      setIsLoading(true);
+      console.log('📥 Cargando reservas del servidor...');
+      const data = await reservasAPI.getAll();
+      console.log('✅ Reservas cargadas:', data);
+      
+      // Mapear datos del backend al formato del componente
+      const reservasMapeadas = data.map((r: any) => ({
+        id: r.id_reserva?.toString() || `BK-${r.id_reserva}`,
+        clientId: r.id_cliente?.toString(),
+        clientName: `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim(),
+        clientEmail: r.cliente_email || '',
+        clientPhone: r.cliente_telefono || '',
+        packageName: 'Paquete Turístico',
+        date: r.fecha_reserva?.split('T')[0] || '',
+        participants: 1,
+        adults: 1,
+        children: 0,
+        status: r.estado || 'Pendiente',
+        paymentStatus: 'Pendiente',
+        paymentMethod: 'Por definir',
+        total: parseFloat(r.monto_total) || 0,
+        subtotal: parseFloat(r.monto_total) || 0,
+        discount: 0,
+        checkIn: '08:00',
+        checkOut: '17:00',
+        guide: 'Por asignar',
+        advisor: 'Administrador',
+        emergency: 'Por definir',
+        specialRequests: r.notas || 'Ninguna'
+      }));
+      
+      setBookings(reservasMapeadas);
+    } catch (error) {
+      console.error('❌ Error al cargar reservas:', error);
+      toast.error('Error al cargar reservas. Usando datos locales.');
+      setBookings(mockBookings);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const cargarClientes = async () => {
+    try {
+      const data = await clientesAPI.getAll();
+      const clientesMapeados = data.map((c: any) => ({
+        id: c.id_cliente?.toString(),
+        name: `${c.nombre} ${c.apellido}`,
+        document: c.numero_documento || ''
+      }));
+      setMockClients(clientesMapeados.length > 0 ? clientesMapeados : mockClients);
+    } catch (error) {
+      console.error('Error al cargar clientes:', error);
+    }
+  };
 
   const mockRoutes = [
     { id: 'R1', name: 'Valle del Cocora', code: 'RT-001' },
@@ -204,107 +270,95 @@ export function BookingsManagement() {
   };
 
   // Crear reserva
-  const handleCreateBooking = () => {
-    if (!formData.clientId || !formData.bookingDate || (!formData.routeId && !formData.farmId)) {
+  const handleCreateBooking = async () => {
+    if (!formData.clientId || !formData.bookingDate) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
     }
 
-    // Crear nueva reserva con datos reales
-    const newBooking = {
-      id: `BK-${Date.now()}`,
-      clientId: formData.clientId,
-      clientName: formData.clientName,
-      clientEmail: `${formData.clientName.toLowerCase().replace(' ', '.')}@email.com`,
-      clientPhone: '+57 300 123 4567',
-      packageName: formData.routeId 
-        ? mockRoutes.find(r => r.id === formData.routeId)?.name || 'Ruta Personalizada'
-        : mockFarms.find(f => f.id === formData.farmId)?.name || 'Finca Personalizada',
-      date: formData.bookingDate,
-      participants: formData.participants,
-      adults: formData.adults,
-      children: formData.children,
-      status: 'Pendiente',
-      paymentStatus: 'Pendiente',
-      paymentMethod: 'Por definir',
-      total: 250000,
-      subtotal: 250000,
-      discount: 0,
-      checkIn: '08:00',
-      checkOut: '17:00',
-      guide: 'Por asignar',
-      advisor: 'Administrador',
-      emergency: 'Por definir',
-      specialRequests: formData.specialRequests || 'Ninguna'
-    };
-
-    // Actualizar el estado de bookings
-    setBookings([newBooking, ...bookings]);
-    
-    toast.success('Reserva creada correctamente');
-    setIsCreateModalOpen(false);
-    
-    // Limpiar formulario
-    setFormData({
-      clientId: '',
-      clientName: '',
-      bookingDate: '',
-      routeId: '',
-      farmId: '',
-      services: [],
-      participants: 1,
-      adults: 1,
-      children: 0,
-      specialRequests: ''
-    });
-    setProofFile(null);
-    setProofFileName('');
+    try {
+      setIsLoading(true);
+      console.log('➕ Creando reserva:', formData);
+      
+      const nuevaReserva = await reservasAPI.create({
+        id_cliente: parseInt(formData.clientId),
+        notas: formData.specialRequests || ''
+      });
+      
+      console.log('✅ Reserva creada:', nuevaReserva);
+      toast.success('Reserva creada correctamente');
+      setIsCreateModalOpen(false);
+      
+      // Limpiar formulario
+      setFormData({
+        clientId: '',
+        clientName: '',
+        bookingDate: '',
+        routeId: '',
+        farmId: '',
+        services: [],
+        participants: 1,
+        adults: 1,
+        children: 0,
+        specialRequests: ''
+      });
+      setProofFile(null);
+      setProofFileName('');
+      
+      // Recargar lista de reservas
+      await cargarReservas();
+      
+    } catch (error: any) {
+      console.error('❌ Error al crear reserva:', error);
+      toast.error(error.message || 'Error al crear la reserva. Verifica que el backend esté corriendo.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Editar reserva
-  const handleEditBooking = () => {
-    if (!formData.clientId || !formData.bookingDate || (!formData.routeId && !formData.farmId)) {
+  const handleEditBooking = async () => {
+    if (!formData.clientId || !formData.bookingDate) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
     }
 
-    // Actualizar reserva existente
-    const updatedBookings = bookings.map(booking => {
-      if (booking.id === selectedBooking?.id) {
-        return {
-          ...booking,
-          clientId: formData.clientId,
-          clientName: formData.clientName,
-          date: formData.bookingDate,
-          packageName: formData.routeId 
-            ? mockRoutes.find(r => r.id === formData.routeId)?.name || 'Ruta Personalizada'
-            : mockFarms.find(f => f.id === formData.farmId)?.name || 'Finca Personalizada',
-          participants: formData.participants,
-          adults: formData.adults,
-          children: formData.children,
-          specialRequests: formData.specialRequests
-        };
-      }
-      return booking;
-    });
-
-    setBookings(updatedBookings);
-    toast.success('Reserva actualizada correctamente');
-    setIsEditModalOpen(false);
-    
-    // Limpiar formulario
-    setFormData({
-      clientId: '',
-      clientName: '',
-      bookingDate: '',
-      routeId: '',
-      farmId: '',
-      services: [],
-      participants: 1,
-      adults: 1,
-      children: 0,
-      specialRequests: ''
-    });
+    try {
+      setIsLoading(true);
+      const reservaId = selectedBooking?.id?.toString().replace('BK-', '');
+      console.log('🔄 Actualizando reserva:', reservaId, formData);
+      
+      await reservasAPI.update(parseInt(reservaId), {
+        notas: formData.specialRequests
+      });
+      
+      console.log('✅ Reserva actualizada');
+      toast.success('Reserva actualizada correctamente');
+      setIsEditModalOpen(false);
+      
+      // Recargar lista
+      await cargarReservas();
+      
+      // Limpiar formulario
+      setFormData({
+        clientId: '',
+        clientName: '',
+        bookingDate: '',
+        routeId: '',
+        farmId: '',
+        services: [],
+        participants: 1,
+        adults: 1,
+        children: 0,
+        specialRequests: ''
+      });
+      
+    } catch (error: any) {
+      console.error('❌ Error al editar reserva:', error);
+      toast.error(error.message || 'Error al actualizar la reserva');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Ver detalle
@@ -313,12 +367,31 @@ export function BookingsManagement() {
     setIsDetailModalOpen(true);
   };
 
-  // Cambiar estado
-  const handleChangeStatus = (bookingId: string, newStatus: string) => {
-    setBookings(bookings.map(b => 
-      b.id === bookingId ? { ...b, status: newStatus } : b
-    ));
-    toast.success(`Estado actualizado a ${newStatus}`);
+  // Cambiar estado  
+  const handleChangeStatus = async (bookingId: string, newStatus: string) => {
+    try {
+      const reservaId = bookingId.toString().replace('BK-', '');
+      
+      // Si el nuevo estado es "Cancelada", llamar al endpoint de cancelar
+      if (newStatus === 'Cancelada') {
+        console.log('❌ Cancelando reserva:', reservaId);
+        await reservasAPI.cancelar(parseInt(reservaId), 'Cancelación solicitada por usuario');
+      } else {
+        // Para otros estados, actualizar
+        console.log('🔄 Cambiando estado de reserva:', reservaId, newStatus);
+        await reservasAPI.update(parseInt(reservaId), {
+          estado: newStatus
+        });
+      }
+      
+      toast.success(`Estado actualizado a ${newStatus}`);
+      
+      // Recargar lista
+      await cargarReservas();
+    } catch (error: any) {
+      console.error('❌ Error al cambiar estado:', error);
+      toast.error(error.message || 'Error al cambiar el estado');
+    }
   };
 
   // Generar PDF

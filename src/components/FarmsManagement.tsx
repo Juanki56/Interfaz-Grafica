@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Plus,
@@ -46,14 +46,16 @@ import {
   AlertDialogTrigger,
 } from './ui/alert-dialog';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { mockFarms } from '../utils/adminMockData';
+import { fincasAPI, Finca } from '../services/api';
+import { toast } from 'sonner@2.0.3';
 
 interface FarmsManagementProps {
   canDelete?: boolean; // Admin puede eliminar, Asesor no
 }
 
 export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
-  const [farms, setFarms] = useState(mockFarms);
+  const [farms, setFarms] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -65,6 +67,37 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   
   const itemsPerPage = 3;
+
+  // Cargar fincas desde la API
+  useEffect(() => {
+    loadFarms();
+  }, []);
+
+  const loadFarms = async () => {
+    try {
+      setIsLoading(true);
+      const fincasFromDB = await fincasAPI.getAll();
+      
+      // Mapear fincas del backend al formato delFrontend
+      const mappedFarms = fincasFromDB.map(finca => ({
+        id: finca.id_finca.toString(),
+        name: finca.nombre,
+        location: finca.ubicacion,
+        description: finca.descripcion,
+        capacity: finca.capacidad,
+        pricePerNight: finca.precio_noche,
+        status: finca.estado ? 'active' : 'inactive'
+      }));
+      
+      setFarms(mappedFarms);
+      console.log('✅ Fincas cargadas desde BD:', mappedFarms);
+    } catch (error) {
+      console.error('❌ Error cargando fincas:', error);
+      toast.error('Error al cargar las fincas');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Filtrar fincas
   const filteredFarms = farms.filter(farm => {

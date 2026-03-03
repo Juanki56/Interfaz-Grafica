@@ -15,6 +15,7 @@ import { useAuth } from '../App';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { toast } from 'sonner@2.0.3';
 import { ClientSalesTab, ClientPaymentsTab } from './ClientSalesAndPayments';
+import { clientesAPI, authAPI } from '../services/api';
 
 interface Booking {
   id: string;
@@ -153,7 +154,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
     toast.success('Perfil actualizado exitosamente');
   };
 
-  const handlePasswordChange = () => {
+  const handlePasswordChange = async () => {
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
       toast.error('Por favor completa todos los campos');
       return;
@@ -169,10 +170,18 @@ export function UserProfile({ onClose }: UserProfileProps) {
       return;
     }
     
-    // Mock password change
-    console.log('Password changed');
-    toast.success('Contraseña cambiada exitosamente');
-    setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    try {
+      await authAPI.cambiarContrasena(
+        passwordData.currentPassword,
+        passwordData.newPassword
+      );
+      
+      toast.success('Contraseña cambiada exitosamente');
+      setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+    } catch (error: any) {
+      console.error('Error al cambiar contraseña:', error);
+      toast.error(error.message || 'Error al cambiar la contraseña');
+    }
   };
 
   const handleNotificationUpdate = () => {

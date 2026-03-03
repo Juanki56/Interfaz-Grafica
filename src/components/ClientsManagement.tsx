@@ -27,6 +27,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
+import { clientesAPI } from '../services/api';
 import {
   Table,
   TableBody,
@@ -430,7 +431,49 @@ export function ClientsManagement() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<any>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [isLoading, setIsLoading] = useState(false);
   const itemsPerPage = 5;
+
+  // Cargar clientes del backend al montar el componente
+  useEffect(() => {
+    cargarClientes();
+  }, []);
+
+  const cargarClientes = async () => {
+    try {
+      setIsLoading(true);
+      const data = await clientesAPI.getAll();
+      // Mapear los datos del backend al formato del componente
+      const clientesMapeados = data.map((c: any) => ({
+        id: c.id_cliente?.toString() || c.id?.toString(),
+        name: `${c.nombre} ${c.apellido}`,
+        documentNumber: c.numero_documento || '',
+        email: c.correo || '',
+        phone: c.telefono || '',
+        address: c.direccion || '',
+        preferences: '',
+        experienceType: 'rural',
+        frequencyLevel: 'Media',
+        satisfactionLevel: 'Buena',
+        totalBookings: 0,
+        totalSpent: 0,
+        lastVisit: c.ultimo_acceso || new Date().toISOString().split('T')[0],
+        joinDate: c.fecha_registro || new Date().toISOString().split('T')[0],
+        location: '',
+        favoriteRoutes: [],
+        notes: '',
+        isActive: c.estado !== false
+      }));
+      setClients(clientesMapeados);
+    } catch (error) {
+      console.error('Error al cargar clientes:', error);
+      toast.error('Error al cargar clientes del servidor');
+      // Usar mock data como fallback
+      setClients(mockClients);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Form state
   const [formData, setFormData] = useState({
@@ -529,22 +572,48 @@ export function ClientsManagement() {
     setIsEditModalOpen(true);
   };
 
-  const handleUpdateClient = () => {
+  const handleUpdateClient = async () => {
     if (!formData.name || !formData.email || !formData.phone) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
     }
     
-    setClients(clients.map(c => 
-      c.id === selectedClient.id 
-        ? { ...c, ...formData }
-        : c
-    ));
-    
-    toast.success('Cliente actualizado correctamente');
-    setIsEditModalOpen(false);
-    setSelectedClient(null);
-    setFormData({ name: '', email: '', phone: '', preferences: '', location: '', notes: '' });
+    try {
+      setIsLoading(true);
+      const [nombre, ...apellidoParts] = formData.name.split(' ');
+      const apellido = apellidoParts.join(' ') || '';
+
+      console.log('🔄 Actualizando cliente:', {
+        id: selectedClient.id,
+        nombre,
+        apellido,
+        telefono: formData.phone,
+        direccion: formData.location
+      });
+
+      const resultado = await clientesAPI.update(parseInt(selectedClient.id), {
+        nombre,
+        apellido,
+        telefono: formData.phone,
+        direccion: formData.location
+      });
+      
+      console.log('✅ Cliente actualizado:', resultado);
+      
+      toast.success('Cliente actualizado correctamente');
+      setIsEditModalOpen(false);
+      setSelectedClient(null);
+      setFormData({ name: '', email: '', phone: '', preferences: '', location: '', notes: '' });
+      
+      // Recargar clientes del servidor
+      await cargarClientes();
+      
+    } catch (error: any) {
+      console.error('❌ Error al actualizar cliente:', error);
+      toast.error(error.message || 'Error al actualizar el cliente. Verifica que el backend esté corriendo.');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Eliminar cliente
@@ -553,11 +622,21 @@ export function ClientsManagement() {
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteClient = () => {
-    setClients(clients.filter(c => c.id !== selectedClient.id));
-    toast.success('Cliente eliminado correctamente');
-    setIsDeleteModalOpen(false);
-    setSelectedClient(null);
+  const confirmDeleteClient = async () => {
+    try {
+      setIsLoading(true);
+      await clientesAPI.delete(parseInt(selectedClient.id));
+      
+      setClients(clients.filter(c => c.id !== selectedClient.id));
+      toast.success('Cliente eliminado correctamente');
+      setIsDeleteModalOpen(false);
+      setSelectedClient(null);
+    } catch (error: any) {
+      console.error('Error al eliminar cliente:', error);
+      toast.error(error.message || 'Error al eliminar el cliente');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Cambiar estado del cliente

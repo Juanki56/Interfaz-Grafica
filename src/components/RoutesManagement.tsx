@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Route as RouteIcon,
@@ -55,7 +55,7 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Separator } from './ui/separator';
 import { toast } from 'sonner@2.0.3';
-import { mockRoutes } from '../utils/adminMockData';
+import { rutasAPI, Ruta } from '../services/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface Route {
@@ -77,13 +77,8 @@ interface RoutesManagementProps {
 }
 
 export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) {
-  // Initialize routes with default status
-  const [routes, setRoutes] = useState<Route[]>(
-    mockRoutes.map(route => ({
-      ...route,
-      status: route.status || 'Activa'
-    })) as Route[]
-  );
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
@@ -105,6 +100,55 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     guide: '',
     image: ''
   });
+
+  // Cargar rutas desde la API al montar el componente
+  useEffect(() => {
+    console.log('🎬 RoutesManagement montado, iniciando carga de rutas...');
+    loadRoutes();
+  }, []);
+
+  const loadRoutes = async () => {
+    try {
+      setIsLoading(true);
+      setRoutes([]); // Limpiar estado anterior
+      
+      console.log('🔄 Cargando rutas desde BD...');
+      console.log('🔑 Token disponible:', !!localStorage.getItem('token'));
+      
+      const rutasFromDB = await rutasAPI.getAll();
+      console.log('📥 Rutas recibidas de BD (raw):', rutasFromDB);
+      console.log('📊 Tipo de dato recibido:', typeof rutasFromDB, Array.isArray(rutasFromDB));
+      console.log('📏 Cantidad de rutas:', rutasFromDB?.length || 0);
+      
+      // Mapear rutas del backend al formato del frontend
+      const mappedRoutes: Route[] = rutasFromDB.map(ruta => {
+        console.log('🔄 Mapeando ruta:', ruta);
+        return {
+          id: ruta.id_ruta.toString(),
+          name: ruta.nombre,
+          location: 'Colombia', // Por defecto, puede ajustarse según necesites
+          duration: ruta.duracion_dias.toString(), // Solo el número, sin "días"
+          difficulty: ruta.dificultad || 'Moderado', // Cargar desde BD o usar default
+          price: ruta.precio_base,
+          description: ruta.descripcion,
+          image: ruta.imagen_url || '',
+          status: ruta.estado ? 'Activa' : 'Inactiva'
+        };
+      });
+      
+      console.log('✅ Rutas mapeadas:', mappedRoutes);
+      setRoutes([...mappedRoutes]); // Crear nuevo array para forzar re-render
+      console.log('✅ Estado actualizado con', mappedRoutes.length, 'rutas');
+    } catch (error) {
+      console.error('❌ Error cargando rutas:', error);
+      console.error('❌ Tipo de error:', error instanceof Error ? error.message : error);
+      toast.error(`Error al cargar las rutas: ${error instanceof Error ? error.message : 'Error desconocido'}`);
+      setRoutes([]); // Asegurar que el array esté vacío en caso de error
+    } finally {
+      setIsLoading(false);
+      console.log('🏁 Carga de rutas finalizada');
+    }
+  };
 
   // Filter routes
   const filteredRoutes = routes.filter(route =>
@@ -143,11 +187,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleEdit = (route: Route) => {
+    console.log('📝 Editando ruta:', route);
     setSelectedRoute(route);
+    
+    // Asegurar que duration sea solo el número
+    const durationNumber = route.duration?.toString().replace(/[^0-9]/g, '') || '';
+    
     setFormData({
       name: route.name || '',
       location: route.location || '',
-      duration: route.duration || '',
+      duration: durationNumber,
       difficulty: route.difficulty || 'Moderado',
       price: route.price ? route.price.toString() : '',
       description: route.description || '',
@@ -155,6 +204,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       guide: route.guide || '',
       image: route.image || ''
     });
+    
+    console.log('📝 FormData preparado:', {
+      name: route.name,
+      duration: durationNumber,
+      difficulty: route.difficulty,
+      price: route.price,
+      description: route.description,
+      image: route.image
+    });
+    
     setIsEditModalOpen(true);
   };
 
@@ -163,82 +222,175 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     setIsDeleteDialogOpen(true);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (selectedRoute) {
-      setRoutes(routes.filter(r => r.id !== selectedRoute.id));
-      toast.success('Ruta eliminada correctamente');
-      setIsDeleteDialogOpen(false);
-      setSelectedRoute(null);
+      try {
+        const routeId = parseInt(selectedRoute.id);
+        await rutasAPI.delete(routeId);
+        
+        toast.success('Ruta eliminada correctamente de la base de datos');
+        setIsDeleteDialogOpen(false);
+        setSelectedRoute(null);
+
+        // Forzar recarga inmediata de rutas
+        console.log('🔄 Recargando lista de rutas...');
+        setIsLoading(true);
+        await loadRoutes();
+      } catch (error) {
+        console.error('❌ Error eliminando ruta:', error);
+        toast.error('Error al eliminar la ruta');
+      }
     }
   };
 
-  const handleCreateRoute = () => {
-    if (!formData.name.trim() || !formData.location.trim() || !formData.price) {
-      toast.error('Por favor complete todos los campos obligatorios');
+  const handleCreateRoute = async () => {
+    // Validar campos obligatorios
+    if (!formData.name.trim()) {
+      toast.error('El nombre de la ruta es obligatorio');
       return;
     }
 
+    if (!formData.description.trim()) {
+      toast.error('La descripción es obligatoria');
+      return;
+    }
+
+    if (!formData.price || formData.price === '0') {
+      toast.error('El precio es obligatorio');
+      return;
+    }
+
+    if (!formData.duration || formData.duration === '0') {
+      toast.error('La duración es obligatoria');
+      return;
+    }
+
+    // Validar precio
     const price = parseFloat(formData.price);
     if (isNaN(price) || price <= 0) {
       toast.error('El precio debe ser un número válido mayor a 0');
       return;
     }
 
-    const newRoute: Route = {
-      id: (Math.max(...routes.map(r => parseInt(r.id)), 0) + 1).toString(),
-      name: formData.name,
-      location: formData.location,
-      duration: formData.duration,
-      difficulty: formData.difficulty,
-      price: price,
-      description: formData.description,
-      capacity: formData.capacity ? parseInt(formData.capacity) : undefined,
-      guide: formData.guide || undefined,
-      image: formData.image || undefined
-    };
+    // Validar duración
+    const durationDays = parseInt(formData.duration);
+    if (isNaN(durationDays) || durationDays <= 0) {
+      toast.error('La duración debe ser un número válido mayor a 0');
+      return;
+    }
 
-    setRoutes([newRoute, ...routes]);
-    toast.success('Ruta creada correctamente');
-    setIsCreateModalOpen(false);
-    resetForm();
+    try {
+      // Preparar datos para el backend
+      const rutaData: Partial<Ruta> = {
+        nombre: formData.name.trim(),
+        descripcion: formData.description.trim(),
+        duracion_dias: durationDays,
+        precio_base: price,
+        dificultad: formData.difficulty,
+        imagen_url: formData.image || null,
+        estado: true
+      };
+
+      console.log('📤 Enviando ruta a BD:', rutaData);
+
+      // Enviar a la base de datos
+      const response = await rutasAPI.create(rutaData);
+      console.log('✅ Ruta creada en BD, respuesta:', response);
+
+      toast.success('Ruta creada correctamente en la base de datos');
+      
+      // Cerrar modal y resetear formulario ANTES de recargar
+      setIsCreateModalOpen(false);
+      resetForm();
+
+      // Forzar recarga inmediata de rutas
+      console.log('🔄 Recargando lista de rutas...');
+      setIsLoading(true);
+      await loadRoutes();
+    } catch (error: any) {
+      console.error('❌ Error creando ruta:', error);
+      console.error('❌ Detalle del error:', error.message);
+      console.error('❌ Error completo:', JSON.stringify(error, null, 2));
+      
+      // Mostrar mensaje más específico
+      const errorMessage = error.message || 'Error desconocido al crear la ruta';
+      toast.error(`Error al crear la ruta: ${errorMessage}`);
+    }
   };
 
-  const handleUpdateRoute = () => {
+  const handleUpdateRoute = async () => {
     if (!selectedRoute) return;
 
-    if (!formData.name.trim() || !formData.location.trim() || !formData.price) {
-      toast.error('Por favor complete todos los campos obligatorios');
+    // Validar campos obligatorios
+    if (!formData.name.trim()) {
+      toast.error('El nombre de la ruta es obligatorio');
       return;
     }
 
+    if (!formData.description.trim()) {
+      toast.error('La descripción es obligatoria');
+      return;
+    }
+
+    if (!formData.price || formData.price === '0') {
+      toast.error('El precio es obligatorio');
+      return;
+    }
+
+    if (!formData.duration || formData.duration === '0') {
+      toast.error('La duración es obligatoria');
+      return;
+    }
+
+    // Validar precio
     const price = parseFloat(formData.price);
     if (isNaN(price) || price <= 0) {
       toast.error('El precio debe ser un número válido mayor a 0');
       return;
     }
 
-    const updatedRoutes = routes.map(r =>
-      r.id === selectedRoute.id
-        ? {
-            ...r,
-            name: formData.name,
-            location: formData.location,
-            duration: formData.duration,
-            difficulty: formData.difficulty,
-            price: price,
-            description: formData.description,
-            capacity: formData.capacity ? parseInt(formData.capacity) : undefined,
-            guide: formData.guide || undefined,
-            image: formData.image || undefined
-          }
-        : r
-    );
+    // Validar duración
+    const durationDays = parseInt(formData.duration);
+    if (isNaN(durationDays) || durationDays <= 0) {
+      toast.error('La duración debe ser un número válido mayor a 0');
+      return;
+    }
 
-    setRoutes(updatedRoutes);
-    toast.success('Ruta actualizada correctamente');
-    setIsEditModalOpen(false);
-    setSelectedRoute(null);
-    resetForm();
+    try {
+      const routeId = parseInt(selectedRoute.id);
+      
+      // Preparar datos para el backend
+      const rutaData: Partial<Ruta> = {
+        nombre: formData.name.trim(),
+        descripcion: formData.description.trim(),
+        duracion_dias: durationDays,
+        precio_base: price,
+        dificultad: formData.difficulty,
+        imagen_url: formData.image || null,
+        estado: selectedRoute.status === 'Activa'
+      };
+
+      console.log('📤 Actualizando ruta en BD:', routeId, rutaData);
+
+      // Actualizar en la base de datos
+      await rutasAPI.update(routeId, rutaData);
+      console.log('✅ Ruta actualizada en BD');
+
+      toast.success('Ruta actualizada correctamente en la base de datos');
+      
+      // Cerrar modal y resetear ANTES de recargar
+      setIsEditModalOpen(false);
+      setSelectedRoute(null);
+      resetForm();
+
+      // Forzar recarga inmediata de rutas
+      console.log('🔄 Recargando lista de rutas...');
+      setIsLoading(true);
+      await loadRoutes();
+    } catch (error) {
+      console.error('❌ Error actualizando ruta:', error);
+      toast.error('Error al actualizar la ruta en la base de datos');
+    }
   };
 
   const resetForm = () => {
@@ -256,13 +408,24 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   // Toggle route status (Admin only)
-  const handleToggleStatus = (route: Route) => {
-    const newStatus = route.status === 'Activa' ? 'Inactiva' : 'Activa';
-    const updatedRoutes = routes.map(r =>
-      r.id === route.id ? { ...r, status: newStatus } : r
-    );
-    setRoutes(updatedRoutes);
-    toast.success(`Estado cambiado a ${newStatus}`);
+  const handleToggleStatus = async (route: Route) => {
+    try {
+      const routeId = parseInt(route.id);
+      const newStatus = route.status === 'Activa';
+      
+      // Actualizar estado en BD
+      await rutasAPI.update(routeId, { estado: !newStatus });
+      
+      toast.success(`Estado cambiado a ${newStatus ? 'Inactiva' : 'Activa'}`);
+      
+      // Forzar recarga inmediata de rutas
+      console.log('🔄 Recargando lista de rutas...');
+      setIsLoading(true);
+      await loadRoutes();
+    } catch (error) {
+      console.error('❌ Error cambiando estado:', error);
+      toast.error('Error al cambiar el estado');
+    }
   };
 
   return (
@@ -363,7 +526,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {currentRoutes.length === 0 ? (
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={userRole === 'admin' ? 7 : 6} className="text-center py-12">
+                        <div className="flex flex-col items-center space-y-2">
+                          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
+                          <p className="text-gray-500">Cargando rutas desde la base de datos...</p>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ) : currentRoutes.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={userRole === 'admin' ? 6 : 6} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
@@ -412,7 +584,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                         <TableCell>
                           <div className="flex items-center space-x-2 text-gray-700">
                             <Clock className="w-4 h-4 text-blue-600" />
-                            <span>{route.duration}</span>
+                            <span>{route.duration} {route.duration === '1' ? 'día' : 'días'}</span>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -550,12 +722,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="duration">Duración</Label>
+                  <Label htmlFor="duration">Duración (días) *</Label>
                   <Input
                     id="duration"
+                    type="number"
                     value={formData.duration}
                     onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
-                    placeholder="Ej: 4 horas"
+                    placeholder="Ej: 5"
+                    min="1"
+                    step="1"
                   />
                 </div>
                 <div>
@@ -575,13 +750,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   </Select>
                 </div>
                 <div>
-                  <Label htmlFor="price">Precio *</Label>
+                  <Label htmlFor="price">Precio (COP) *</Label>
                   <Input
                     id="price"
                     type="number"
                     value={formData.price}
                     onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                    placeholder="0"
+                    placeholder="Ej: 250000"
                     min="0"
                     step="1000"
                   />
@@ -690,12 +865,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="edit-duration">Duración</Label>
+                  <Label htmlFor="edit-duration">Duración (días) *</Label>
                   <Input
                     id="edit-duration"
+                    type="number"
                     value={formData.duration}
                     onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
-                    placeholder="Ej: 4 horas"
+                    placeholder="Ej: 5"
+                    min="1"
+                    step="1"
                   />
                 </div>
                 <div>
@@ -715,13 +893,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   </Select>
                 </div>
                 <div>
-                  <Label htmlFor="edit-price">Precio *</Label>
+                  <Label htmlFor="edit-price">Precio (COP) *</Label>
                   <Input
                     id="edit-price"
                     type="number"
                     value={formData.price}
                     onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                    placeholder="0"
+                    placeholder="Ej: 250000"
                     min="0"
                     step="1000"
                   />
@@ -840,7 +1018,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     <Clock className="w-5 h-5 text-green-600" />
                     <Label className="text-gray-600">Duración</Label>
                   </div>
-                  <p className="text-lg text-gray-900">{selectedRoute.duration}</p>
+                  <p className="text-lg text-gray-900">{selectedRoute.duration} {selectedRoute.duration === '1' ? 'día' : 'días'}</p>
                 </div>
 
                 <div className="bg-blue-50 p-4 rounded-lg">
