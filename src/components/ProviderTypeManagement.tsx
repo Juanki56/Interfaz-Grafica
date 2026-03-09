@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Plus,
   Search,
@@ -14,6 +14,7 @@ import {
   Check,
   Power
 } from 'lucide-react';
+import { tiposProveedorAPI, TipoProveedor } from '../services/api';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -53,199 +54,11 @@ import { Switch } from './ui/switch';
 // INTERFACES Y TIPOS
 // ===========================
 
-export interface ProviderType {
-  id: string;
-  name: string;
-  description: string;
-  status: 'Activo' | 'Inactivo';
-  createdAt: string;
+export interface ProviderType extends TipoProveedor {
   providersCount?: number;
 }
 
 type ViewMode = 'list' | 'create' | 'edit' | 'detail';
-
-// ===========================
-// DATOS MOCK
-// ===========================
-
-const mockProviderTypes: ProviderType[] = [
-  { 
-    id: 'PT-001', 
-    name: 'Transporte', 
-    description: 'Proveedores de servicios de transporte turístico y logística', 
-    status: 'Activo',
-    createdAt: '2024-01-15',
-    providersCount: 3
-  },
-  { 
-    id: 'PT-002', 
-    name: 'Alimentación', 
-    description: 'Proveedores de alimentos, bebidas y servicios de catering', 
-    status: 'Activo',
-    createdAt: '2024-01-18',
-    providersCount: 5
-  },
-  { 
-    id: 'PT-003', 
-    name: 'Alojamiento', 
-    description: 'Proveedores de hospedaje, hoteles y fincas turísticas', 
-    status: 'Activo',
-    createdAt: '2024-01-20',
-    providersCount: 4
-  },
-  { 
-    id: 'PT-004', 
-    name: 'Entretenimiento', 
-    description: 'Proveedores de entretenimiento, música en vivo y actividades recreativas', 
-    status: 'Activo',
-    createdAt: '2024-02-01',
-    providersCount: 2
-  },
-  { 
-    id: 'PT-005', 
-    name: 'Equipamiento', 
-    description: 'Proveedores de equipos deportivos, camping y materiales', 
-    status: 'Activo',
-    createdAt: '2024-02-10',
-    providersCount: 1
-  },
-  { 
-    id: 'PT-006', 
-    name: 'Fotografía', 
-    description: 'Proveedores de servicios fotográficos y videográficos profesionales', 
-    status: 'Inactivo',
-    createdAt: '2024-03-05',
-    providersCount: 0
-  },
-  { 
-    id: 'PT-007', 
-    name: 'Guías Turísticos', 
-    description: 'Proveedores de servicios de guianza especializada y acompañamiento', 
-    status: 'Activo',
-    createdAt: '2024-03-12',
-    providersCount: 8
-  },
-  { 
-    id: 'PT-008', 
-    name: 'Salud y Bienestar', 
-    description: 'Proveedores de servicios médicos, spa y masajes terapéuticos', 
-    status: 'Activo',
-    createdAt: '2024-03-20',
-    providersCount: 3
-  },
-  { 
-    id: 'PT-009', 
-    name: 'Artesanías', 
-    description: 'Proveedores de artesanías locales y souvenirs regionales', 
-    status: 'Activo',
-    createdAt: '2024-04-05',
-    providersCount: 6
-  },
-  { 
-    id: 'PT-010', 
-    name: 'Seguros', 
-    description: 'Proveedores de seguros de viaje y asistencia turística', 
-    status: 'Activo',
-    createdAt: '2024-04-15',
-    providersCount: 2
-  },
-  { 
-    id: 'PT-011', 
-    name: 'Tecnología', 
-    description: 'Proveedores de servicios tecnológicos, wifi portátil y comunicaciones', 
-    status: 'Activo',
-    createdAt: '2024-05-01',
-    providersCount: 1
-  },
-  { 
-    id: 'PT-012', 
-    name: 'Servicios Veterinarios', 
-    description: 'Proveedores de atención veterinaria para tours con mascotas', 
-    status: 'Inactivo',
-    createdAt: '2024-05-10',
-    providersCount: 0
-  },
-  { 
-    id: 'PT-013', 
-    name: 'Lavandería', 
-    description: 'Proveedores de servicios de lavandería y limpieza de uniformes', 
-    status: 'Activo',
-    createdAt: '2024-06-01',
-    providersCount: 2
-  },
-  { 
-    id: 'PT-014', 
-    name: 'Traducción', 
-    description: 'Proveedores de servicios de traducción e interpretación', 
-    status: 'Activo',
-    createdAt: '2024-06-15',
-    providersCount: 4
-  },
-  { 
-    id: 'PT-015', 
-    name: 'Mantenimiento', 
-    description: 'Proveedores de mantenimiento de vehículos y equipos', 
-    status: 'Activo',
-    createdAt: '2024-07-01',
-    providersCount: 3
-  },
-  { 
-    id: 'PT-016', 
-    name: 'Publicidad', 
-    description: 'Proveedores de servicios publicitarios y marketing turístico', 
-    status: 'Activo',
-    createdAt: '2024-07-20',
-    providersCount: 2
-  },
-  { 
-    id: 'PT-017', 
-    name: 'Combustible', 
-    description: 'Proveedores de combustible y estaciones de servicio con convenios', 
-    status: 'Activo',
-    createdAt: '2024-08-01',
-    providersCount: 5
-  },
-  { 
-    id: 'PT-018', 
-    name: 'Decoración', 
-    description: 'Proveedores de servicios de decoración para eventos especiales', 
-    status: 'Inactivo',
-    createdAt: '2024-08-15',
-    providersCount: 0
-  },
-  { 
-    id: 'PT-019', 
-    name: 'Jardinería', 
-    description: 'Proveedores de mantenimiento de jardines en fincas turísticas', 
-    status: 'Activo',
-    createdAt: '2024-09-01',
-    providersCount: 3
-  },
-  { 
-    id: 'PT-020', 
-    name: 'Seguridad', 
-    description: 'Proveedores de servicios de seguridad privada y vigilancia', 
-    status: 'Activo',
-    createdAt: '2024-09-15',
-    providersCount: 2
-  },
-  { 
-    id: 'PT-021', 
-    name: 'Audio y Video', 
-    description: 'Proveedores de equipos de sonido, proyectores y pantallas', 
-    status: 'Activo',
-    createdAt: '2024-10-01',
-    providersCount: 4
-  },
-  { 
-    id: 'PT-022', 
-    name: 'Florería', 
-    description: 'Proveedores de arreglos florales y decoración natural', 
-    status: 'Activo',
-    createdAt: '2024-10-20',
-    providersCount: 2
-  }
-];
 
 // ===========================
 // COMPONENTE PRINCIPAL
@@ -258,7 +71,8 @@ interface ProviderTypeManagementProps {
 export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManagementProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedType, setSelectedType] = useState<ProviderType | null>(null);
-  const [providerTypes, setProviderTypes] = useState<ProviderType[]>(mockProviderTypes);
+  const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
@@ -270,21 +84,67 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
 
   // Dialogs
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [typeToDelete, setTypeToDelete] = useState<string | null>(null);
+  const [typeToDelete, setTypeToDelete] = useState<number | null>(null);
 
   const isAdmin = userRole === 'admin';
 
-  const handleCreateType = (newType: ProviderType) => {
-    setProviderTypes([newType, ...providerTypes]);
-    setViewMode('list');
-    toast.success('Tipo de proveedor creado exitosamente');
+  // Cargar datos del backend
+  useEffect(() => {
+    loadProviderTypes();
+  }, []);
+
+  const loadProviderTypes = async () => {
+    try {
+      setIsLoading(true);
+      const data = await tiposProveedorAPI.getAll();
+      console.log('✅ Tipos de proveedor cargados:', data);
+      setProviderTypes(data);
+    } catch (error) {
+      console.error('❌ Error cargando tipos de proveedor:', error);
+      toast.error('Error al cargar tipos de proveedor');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleUpdateType = (updatedType: ProviderType) => {
-    setProviderTypes(providerTypes.map(t => t.id === updatedType.id ? updatedType : t));
-    setViewMode('list');
-    setSelectedType(null);
-    toast.success('Tipo de proveedor actualizado exitosamente');
+  const handleCreateType = async (newType: Partial<ProviderType>) => {
+    try {
+      setIsLoading(true);
+      await tiposProveedorAPI.create({
+        nombre: newType.nombre!,
+        descripcion: newType.descripcion,
+        estado: true
+      });
+      
+      toast.success('Tipo de proveedor creado exitosamente');
+      setViewMode('list');
+      await loadProviderTypes();
+    } catch (error: any) {
+      console.error('❌ Error creando tipo de proveedor:', error);
+      toast.error(error.message || 'Error al crear el tipo de proveedor');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpdateType = async (updatedType: Partial<ProviderType>) => {
+    try {
+      setIsLoading(true);
+      await tiposProveedorAPI.update(selectedType!.id_tipo, {
+        nombre: updatedType.nombre,
+        descripcion: updatedType.descripcion
+      });
+      
+      toast.success('Tipo de proveedor actualizado exitosamente');
+      setViewMode('list');
+      setSelectedType(null);
+      await loadProviderTypes();
+    } catch (error: any) {
+      console.error('❌ Error actualizando tipo de proveedor:', error);
+      toast.error(error.message || 'Error al actualizar el tipo de proveedor');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleViewDetail = (type: ProviderType) => {
@@ -297,27 +157,44 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
     setViewMode('edit');
   };
 
-  const handleInitiateDelete = (typeId: string) => {
+  const handleInitiateDelete = (typeId: number) => {
     setTypeToDelete(typeId);
     setShowDeleteDialog(true);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (typeToDelete) {
-      setProviderTypes(providerTypes.filter(t => t.id !== typeToDelete));
-      setShowDeleteDialog(false);
-      setTypeToDelete(null);
-      toast.success('Tipo de proveedor eliminado exitosamente');
+      try {
+        setIsLoading(true);
+        await tiposProveedorAPI.delete(typeToDelete);
+        toast.success('Tipo de proveedor eliminado exitosamente');
+        await loadProviderTypes();
+      } catch (error: any) {
+        console.error('❌ Error eliminando tipo de proveedor:', error);
+        toast.error(error.message || 'Error al eliminar el tipo de proveedor');
+      } finally {
+        setIsLoading(false);
+        setShowDeleteDialog(false);
+        setTypeToDelete(null);
+      }
     }
   };
 
-  const handleToggleStatus = (typeId: string) => {
-    setProviderTypes(providerTypes.map(t => 
-      t.id === typeId 
-        ? { ...t, status: t.status === 'Activo' ? 'Inactivo' : 'Activo' } 
-        : t
-    ));
-    toast.success('Estado del tipo de proveedor actualizado');
+  const handleToggleStatus = async (typeId: number) => {
+    try {
+      const type = providerTypes.find(t => t.id_tipo === typeId);
+      if (!type) return;
+      
+      await tiposProveedorAPI.update(typeId, {
+        estado: !type.estado
+      });
+      
+      toast.success('Estado del tipo de proveedor actualizado');
+      await loadProviderTypes();
+    } catch (error: any) {
+      console.error('❌ Error actualizando estado:', error);
+      toast.error(error.message || 'Error al actualizar el estado');
+    }
   };
 
   return (
@@ -430,8 +307,8 @@ interface ProviderTypeListViewProps {
   onCreateNew: () => void;
   onViewDetail: (type: ProviderType) => void;
   onEdit: (type: ProviderType) => void;
-  onDelete: (typeId: string) => void;
-  onToggleStatus: (typeId: string) => void;
+  onDelete: (typeId: number) => void;
+  onToggleStatus: (typeId: number) => void;
   isAdmin: boolean;
 }
 
@@ -452,22 +329,22 @@ function ProviderTypeListView({
   isAdmin
 }: ProviderTypeListViewProps) {
   
-  const getStatusBadge = (status: ProviderType['status']) => {
-    const styles = {
-      Activo: 'bg-green-100 text-green-700 border-green-200',
-      Inactivo: 'bg-gray-100 text-gray-700 border-gray-200'
-    };
-    return styles[status];
+  const getStatusBadge = (estado: boolean) => {
+    return estado
+      ? 'bg-green-100 text-green-700 border-green-200'
+      : 'bg-gray-100 text-gray-700 border-gray-200';
   };
 
   // Filtrar tipos
   const filteredTypes = providerTypes.filter(type => {
     const matchesSearch = 
-      type.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      type.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      type.id.toLowerCase().includes(searchTerm.toLowerCase());
+      type.nombre.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (type.descripcion && type.descripcion.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      type.id_tipo.toString().includes(searchTerm.toLowerCase());
     
-    const matchesStatus = filterStatus === 'all' || type.status === filterStatus;
+    const matchesStatus = filterStatus === 'all' || 
+      (filterStatus === 'Activo' && type.estado) ||
+      (filterStatus === 'Inactivo' && !type.estado);
     
     return matchesSearch && matchesStatus;
   });
@@ -565,16 +442,16 @@ function ProviderTypeListView({
                   </TableRow>
                 ) : (
                   paginatedTypes.map((type) => (
-                    <TableRow key={type.id} className="hover:bg-green-50/50">
-                      <TableCell className="font-medium text-green-700">{type.id}</TableCell>
+                    <TableRow key={type.id_tipo} className="hover:bg-green-50/50">
+                      <TableCell className="font-medium text-green-700">{type.id_tipo}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <Tag className="w-4 h-4 text-green-600" />
-                          <span className="font-medium">{type.name}</span>
+                          <span className="font-medium">{type.nombre}</span>
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <p className="text-gray-600 text-sm max-w-md truncate">{type.description}</p>
+                      <TableCell className="max-w-md">
+                        <p className="text-gray-600 truncate">{type.descripcion || '-'}</p>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline" className="border-blue-200 text-blue-700">
@@ -584,14 +461,14 @@ function ProviderTypeListView({
                       <TableCell>
                         {isAdmin && (
                           <Switch
-                            checked={type.status === 'Activo'}
-                            onCheckedChange={() => onToggleStatus(type.id)}
+                            checked={type.estado}
+                            onCheckedChange={() => onToggleStatus(type.id_tipo)}
                             className="data-[state=checked]:bg-green-600"
                           />
                         )}
                         {!isAdmin && (
-                          <Badge className={getStatusBadge(type.status)}>
-                            {type.status}
+                          <Badge className={getStatusBadge(type.estado)}>
+                            {type.estado ? 'Activo' : 'Inactivo'}
                           </Badge>
                         )}
                       </TableCell>
@@ -618,7 +495,7 @@ function ProviderTypeListView({
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => onDelete(type.id)}
+                                onClick={() => onDelete(type.id_tipo)}
                                 className="hover:bg-red-100 hover:text-red-700"
                               >
                                 <Trash2 className="w-4 h-4" />
@@ -679,8 +556,8 @@ interface ProviderTypeFormViewProps {
   mode: 'create' | 'edit';
   providerType: ProviderType | null;
   onBack: () => void;
-  onCreate: (type: ProviderType) => void;
-  onUpdate: (type: ProviderType) => void;
+  onCreate: (type: Partial<ProviderType>) => void;
+  onUpdate: (type: Partial<ProviderType>) => void;
 }
 
 function ProviderTypeFormView({
@@ -691,8 +568,8 @@ function ProviderTypeFormView({
   onUpdate
 }: ProviderTypeFormViewProps) {
   const [formData, setFormData] = useState({
-    name: providerType?.name || '',
-    description: providerType?.description || ''
+    nombre: providerType?.nombre || '',
+    descripcion: providerType?.descripcion || ''
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -700,8 +577,8 @@ function ProviderTypeFormView({
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.name.trim()) newErrors.name = 'El nombre es obligatorio';
-    if (!formData.description.trim()) newErrors.description = 'La descripción es obligatoria';
+    if (!formData.nombre.trim()) newErrors.nombre = 'El nombre es obligatorio';
+    if (!formData.descripcion.trim()) newErrors.descripcion = 'La descripción es obligatoria';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -715,13 +592,9 @@ function ProviderTypeFormView({
       return;
     }
 
-    const typeData: ProviderType = {
-      id: providerType?.id || `PT-${String(Date.now()).slice(-3).padStart(3, '0')}`,
-      name: formData.name,
-      description: formData.description,
-      status: providerType?.status || 'Activo',
-      createdAt: providerType?.createdAt || new Date().toISOString().split('T')[0],
-      providersCount: providerType?.providersCount || 0
+    const typeData: Partial<ProviderType> = {
+      nombre: formData.nombre,
+      descripcion: formData.descripcion
     };
 
     if (mode === 'create') {
@@ -747,7 +620,7 @@ function ProviderTypeFormView({
               <p className="text-sm text-gray-600 mt-1">
                 {mode === 'create' 
                   ? 'Define un nuevo tipo de proveedor para el sistema' 
-                  : `Editando: ${providerType?.name}`
+                  : `Editando: ${providerType?.nombre}`
                 }
               </p>
             </div>
@@ -766,32 +639,32 @@ function ProviderTypeFormView({
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Nombre del tipo */}
             <div>
-              <Label htmlFor="name" className="text-gray-700">
+              <Label htmlFor="nombre" className="text-gray-700">
                 Nombre del Tipo de Proveedor <span className="text-red-500">*</span>
               </Label>
               <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                id="nombre"
+                value={formData.nombre}
+                onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
                 placeholder="Ej: Transporte, Alimentación, Alojamiento..."
-                className={`mt-1 border-green-200 focus:border-green-500 ${errors.name ? 'border-red-500' : ''}`}
+                className={`mt-1 border-green-200 focus:border-green-500 ${errors.nombre ? 'border-red-500' : ''}`}
               />
-              {errors.name && <p className="text-sm text-red-500 mt-1">{errors.name}</p>}
+              {errors.nombre && <p className="text-sm text-red-500 mt-1">{errors.nombre}</p>}
             </div>
 
             {/* Descripción */}
             <div>
-              <Label htmlFor="description" className="text-gray-700">
+              <Label htmlFor="descripcion" className="text-gray-700">
                 Descripción <span className="text-red-500">*</span>
               </Label>
               <Textarea
-                id="description"
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                id="descripcion"
+                value={formData.descripcion}
+                onChange={(e) => setFormData({ ...formData, descripcion: e.target.value })}
                 placeholder="Describe el tipo de proveedores que agrupa esta categoría..."
-                className={`mt-1 border-green-200 focus:border-green-500 min-h-[120px] ${errors.description ? 'border-red-500' : ''}`}
+                className={`mt-1 border-green-200 focus:border-green-500 min-h-[120px] ${errors.descripcion ? 'border-red-500' : ''}`}
               />
-              {errors.description && <p className="text-sm text-red-500 mt-1">{errors.description}</p>}
+              {errors.descripcion && <p className="text-sm text-red-500 mt-1">{errors.descripcion}</p>}
             </div>
 
             {/* Ejemplo informativo */}
@@ -843,8 +716,8 @@ interface ProviderTypeDetailViewProps {
   providerType: ProviderType;
   onBack: () => void;
   onEdit: (type: ProviderType) => void;
-  onDelete: (typeId: string) => void;
-  onToggleStatus: (typeId: string) => void;
+  onDelete: (typeId: number) => void;
+  onToggleStatus: (typeId: number) => void;
   isAdmin: boolean;
 }
 
@@ -885,11 +758,11 @@ function ProviderTypeDetailView({
             {/* Encabezado con estado */}
             <div className="flex items-start justify-between pb-6 border-b border-green-100">
               <div>
-                <h2 className="text-2xl font-semibold text-gray-900">{providerType.name}</h2>
-                <p className="text-gray-600 mt-1">ID: {providerType.id}</p>
+                <h2 className="text-2xl font-semibold text-gray-900">{providerType.nombre}</h2>
+                <p className="text-gray-600 mt-1">ID: {providerType.id_tipo}</p>
               </div>
-              <Badge className={providerType.status === 'Activo' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
-                {providerType.status}
+              <Badge className={providerType.estado ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
+                {providerType.estado ? 'Activo' : 'Inactivo'}
               </Badge>
             </div>
 
@@ -898,17 +771,22 @@ function ProviderTypeDetailView({
               <div className="md:col-span-2">
                 <Label className="text-gray-600">Descripción</Label>
                 <div className="mt-2 p-4 bg-gray-50 rounded-lg border border-gray-200">
-                  <p className="text-gray-900">{providerType.description}</p>
+                  <p className="text-gray-900">{providerType.descripcion || '-'}</p>
                 </div>
               </div>
 
               <div>
                 <Label className="text-gray-600">Fecha de Creación</Label>
-                <p className="mt-1 text-gray-900">{new Date(providerType.createdAt).toLocaleDateString('es-ES', { 
-                  year: 'numeric', 
-                  month: 'long', 
-                  day: 'numeric' 
-                })}</p>
+                <p className="mt-1 text-gray-900">
+                  {providerType.fecha_creacion 
+                    ? new Date(providerType.fecha_creacion).toLocaleDateString('es-ES', { 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric' 
+                      })
+                    : '-'
+                  }
+                </p>
               </div>
 
               <div>
@@ -945,15 +823,15 @@ function ProviderTypeDetailView({
                   Editar
                 </Button>
                 <Button
-                  onClick={() => onToggleStatus(providerType.id)}
+                  onClick={() => onToggleStatus(providerType.id_tipo)}
                   variant="outline"
                   className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
                 >
                   <Power className="w-4 h-4 mr-2" />
-                  {providerType.status === 'Activo' ? 'Desactivar' : 'Activar'}
+                  {providerType.estado ? 'Desactivar' : 'Activar'}
                 </Button>
                 <Button
-                  onClick={() => onDelete(providerType.id)}
+                  onClick={()=> onDelete(providerType.id_tipo)}
                   variant="outline"
                   className="border-red-300 text-red-700 hover:bg-red-50"
                 >

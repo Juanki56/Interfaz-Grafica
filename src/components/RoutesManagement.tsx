@@ -17,7 +17,8 @@ import {
   X,
   Calendar,
   FileText,
-  DollarSign
+  DollarSign,
+  CheckCircle
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -54,22 +55,20 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Separator } from './ui/separator';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { rutasAPI, Ruta } from '../services/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
 interface Route {
-  id: string;
-  name: string;
-  location: string;
-  duration: string;
-  difficulty: string;
-  price?: number; // Made optional to handle undefined values
-  description: string;
-  image?: string;
-  capacity?: number;
-  guide?: string;
-  status?: string; // Added for active/inactive state
+  id_ruta: number;
+  nombre: string;
+  descripcion?: string | null;
+  duracion_dias?: number | null;
+  precio_base?: number | null;
+  dificultad?: string | null;
+  imagen_url?: string | null;
+  estado?: boolean | null;
+  fecha_creacion?: string | null;
 }
 
 interface RoutesManagementProps {
@@ -90,15 +89,12 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   
   const [formData, setFormData] = useState({
-    name: '',
-    location: '',
-    duration: '',
-    difficulty: 'Moderado',
-    price: '',
-    description: '',
-    capacity: '',
-    guide: '',
-    image: ''
+    nombre: '',
+    descripcion: '',
+    duracion_dias: '',
+    precio_base: '',
+    dificultad: 'Moderado',
+    imagen_url: ''
   });
 
   // Cargar rutas desde la API al montar el componente
@@ -120,19 +116,19 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       console.log('📊 Tipo de dato recibido:', typeof rutasFromDB, Array.isArray(rutasFromDB));
       console.log('📏 Cantidad de rutas:', rutasFromDB?.length || 0);
       
-      // Mapear rutas del backend al formato del frontend
+      // Mapear rutas del backend (mantener estructura exacta de la BD)
       const mappedRoutes: Route[] = rutasFromDB.map(ruta => {
         console.log('🔄 Mapeando ruta:', ruta);
         return {
-          id: ruta.id_ruta.toString(),
-          name: ruta.nombre,
-          location: 'Colombia', // Por defecto, puede ajustarse según necesites
-          duration: ruta.duracion_dias.toString(), // Solo el número, sin "días"
-          difficulty: ruta.dificultad || 'Moderado', // Cargar desde BD o usar default
-          price: ruta.precio_base,
-          description: ruta.descripcion,
-          image: ruta.imagen_url || '',
-          status: ruta.estado ? 'Activa' : 'Inactiva'
+          id_ruta: ruta.id_ruta,
+          nombre: ruta.nombre,
+          descripcion: ruta.descripcion,
+          duracion_dias: ruta.duracion_dias,
+          precio_base: ruta.precio_base,
+          dificultad: ruta.dificultad,
+          imagen_url: ruta.imagen_url,
+          estado: ruta.estado,
+          fecha_creacion: ruta.fecha_creacion
         };
       });
       
@@ -152,9 +148,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
   // Filter routes
   const filteredRoutes = routes.filter(route =>
-    route.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    route.location.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    route.difficulty.toLowerCase().includes(searchTerm.toLowerCase())
+    route.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    route.descripcion?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    route.dificultad?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   // Pagination
@@ -164,8 +160,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     currentPage * itemsPerPage
   );
 
-  const getDifficultyBadge = (difficulty: string) => {
-    const colors = {
+  const getDifficultyBadge = (difficulty: string | null | undefined) => {
+    if (!difficulty) return null;
+    const colors: Record<string, string> = {
       'Fácil': 'bg-green-100 text-green-700 border-green-200',
       'Moderado': 'bg-yellow-100 text-yellow-700 border-yellow-200',
       'Difícil': 'bg-red-100 text-red-700 border-red-200'
@@ -173,7 +170,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     return <Badge className={colors[difficulty] || 'bg-gray-100 text-gray-700'}>{difficulty}</Badge>;
   };
 
-  const formatCurrency = (amount: number) => {
+  const formatCurrency = (amount: number | null | undefined) => {
+    if (amount === null || amount === undefined) return 'N/A';
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
       currency: 'COP',
@@ -190,29 +188,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     console.log('📝 Editando ruta:', route);
     setSelectedRoute(route);
     
-    // Asegurar que duration sea solo el número
-    const durationNumber = route.duration?.toString().replace(/[^0-9]/g, '') || '';
-    
     setFormData({
-      name: route.name || '',
-      location: route.location || '',
-      duration: durationNumber,
-      difficulty: route.difficulty || 'Moderado',
-      price: route.price ? route.price.toString() : '',
-      description: route.description || '',
-      capacity: route.capacity?.toString() || '',
-      guide: route.guide || '',
-      image: route.image || ''
+      nombre: route.nombre || '',
+      descripcion: route.descripcion || '',
+      duracion_dias: route.duracion_dias?.toString() || '',
+      precio_base: route.precio_base?.toString() || '',
+      dificultad: route.dificultad || 'Moderado',
+      imagen_url: route.imagen_url || ''
     });
     
-    console.log('📝 FormData preparado:', {
-      name: route.name,
-      duration: durationNumber,
-      difficulty: route.difficulty,
-      price: route.price,
-      description: route.description,
-      image: route.image
-    });
+    console.log('📝 FormData preparado:', formData);
     
     setIsEditModalOpen(true);
   };
@@ -225,7 +210,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const confirmDelete = async () => {
     if (selectedRoute) {
       try {
-        const routeId = parseInt(selectedRoute.id);
+        const routeId = selectedRoute.id_ruta;
         await rutasAPI.delete(routeId);
         
         toast.success('Ruta eliminada correctamente de la base de datos');
@@ -244,50 +229,41 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleCreateRoute = async () => {
-    // Validar campos obligatorios
-    if (!formData.name.trim()) {
+    // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
+    if (!formData.nombre.trim()) {
       toast.error('El nombre de la ruta es obligatorio');
       return;
     }
 
-    if (!formData.description.trim()) {
-      toast.error('La descripción es obligatoria');
-      return;
+    // Validar precio si se proporciona
+    let precio: number | null = null;
+    if (formData.precio_base && formData.precio_base.trim() !== '') {
+      precio = parseFloat(formData.precio_base);
+      if (isNaN(precio) || precio <= 0) {
+        toast.error('El precio debe ser un número válido mayor a 0');
+        return;
+      }
     }
 
-    if (!formData.price || formData.price === '0') {
-      toast.error('El precio es obligatorio');
-      return;
-    }
-
-    if (!formData.duration || formData.duration === '0') {
-      toast.error('La duración es obligatoria');
-      return;
-    }
-
-    // Validar precio
-    const price = parseFloat(formData.price);
-    if (isNaN(price) || price <= 0) {
-      toast.error('El precio debe ser un número válido mayor a 0');
-      return;
-    }
-
-    // Validar duración
-    const durationDays = parseInt(formData.duration);
-    if (isNaN(durationDays) || durationDays <= 0) {
-      toast.error('La duración debe ser un número válido mayor a 0');
-      return;
+    // Validar duración si se proporciona
+    let duracion: number | null = null;
+    if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
+      duracion = parseInt(formData.duracion_dias);
+      if (isNaN(duracion) || duracion <= 0) {
+        toast.error('La duración debe ser un número válido mayor a 0');
+        return;
+      }
     }
 
     try {
-      // Preparar datos para el backend
+      // Preparar datos para el backend (solo nombre es obligatorio)
       const rutaData: Partial<Ruta> = {
-        nombre: formData.name.trim(),
-        descripcion: formData.description.trim(),
-        duracion_dias: durationDays,
-        precio_base: price,
-        dificultad: formData.difficulty,
-        imagen_url: formData.image || null,
+        nombre: formData.nombre.trim(),
+        descripcion: formData.descripcion?.trim() || null,
+        duracion_dias: duracion,
+        precio_base: precio,
+        dificultad: formData.dificultad || null,
+        imagen_url: formData.imagen_url?.trim() || null,
         estado: true
       };
 
@@ -321,53 +297,44 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const handleUpdateRoute = async () => {
     if (!selectedRoute) return;
 
-    // Validar campos obligatorios
-    if (!formData.name.trim()) {
+    // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
+    if (!formData.nombre.trim()) {
       toast.error('El nombre de la ruta es obligatorio');
       return;
     }
 
-    if (!formData.description.trim()) {
-      toast.error('La descripción es obligatoria');
-      return;
+    // Validar precio si se proporciona
+    let precio: number | null = null;
+    if (formData.precio_base && formData.precio_base.trim() !== '') {
+      precio = parseFloat(formData.precio_base);
+      if (isNaN(precio) || precio <= 0) {
+        toast.error('El precio debe ser un número válido mayor a 0');
+        return;
+      }
     }
 
-    if (!formData.price || formData.price === '0') {
-      toast.error('El precio es obligatorio');
-      return;
-    }
-
-    if (!formData.duration || formData.duration === '0') {
-      toast.error('La duración es obligatoria');
-      return;
-    }
-
-    // Validar precio
-    const price = parseFloat(formData.price);
-    if (isNaN(price) || price <= 0) {
-      toast.error('El precio debe ser un número válido mayor a 0');
-      return;
-    }
-
-    // Validar duración
-    const durationDays = parseInt(formData.duration);
-    if (isNaN(durationDays) || durationDays <= 0) {
-      toast.error('La duración debe ser un número válido mayor a 0');
-      return;
+    // Validar duración si se proporciona
+    let duracion: number | null = null;
+    if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
+      duracion = parseInt(formData.duracion_dias);
+      if (isNaN(duracion) || duracion <= 0) {
+        toast.error('La duración debe ser un número válido mayor a 0');
+        return;
+      }
     }
 
     try {
-      const routeId = parseInt(selectedRoute.id);
+      const routeId = selectedRoute.id_ruta;
       
-      // Preparar datos para el backend
+      // Preparar datos para el backend (solo nombre es obligatorio)
       const rutaData: Partial<Ruta> = {
-        nombre: formData.name.trim(),
-        descripcion: formData.description.trim(),
-        duracion_dias: durationDays,
-        precio_base: price,
-        dificultad: formData.difficulty,
-        imagen_url: formData.image || null,
-        estado: selectedRoute.status === 'Activa'
+        nombre: formData.nombre.trim(),
+        descripcion: formData.descripcion?.trim() || null,
+        duracion_dias: duracion,
+        precio_base: precio,
+        dificultad: formData.dificultad || null,
+        imagen_url: formData.imagen_url?.trim() || null,
+        estado: selectedRoute.estado
       };
 
       console.log('📤 Actualizando ruta en BD:', routeId, rutaData);
@@ -395,23 +362,20 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
   const resetForm = () => {
     setFormData({
-      name: '',
-      location: '',
-      duration: '',
-      difficulty: 'Moderado',
-      price: '',
-      description: '',
-      capacity: '',
-      guide: '',
-      image: ''
+      nombre: '',
+      descripcion: '',
+      duracion_dias: '',
+      precio_base: '',
+      dificultad: 'Moderado',
+      imagen_url: ''
     });
   };
 
   // Toggle route status (Admin only)
   const handleToggleStatus = async (route: Route) => {
     try {
-      const routeId = parseInt(route.id);
-      const newStatus = route.status === 'Activa';
+      const routeId = route.id_ruta;
+      const newStatus = route.estado;
       
       // Actualizar estado en BD
       await rutasAPI.update(routeId, { estado: !newStatus });
@@ -514,21 +478,23 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               <Table>
                 <TableHeader>
                   <TableRow className="bg-gray-50">
+                    <TableHead className="font-semibold">ID</TableHead>
                     <TableHead className="font-semibold">Nombre</TableHead>
-                    <TableHead className="font-semibold">Ubicación</TableHead>
-                    <TableHead className="font-semibold">Duración</TableHead>
+                    <TableHead className="font-semibold">Descripción</TableHead>
+                    <TableHead className="font-semibold">Duración (días)</TableHead>
+                    <TableHead className="font-semibold">Precio Base</TableHead>
                     <TableHead className="font-semibold">Dificultad</TableHead>
-                    <TableHead className="font-semibold">Precio</TableHead>
                     {userRole === 'admin' && (
                       <TableHead className="text-center font-semibold">Estado</TableHead>
                     )}
+                    <TableHead className="font-semibold">Fecha Creación</TableHead>
                     <TableHead className="text-right font-semibold">Acciones</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={userRole === 'admin' ? 7 : 6} className="text-center py-12">
+                      <TableCell colSpan={userRole === 'admin' ? 9 : 8} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
                           <p className="text-gray-500">Cargando rutas desde la base de datos...</p>
@@ -537,7 +503,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     </TableRow>
                   ) : currentRoutes.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={userRole === 'admin' ? 6 : 6} className="text-center py-12">
+                      <TableCell colSpan={userRole === 'admin' ? 9 : 8} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <RouteIcon className="w-12 h-12 text-gray-400" />
                           <p className="text-gray-500">
@@ -552,61 +518,68 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   ) : (
                     currentRoutes.map((route, index) => (
                       <motion.tr
-                        key={route.id}
+                        key={route.id_ruta}
                         initial={{ opacity: 0, x: -20 }}
                         animate={{ opacity: 1, x: 0 }}
                         transition={{ delay: index * 0.05, duration: 0.3 }}
                         className="hover:bg-green-50/50 transition-colors"
                       >
+                        <TableCell className="font-medium text-gray-700">
+                          {route.id_ruta}
+                        </TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-3">
-                            {route.image && (
+                            {route.imagen_url && (
                               <div className="w-12 h-12 rounded overflow-hidden flex-shrink-0">
                                 <ImageWithFallback
-                                  src={route.image}
-                                  alt={route.name}
+                                  src={route.imagen_url}
+                                  alt={route.nombre}
                                   className="w-full h-full object-cover"
                                 />
                               </div>
                             )}
-                            <div>
-                              <p className="font-medium text-gray-900">{route.name}</p>
-                              <p className="text-xs text-gray-500">ID: {route.id}</p>
-                            </div>
+                            <p className="font-medium text-gray-900">{route.nombre}</p>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <div className="flex items-center space-x-2 text-gray-700">
-                            <MapPin className="w-4 h-4 text-green-600" />
-                            <span>{route.location}</span>
-                          </div>
+                        <TableCell className="max-w-xs">
+                          <p className="text-sm text-gray-600 truncate">
+                            {route.descripcion || 'Sin descripción'}
+                          </p>
                         </TableCell>
                         <TableCell>
                           <div className="flex items-center space-x-2 text-gray-700">
                             <Clock className="w-4 h-4 text-blue-600" />
-                            <span>{route.duration} {route.duration === '1' ? 'día' : 'días'}</span>
+                            <span>{route.duracion_dias || 'N/A'}</span>
                           </div>
                         </TableCell>
-                        <TableCell>
-                          {getDifficultyBadge(route.difficulty)}
-                        </TableCell>
                         <TableCell className="font-semibold text-gray-900">
-                          {formatCurrency(route.price || 0)}
+                          {formatCurrency(route.precio_base)}
+                        </TableCell>
+                        <TableCell>
+                          {route.dificultad ? getDifficultyBadge(route.dificultad) : 'N/A'}
                         </TableCell>
                         {userRole === 'admin' && (
                           <TableCell className="text-center">
                             <div className="flex items-center justify-center gap-2">
                               <Switch
-                                checked={route.status === 'Activa'}
+                                checked={route.estado === true}
                                 onCheckedChange={() => handleToggleStatus(route)}
                                 className="data-[state=checked]:bg-green-600"
                               />
                               <span className="text-sm text-gray-700">
-                                {route.status === 'Activa' ? 'Activa' : 'Inactiva'}
+                                {route.estado ? 'Activa' : 'Inactiva'}
                               </span>
                             </div>
                           </TableCell>
                         )}
+                        <TableCell>
+                          <span className="text-sm text-gray-600">
+                            {route.fecha_creacion 
+                              ? new Date(route.fecha_creacion).toLocaleDateString('es-CO')
+                              : 'N/A'
+                            }
+                          </span>
+                        </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end space-x-1">
                             <Button
@@ -699,45 +672,57 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="name">Nombre de la Ruta *</Label>
-                  <Input
-                    id="name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="Ej: Valle del Cocora"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="location">Ubicación *</Label>
-                  <Input
-                    id="location"
-                    value={formData.location}
-                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                    placeholder="Ej: Salento, Quindío"
-                  />
-                </div>
+              <div>
+                <Label htmlFor="nombre">Nombre de la Ruta *</Label>
+                <Input
+                  id="nombre"
+                  value={formData.nombre}
+                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+                  placeholder="Ej: Valle del Cocora"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="descripcion">Descripción</Label>
+                <Textarea
+                  id="descripcion"
+                  value={formData.descripcion}
+                  onChange={(e) => setFormData({ ...formData, descripcion: e.target.value })}
+                  placeholder="Descripción detallada de la ruta..."
+                  rows={3}
+                />
               </div>
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="duration">Duración (días) *</Label>
+                  <Label htmlFor="duracion_dias">Duración (días)</Label>
                   <Input
-                    id="duration"
+                    id="duracion_dias"
                     type="number"
-                    value={formData.duration}
-                    onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
+                    value={formData.duracion_dias}
+                    onChange={(e) => setFormData({ ...formData, duracion_dias: e.target.value })}
                     placeholder="Ej: 5"
                     min="1"
                     step="1"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="difficulty">Dificultad *</Label>
+                  <Label htmlFor="precio_base">Precio Base (COP)</Label>
+                  <Input
+                    id="precio_base"
+                    type="number"
+                    value={formData.precio_base}
+                    onChange={(e) => setFormData({ ...formData, precio_base: e.target.value })}
+                    placeholder="Ej: 250000"
+                    min="0"
+                    step="1000"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="dificultad">Dificultad</Label>
                   <Select
-                    value={formData.difficulty}
-                    onValueChange={(value) => setFormData({ ...formData, difficulty: value })}
+                    value={formData.dificultad}
+                    onValueChange={(value: string) => setFormData({ ...formData, dificultad: value })}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -749,61 +734,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label htmlFor="price">Precio (COP) *</Label>
-                  <Input
-                    id="price"
-                    type="number"
-                    value={formData.price}
-                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                    placeholder="Ej: 250000"
-                    min="0"
-                    step="1000"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="capacity">Capacidad (personas)</Label>
-                  <Input
-                    id="capacity"
-                    type="number"
-                    value={formData.capacity}
-                    onChange={(e) => setFormData({ ...formData, capacity: e.target.value })}
-                    placeholder="Ej: 15"
-                    min="1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="guide">Guía Asignado</Label>
-                  <Input
-                    id="guide"
-                    value={formData.guide}
-                    onChange={(e) => setFormData({ ...formData, guide: e.target.value })}
-                    placeholder="Nombre del guía"
-                  />
-                </div>
               </div>
 
               <div>
-                <Label htmlFor="image">URL de Imagen</Label>
+                <Label htmlFor="imagen_url">URL de Imagen</Label>
                 <Input
-                  id="image"
-                  value={formData.image}
-                  onChange={(e) => setFormData({ ...formData, image: e.target.value })}
+                  id="imagen_url"
+                  value={formData.imagen_url}
+                  onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
                   placeholder="https://ejemplo.com/imagen.jpg"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="description">Descripción</Label>
-                <Textarea
-                  id="description"
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  placeholder="Descripción detallada de la ruta..."
-                  rows={4}
                 />
               </div>
             </div>
@@ -842,45 +781,57 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-name">Nombre de la Ruta *</Label>
-                  <Input
-                    id="edit-name"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    placeholder="Ej: Valle del Cocora"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-location">Ubicación *</Label>
-                  <Input
-                    id="edit-location"
-                    value={formData.location}
-                    onChange={(e) => setFormData({ ...formData, location: e.target.value })}
-                    placeholder="Ej: Salento, Quindío"
-                  />
-                </div>
+              <div>
+                <Label htmlFor="edit-nombre">Nombre de la Ruta *</Label>
+                <Input
+                  id="edit-nombre"
+                  value={formData.nombre}
+                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+                  placeholder="Ej: Valle del Cocora"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="edit-descripcion">Descripción</Label>
+                <Textarea
+                  id="edit-descripcion"
+                  value={formData.descripcion}
+                  onChange={(e) => setFormData({ ...formData, descripcion: e.target.value })}
+                  placeholder="Descripción detallada de la ruta..."
+                  rows={3}
+                />
               </div>
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="edit-duration">Duración (días) *</Label>
+                  <Label htmlFor="edit-duracion_dias">Duración (días)</Label>
                   <Input
-                    id="edit-duration"
+                    id="edit-duracion_dias"
                     type="number"
-                    value={formData.duration}
-                    onChange={(e) => setFormData({ ...formData, duration: e.target.value })}
+                    value={formData.duracion_dias}
+                    onChange={(e) => setFormData({ ...formData, duracion_dias: e.target.value })}
                     placeholder="Ej: 5"
                     min="1"
                     step="1"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="edit-difficulty">Dificultad *</Label>
+                  <Label htmlFor="edit-precio_base">Precio Base (COP)</Label>
+                  <Input
+                    id="edit-precio_base"
+                    type="number"
+                    value={formData.precio_base}
+                    onChange={(e) => setFormData({ ...formData, precio_base: e.target.value })}
+                    placeholder="Ej: 250000"
+                    min="0"
+                    step="1000"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="edit-dificultad">Dificultad</Label>
                   <Select
-                    value={formData.difficulty}
-                    onValueChange={(value) => setFormData({ ...formData, difficulty: value })}
+                    value={formData.dificultad}
+                    onValueChange={(value: string) => setFormData({ ...formData, dificultad: value })}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -892,61 +843,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label htmlFor="edit-price">Precio (COP) *</Label>
-                  <Input
-                    id="edit-price"
-                    type="number"
-                    value={formData.price}
-                    onChange={(e) => setFormData({ ...formData, price: e.target.value })}
-                    placeholder="Ej: 250000"
-                    min="0"
-                    step="1000"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="edit-capacity">Capacidad (personas)</Label>
-                  <Input
-                    id="edit-capacity"
-                    type="number"
-                    value={formData.capacity}
-                    onChange={(e) => setFormData({ ...formData, capacity: e.target.value })}
-                    placeholder="Ej: 15"
-                    min="1"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="edit-guide">Guía Asignado</Label>
-                  <Input
-                    id="edit-guide"
-                    value={formData.guide}
-                    onChange={(e) => setFormData({ ...formData, guide: e.target.value })}
-                    placeholder="Nombre del guía"
-                  />
-                </div>
               </div>
 
               <div>
-                <Label htmlFor="edit-image">URL de Imagen</Label>
+                <Label htmlFor="edit-imagen_url">URL de Imagen</Label>
                 <Input
-                  id="edit-image"
-                  value={formData.image}
-                  onChange={(e) => setFormData({ ...formData, image: e.target.value })}
+                  id="edit-imagen_url"
+                  value={formData.imagen_url}
+                  onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
                   placeholder="https://ejemplo.com/imagen.jpg"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="edit-description">Descripción</Label>
-                <Textarea
-                  id="edit-description"
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  placeholder="Descripción detallada de la ruta..."
-                  rows={4}
                 />
               </div>
             </div>
@@ -987,11 +892,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
           {selectedRoute && (
             <div className="space-y-6 py-4">
               {/* Image */}
-              {selectedRoute.image && (
+              {selectedRoute.imagen_url && (
                 <div className="w-full h-64 rounded-lg overflow-hidden">
                   <ImageWithFallback
-                    src={selectedRoute.image}
-                    alt={selectedRoute.name}
+                    src={selectedRoute.imagen_url}
+                    alt={selectedRoute.nombre}
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -1000,82 +905,89 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               {/* Header Info */}
               <div className="flex items-start justify-between">
                 <div>
-                  <h3 className="text-2xl text-gray-900 mb-1">{selectedRoute.name}</h3>
-                  <div className="flex items-center space-x-2 text-gray-600">
-                    <MapPin className="w-4 h-4 text-green-600" />
-                    <span>{selectedRoute.location}</span>
-                  </div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-1">{selectedRoute.nombre}</h3>
+                  <p className="text-sm text-gray-500">ID: {selectedRoute.id_ruta}</p>
                 </div>
-                {getDifficultyBadge(selectedRoute.difficulty)}
+                {selectedRoute.dificultad && getDifficultyBadge(selectedRoute.dificultad)}
               </div>
 
               <Separator />
 
               {/* Details Grid */}
               <div className="grid grid-cols-2 gap-4">
-                <div className="bg-green-50 p-4 rounded-lg">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <Clock className="w-5 h-5 text-green-600" />
-                    <Label className="text-gray-600">Duración</Label>
+                {selectedRoute.duracion_dias && (
+                  <div className="bg-green-50 p-4 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <Clock className="w-5 h-5 text-green-600" />
+                      <Label className="text-gray-600">Duración</Label>
+                    </div>
+                    <p className="text-lg font-semibold text-gray-900">
+                      {selectedRoute.duracion_dias} {selectedRoute.duracion_dias === 1 ? 'día' : 'días'}
+                    </p>
                   </div>
-                  <p className="text-lg text-gray-900">{selectedRoute.duration} {selectedRoute.duration === '1' ? 'día' : 'días'}</p>
-                </div>
+                )}
 
-                <div className="bg-blue-50 p-4 rounded-lg">
-                  <div className="flex items-center space-x-2 mb-2">
-                    <DollarSign className="w-5 h-5 text-blue-600" />
-                    <Label className="text-gray-600">Precio</Label>
+                {selectedRoute.precio_base && (
+                  <div className="bg-blue-50 p-4 rounded-lg">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <DollarSign className="w-5 h-5 text-blue-600" />
+                      <Label className="text-gray-600">Precio Base</Label>
+                    </div>
+                    <p className="text-xl font-bold text-green-600">{formatCurrency(selectedRoute.precio_base)}</p>
                   </div>
-                  <p className="text-xl text-green-600">{formatCurrency(selectedRoute.price || 0)}</p>
-                </div>
+                )}
 
-                {selectedRoute.capacity && (
+                {selectedRoute.dificultad && (
                   <div className="bg-purple-50 p-4 rounded-lg">
                     <div className="flex items-center space-x-2 mb-2">
-                      <Users className="w-5 h-5 text-purple-600" />
-                      <Label className="text-gray-600">Capacidad</Label>
+                      <TrendingUp className="w-5 h-5 text-purple-600" />
+                      <Label className="text-gray-600">Dificultad</Label>
                     </div>
-                    <p className="text-lg text-gray-900">{selectedRoute.capacity} personas</p>
+                    <p className="text-lg font-semibold text-gray-900">{selectedRoute.dificultad}</p>
                   </div>
                 )}
 
-                {selectedRoute.guide && (
-                  <div className="bg-orange-50 p-4 rounded-lg">
-                    <div className="flex items-center space-x-2 mb-2">
-                      <Star className="w-5 h-5 text-orange-600" />
-                      <Label className="text-gray-600">Guía Asignado</Label>
-                    </div>
-                    <p className="text-lg text-gray-900">{selectedRoute.guide}</p>
+                <div className="bg-orange-50 p-4 rounded-lg">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <CheckCircle className="w-5 h-5 text-orange-600" />
+                    <Label className="text-gray-600">Estado</Label>
                   </div>
-                )}
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedRoute.estado ? 'Activa' : 'Inactiva'}
+                  </p>
+                </div>
               </div>
 
               {/* Description */}
-              {selectedRoute.description && (
+              {selectedRoute.descripcion && (
                 <>
                   <Separator />
                   <div>
-                    <Label className="text-gray-600 mb-2 block">Descripción</Label>
+                    <Label className="text-gray-600 mb-2 block font-semibold">Descripción</Label>
                     <p className="text-gray-900 bg-gray-50 p-4 rounded-lg leading-relaxed">
-                      {selectedRoute.description}
+                      {selectedRoute.descripcion}
                     </p>
                   </div>
                 </>
               )}
 
               {/* Meta Info */}
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <span className="text-gray-600">ID de Ruta:</span>
-                    <span className="ml-2 font-mono font-semibold text-gray-900">{selectedRoute.id}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-600">Nivel:</span>
-                    <span className="ml-2 font-medium text-gray-900">{selectedRoute.difficulty}</span>
+              {selectedRoute.fecha_creacion && (
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <div className="text-sm text-gray-600">
+                    <span>Fecha de creación:</span>
+                    <span className="ml-2 font-semibold text-gray-900">
+                      {new Date(selectedRoute.fecha_creacion).toLocaleDateString('es-CO', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -1115,7 +1027,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </AlertDialogTitle>
               <AlertDialogDescription className="space-y-2">
                 <p>
-                  Está a punto de eliminar la ruta <span className="font-semibold">{selectedRoute?.name}</span>.
+                  Está a punto de eliminar la ruta <span className="font-semibold">{selectedRoute?.nombre}</span>.
                 </p>
                 <p className="text-red-600">
                   Esta acción es <strong>permanente</strong> y no se puede deshacer.

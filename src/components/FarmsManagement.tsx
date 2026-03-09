@@ -46,8 +46,8 @@ import {
   AlertDialogTrigger,
 } from './ui/alert-dialog';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { fincasAPI, Finca } from '../services/api';
-import { toast } from 'sonner@2.0.3';
+import { fincasAPI, propietariosAPI, Finca, Propietario } from '../services/api';
+import { toast } from 'sonner';
 
 interface FarmsManagementProps {
   canDelete?: boolean; // Admin puede eliminar, Asesor no
@@ -55,6 +55,7 @@ interface FarmsManagementProps {
 
 export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
   const [farms, setFarms] = useState<any[]>([]);
+  const [propietarios, setPropietarios] = useState<Propietario[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [locationFilter, setLocationFilter] = useState('all');
@@ -68,9 +69,10 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
   
   const itemsPerPage = 3;
 
-  // Cargar fincas desde la API
+  // Cargar fincas y propietarios desde la API
   useEffect(() => {
     loadFarms();
+    loadPropietarios();
   }, []);
 
   const loadFarms = async () => {
@@ -78,15 +80,21 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
       setIsLoading(true);
       const fincasFromDB = await fincasAPI.getAll();
       
-      // Mapear fincas del backend al formato delFrontend
+      // Mapear fincas del backend al formato del frontend
       const mappedFarms = fincasFromDB.map(finca => ({
         id: finca.id_finca.toString(),
+        id_propietario: finca.id_propietario,
         name: finca.nombre,
-        location: finca.ubicacion,
-        description: finca.descripcion,
-        capacity: finca.capacidad,
-        pricePerNight: finca.precio_noche,
-        status: finca.estado ? 'active' : 'inactive'
+        location: finca.ubicacion || '',
+        direccion: finca.direccion || '',
+        description: finca.descripcion || '',
+        capacity: finca.capacidad_personas || 0,
+        pricePerNight: finca.precio_por_noche || 0,
+        imagen_principal: finca.imagen_principal || '',
+        status: finca.estado ? 'active' : 'inactive',
+        // Datos del propietario
+        propietario_nombre: finca.propietario_nombre || '',
+        propietario_apellido: finca.propietario_apellido || ''
       }));
       
       setFarms(mappedFarms);
@@ -96,6 +104,17 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
       toast.error('Error al cargar las fincas');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const loadPropietarios = async () => {
+    try {
+      const propietariosFromDB = await propietariosAPI.getAll();
+      setPropietarios(propietariosFromDB);
+      console.log('✅ Propietarios cargados:', propietariosFromDB);
+    } catch (error) {
+      console.error('❌ Error cargando propietarios:', error);
+      toast.error('Error al cargar propietarios');
     }
   };
 
@@ -161,204 +180,211 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
   };
 
   // Formulario de crear/editar
-  const FarmForm = ({ farm, onClose, isEdit }: { farm?: any; onClose: () => void; isEdit?: boolean }) => {
+  const FarmForm = ({ 
+    farm, 
+    onClose, 
+    isEdit, 
+    propietarios 
+  }: { 
+    farm?: any; 
+    onClose: () => void; 
+    isEdit?: boolean;
+    propietarios: Propietario[];
+  }) => {
     const [formData, setFormData] = useState(farm || {
-      name: '',
-      location: '',
-      area: '',
-      capacity: '',
-      pricePerNight: '',
-      owner: '',
-      description: '',
-      images: [''],
-      status: 'active'
+      nombre: '',
+      descripcion: '',
+      direccion: '',
+      ubicacion: '',
+      capacidad_personas: '',
+      precio_por_noche: '',
+      imagen_principal: '',
+      id_propietario: '',
+      estado: true
     });
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const handleSubmit = (e: React.FormEvent) => {
+    const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       
-      // Filtrar URLs de imágenes vacías
-      const filteredImages = formData.images.filter((img: string) => img.trim() !== '');
+      if (isSubmitting) return;
       
-      if (isEdit && farm) {
-        setFarms(farms.map(f => f.id === farm.id ? { ...f, ...formData, images: filteredImages } : f));
-      } else {
-        const newFarm = {
-          ...formData,
-          id: `F${String(farms.length + 1).padStart(3, '0')}`,
-          rating: 4.5,
-          images: filteredImages.length > 0 ? filteredImages : ['https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800']
+      try {
+        setIsSubmitting(true);
+        
+        // Preparar datos para el backend
+        const fincaData = {
+          nombre: formData.nombre,
+          descripcion: formData.descripcion || undefined,
+          direccion: formData.direccion || undefined,
+          ubicacion: formData.ubicacion || undefined,
+          capacidad_personas: formData.capacidad_personas ? parseInt(formData.capacidad_personas.toString()) : undefined,
+          precio_por_noche: formData.precio_por_noche ? parseFloat(formData.precio_por_noche.toString()) : undefined,
+          imagen_principal: formData.imagen_principal || undefined,
+          id_propietario: formData.id_propietario ? parseInt(formData.id_propietario.toString()) : undefined,
+          estado: formData.estado
         };
-        setFarms([...farms, newFarm]);
+        
+        console.log('📤 Enviando datos de finca:', fincaData);
+        
+        if (isEdit && farm) {
+          // Actualizar finca existente
+          await fincasAPI.update(farm.id, fincaData);
+          toast.success('Finca actualizada exitosamente');
+        } else {
+          // Crear nueva finca
+          await fincasAPI.create(fincaData);
+          toast.success('Finca creada exitosamente');
+        }
+        
+        // Recargar lista de fincas
+        await loadFarms();
+        onClose();
+      } catch (error: any) {
+        console.error('❌ Error guardando finca:', error);
+        toast.error(error.message || 'Error al guardar la finca');
+      } finally {
+        setIsSubmitting(false);
       }
-      
-      onClose();
-    };
-
-    const addImageField = () => {
-      if (formData.images.length < 10) {
-        setFormData({ ...formData, images: [...formData.images, ''] });
-      }
-    };
-
-    const removeImageField = (index: number) => {
-      const newImages = formData.images.filter((_: string, i: number) => i !== index);
-      setFormData({ ...formData, images: newImages });
-    };
-
-    const updateImageField = (index: number, value: string) => {
-      const newImages = [...formData.images];
-      newImages[index] = value;
-      setFormData({ ...formData, images: newImages });
     };
 
     return (
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
-            <Label htmlFor="name">Nombre de la Finca *</Label>
+            <Label htmlFor="nombre">Nombre de la Finca *</Label>
             <Input
-              id="name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              id="nombre"
+              value={formData.nombre}
+              onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
               placeholder="Ej: Finca El Paraíso"
               required
+              disabled={isSubmitting}
             />
           </div>
 
           <div>
-            <Label htmlFor="location">Ubicación *</Label>
+            <Label htmlFor="ubicacion">Ubicación</Label>
             <Input
-              id="location"
-              value={formData.location}
-              onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+              id="ubicacion"
+              value={formData.ubicacion}
+              onChange={(e) => setFormData({ ...formData, ubicacion: e.target.value })}
               placeholder="Ej: Quindío, Colombia"
-              required
+              disabled={isSubmitting}
             />
           </div>
 
           <div>
-            <Label htmlFor="area">Área</Label>
+            <Label htmlFor="direccion">Dirección</Label>
             <Input
-              id="area"
-              value={formData.area}
-              onChange={(e) => setFormData({ ...formData, area: e.target.value })}
-              placeholder="Ej: 15 hectáreas"
+              id="direccion"
+              value={formData.direccion}
+              onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
+              placeholder="Ej: Vereda La Esperanza Km 5"
+              disabled={isSubmitting}
             />
           </div>
 
           <div>
-            <Label htmlFor="capacity">Capacidad (personas) *</Label>
-            <Input
-              id="capacity"
-              type="number"
-              value={formData.capacity}
-              onChange={(e) => setFormData({ ...formData, capacity: parseInt(e.target.value) })}
-              placeholder="Ej: 20"
-              required
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="pricePerNight">Precio por Noche *</Label>
-            <Input
-              id="pricePerNight"
-              type="number"
-              value={formData.pricePerNight}
-              onChange={(e) => setFormData({ ...formData, pricePerNight: parseInt(e.target.value) })}
-              placeholder="Ej: 150000"
-              required
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="owner">Propietario</Label>
-            <Input
-              id="owner"
-              value={formData.owner}
-              onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
-              placeholder="Nombre del propietario"
-            />
-          </div>
-
-          <div>
-            <Label htmlFor="status">Estado</Label>
-            <Select
-              value={formData.status}
-              onValueChange={(value) => setFormData({ ...formData, status: value })}
+            <Label htmlFor="id_propietario">Propietario (opcional)</Label>
+            <select
+              id="id_propietario"
+              value={formData.id_propietario || ''}
+              onChange={(e) => setFormData({ ...formData, id_propietario: e.target.value })}
+              disabled={isSubmitting}
+              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="active">Activa</SelectItem>
-                <SelectItem value="inactive">Inactiva</SelectItem>
-                <SelectItem value="maintenance">Mantenimiento</SelectItem>
-                <SelectItem value="available">Disponible</SelectItem>
-              </SelectContent>
-            </Select>
+              <option value="">− Sin propietario −</option>
+              {propietarios.map((prop) => (
+                <option key={prop.id_propietario} value={prop.id_propietario}>
+                  {prop.nombre} {prop.apellido || ''} {prop.numero_documento ? `(${prop.numero_documento})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <Label htmlFor="capacidad_personas">Capacidad (personas)</Label>
+            <Input
+              id="capacidad_personas"
+              type="number"
+              value={formData.capacidad_personas}
+              onChange={(e) => setFormData({ ...formData, capacidad_personas: e.target.value })}
+              placeholder="Ej: 20"
+              min="1"
+              disabled={isSubmitting}
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="precio_por_noche">Precio por Noche</Label>
+            <Input
+              id="precio_por_noche"
+              type="number"
+              value={formData.precio_por_noche}
+              onChange={(e) => setFormData({ ...formData, precio_por_noche: e.target.value })}
+              placeholder="Ej: 150000"
+              min="0"
+              step="0.01"
+              disabled={isSubmitting}
+            />
+          </div>
+
+          <div>
+            <Label htmlFor="id_propietario">ID Propietario (opcional)</Label>
+            <Input
+              id="id_propietario"
+              type="number"
+              value={formData.id_propietario}
+              onChange={(e) => setFormData({ ...formData, id_propietario: e.target.value })}
+              placeholder="Ej: 1"
+              min="1"
+              disabled={isSubmitting}
+            />
           </div>
 
           <div className="col-span-2">
-            <Label htmlFor="description">Descripción *</Label>
+            <Label htmlFor="descripcion">Descripción</Label>
             <Textarea
-              id="description"
-              value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              id="descripcion"
+              value={formData.descripcion}
+              onChange={(e) => setFormData({ ...formData, descripcion: e.target.value })}
               placeholder="Descripción detallada de la finca..."
               rows={4}
-              required
+              disabled={isSubmitting}
             />
           </div>
 
           <div className="col-span-2">
-            <Label>Imágenes (Mínimo 5, Máximo 10)</Label>
-            <div className="space-y-2 mt-2">
-              {formData.images.map((image: string, index: number) => (
-                <div key={index} className="flex gap-2">
-                  <Input
-                    value={image}
-                    onChange={(e) => updateImageField(index, e.target.value)}
-                    placeholder={`URL de imagen ${index + 1}`}
-                  />
-                  {formData.images.length > 1 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => removeImageField(index)}
-                      className="text-red-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-              {formData.images.length < 10 && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addImageField}
-                  className="w-full"
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Agregar Imagen
-                </Button>
-              )}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Total de imágenes: {formData.images.filter((img: string) => img.trim() !== '').length}
-            </p>
+            <Label htmlFor="imagen_principal">URL Imagen Principal</Label>
+            <Input
+              id="imagen_principal"
+              value={formData.imagen_principal}
+              onChange={(e) => setFormData({ ...formData, imagen_principal: e.target.value })}
+              placeholder="https://example.com/imagen.jpg"
+              disabled={isSubmitting}
+            />
+          </div>
+
+          <div className="col-span-2 flex items-center space-x-2">
+            <Switch
+              id="estado"
+              checked={formData.estado}
+              onCheckedChange={(checked: boolean) => setFormData({ ...formData, estado: checked })}
+              disabled={isSubmitting}
+            />
+            <Label htmlFor="estado" className="cursor-pointer">
+              {formData.estado ? 'Activa' : 'Inactiva'}
+            </Label>
           </div>
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={onClose}>
+          <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
             Cancelar
           </Button>
-          <Button type="submit" className="bg-green-600 hover:bg-green-700">
-            {isEdit ? 'Guardar Cambios' : 'Crear Finca'}
+          <Button type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Guardando...' : (isEdit ? 'Actualizar Finca' : 'Crear Finca')}
           </Button>
         </DialogFooter>
       </form>
@@ -429,7 +455,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                 Complete los campos para registrar una nueva finca en el sistema.
               </DialogDescription>
             </DialogHeader>
-            <FarmForm onClose={() => setIsCreateModalOpen(false)} />
+            <FarmForm onClose={() => setIsCreateModalOpen(false)} propietarios={propietarios} />
           </DialogContent>
         </Dialog>
       </motion.div>
@@ -547,7 +573,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                         <div className="flex items-center gap-2">
                           <Switch
                             checked={farm.status === 'active'}
-                            onCheckedChange={(checked) => 
+                            onCheckedChange={(checked: boolean) => 
                               handleStatusChange(farm.id, checked ? 'active' : 'inactive')
                             }
                             className="data-[state=checked]:bg-green-600"
@@ -761,6 +787,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
               farm={selectedFarm}
               onClose={() => setIsEditModalOpen(false)}
               isEdit
+              propietarios={propietarios}
             />
           )}
         </DialogContent>

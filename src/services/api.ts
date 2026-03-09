@@ -55,22 +55,45 @@ export interface Reserva {
 export interface Ruta {
   id_ruta: number;
   nombre: string;
-  descripcion: string;
-  duracion_dias: number;
-  precio_base: number;
-  dificultad?: string;
-  imagen_url?: string;
-  estado: boolean;
+  descripcion?: string | null;        // text NULL en BD
+  duracion_dias?: number | null;      // int4 NULL en BD
+  precio_base?: number | null;        // numeric NULL en BD
+  dificultad?: string | null;         // varchar NULL en BD
+  imagen_url?: string | null;         // text NULL en BD
+  estado?: boolean | null;            // bool NULL en BD
+  fecha_creacion?: string | null;     // timestamp NULL en BD
+}
+
+export interface Propietario {
+  id_propietario: number;
+  nombre: string;
+  apellido?: string;
+  tipo_documento?: string;
+  numero_documento?: string;
+  telefono?: string;
+  email?: string;
+  direccion?: string;
+  estado?: boolean;
+  fecha_registro?: string;
 }
 
 export interface Finca {
   id_finca: number;
+  id_propietario?: number;
   nombre: string;
-  descripcion: string;
-  ubicacion: string;
-  capacidad: number;
-  precio_noche: number;
-  estado: boolean;
+  descripcion?: string;
+  direccion?: string;
+  ubicacion?: string;
+  capacidad_personas?: number;
+  precio_por_noche?: number;
+  imagen_principal?: string;
+  estado?: boolean;
+  fecha_registro?: string;
+  // Datos del propietario (JOIN)
+  propietario_nombre?: string;
+  propietario_apellido?: string;
+  propietario_telefono?: string;
+  propietario_email?: string;
 }
 
 // =====================================================
@@ -363,6 +386,47 @@ export const fincasAPI = {
 };
 
 // =====================================================
+// PROPIETARIOS
+// =====================================================
+
+export const propietariosAPI = {
+  getAll: async (): Promise<Propietario[]> => {
+    const response = await fetchAPI<{ data: Propietario[] }>('/api/propietarios');
+    return response.data || [];
+  },
+
+  getById: async (id: number): Promise<Propietario> => {
+    const response = await fetchAPI<{ data: Propietario }>(`/api/propietarios/${id}`);
+    return response.data;
+  },
+
+  create: async (propietarioData: Partial<Propietario>) => {
+    return fetchAPI('/api/propietarios', {
+      method: 'POST',
+      body: JSON.stringify(propietarioData),
+    });
+  },
+
+  update: async (id: number, propietarioData: Partial<Propietario>) => {
+    return fetchAPI(`/api/propietarios/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(propietarioData),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/propietarios/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  getFincas: async (id: number) => {
+    const response = await fetchAPI<{ data: Finca[] }>(`/api/propietarios/${id}/fincas`);
+    return response.data || [];
+  },
+};
+
+// =====================================================
 // DASHBOARD
 // =====================================================
 
@@ -411,5 +475,165 @@ export const rolesAPI = {
     return fetchAPI(`/api/roles/${id}`, {
       method: 'DELETE',
     });
+  },
+};
+
+// =====================================================
+// TIPOS DE PROVEEDORES
+// =====================================================
+
+export interface TipoProveedor {
+  id_tipo: number;
+  nombre: string;
+  descripcion?: string | null;
+  estado?: boolean | null;
+  fecha_creacion?: string | null;
+}
+
+export const tiposProveedorAPI = {
+  getAll: async (): Promise<TipoProveedor[]> => {
+    const response = await fetchAPI<{ data: TipoProveedor[] }>('/api/tipo-proveedores');
+    return response.data || [];
+  },
+
+  getById: async (id: number): Promise<TipoProveedor> => {
+    const response = await fetchAPI<{ data: TipoProveedor }>(`/api/tipo-proveedores/${id}`);
+    return response.data;
+  },
+
+  create: async (tipoData: Partial<TipoProveedor>) => {
+    return fetchAPI('/api/tipo-proveedores', {
+      method: 'POST',
+      body: JSON.stringify(tipoData),
+    });
+  },
+
+  update: async (id: number, tipoData: Partial<TipoProveedor>) => {
+    return fetchAPI(`/api/tipo-proveedores/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(tipoData),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/tipo-proveedores/${id}`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+// =====================================================
+// PROVEEDORES
+// =====================================================
+
+export interface Proveedor {
+  id_proveedores: number;  // Cambiado de id_proveedor
+  nombre: string;
+  id_tipo: number;  // Cambiado de id_tipo_proveedor
+  telefono?: string | null;
+  email?: string | null;  // Cambiado de correo
+  direccion?: string | null;
+  observaciones?: string | null;
+  estado?: boolean | null;
+  fecha_registro?: string | null;  // Cambiado de fecha_creacion
+  // Campos relacionados (join)
+  tipo_proveedor_nombre?: string;
+}
+
+export const proveedoresAPI = {
+  getAll: async (): Promise<Proveedor[]> => {
+    const response = await fetchAPI<{ data: Proveedor[] }>('/api/proveedores');
+    return response.data || [];
+  },
+
+  getById: async (id: number): Promise<Proveedor> => {
+    const response = await fetchAPI<{ data: Proveedor }>(`/api/proveedores/${id}`);
+    return response.data;
+  },
+
+  getByTipo: async (idTipo: number): Promise<Proveedor[]> => {
+    const response = await fetchAPI<{ data: Proveedor[] }>(`/api/proveedores/tipo/${idTipo}`);
+    return response.data || [];
+  },
+
+  create: async (proveedorData: Partial<Proveedor>) => {
+    return fetchAPI('/api/proveedores', {
+      method: 'POST',
+      body: JSON.stringify(proveedorData),
+    });
+  },
+
+  update: async (id: number, proveedorData: Partial<Proveedor>) => {
+    return fetchAPI(`/api/proveedores/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(proveedorData),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/proveedores/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  buscar: async (termino: string): Promise<Proveedor[]> => {
+    const response = await fetchAPI<{ data: Proveedor[] }>(`/api/proveedores/buscar?q=${termino}`);
+    return response.data || [];
+  },
+};
+
+// =====================================================
+// SERVICIOS
+// =====================================================
+
+export interface Servicio {
+  id_servicio: number;
+  nombre: string;
+  descripcion?: string | null;
+  precio?: number | null;
+  imagen_url?: string | null;
+  estado?: boolean | null;
+  fecha_creacion?: string | null;
+}
+
+export const serviciosAPI = {
+  getAll: async (): Promise<Servicio[]> => {
+    const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios');
+    return response.data || [];
+  },
+
+  getById: async (id: number): Promise<Servicio> => {
+    const response = await fetchAPI<{ data: Servicio }>(`/api/servicios/${id}`);
+    return response.data;
+  },
+
+  getDisponibles: async (): Promise<Servicio[]> => {
+    const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios/disponibles');
+    return response.data || [];
+  },
+
+  create: async (servicioData: Partial<Servicio>) => {
+    return fetchAPI('/api/servicios', {
+      method: 'POST',
+      body: JSON.stringify(servicioData),
+    });
+  },
+
+  update: async (id: number, servicioData: Partial<Servicio>) => {
+    return fetchAPI(`/api/servicios/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(servicioData),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/servicios/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  buscar: async (termino: string): Promise<Servicio[]> => {
+    const response = await fetchAPI<{ data: Servicio[] }>(`/api/servicios/buscar?q=${termino}`);
+    return response.data || [];
   },
 };

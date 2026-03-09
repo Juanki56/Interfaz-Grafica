@@ -52,284 +52,21 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
 import { Switch } from './ui/switch';
+import { proveedoresAPI, tiposProveedorAPI, Proveedor, TipoProveedor } from '../services/api';
+import { useEffect } from 'react';
 
 // ===========================
-// INTERFACES Y TIPOS
+// INTERFACES Y TIPOS  
 // ===========================
 
-export interface ProviderType {
-  id: string;
-  name: string;
-  description: string;
-  status: 'Activo' | 'Inactivo';
+// Usamos las interfaces de la BD
+export interface Provider extends Proveedor {
+  tipo_proveedor_nombre?: string;
 }
 
-export interface Provider {
-  id: string;
-  name: string;
-  providerType: ProviderType;
-  phone: string;
-  email: string;
-  address: string;
-  observations?: string;
-  status: 'Activo' | 'Inactivo';
-  createdAt: string;
-}
+export interface ProviderType extends TipoProveedor {}
 
 type ViewMode = 'list' | 'create' | 'edit' | 'detail';
-
-// ===========================
-// DATOS MOCK
-// ===========================
-
-const mockProviderTypes: ProviderType[] = [
-  { id: '1', name: 'Transporte', description: 'Proveedores de servicios de transporte', status: 'Activo' },
-  { id: '2', name: 'Alimentación', description: 'Proveedores de alimentos y bebidas', status: 'Activo' },
-  { id: '3', name: 'Alojamiento', description: 'Proveedores de hospedaje y alojamiento', status: 'Activo' },
-  { id: '4', name: 'Entretenimiento', description: 'Proveedores de entretenimiento y actividades', status: 'Activo' },
-  { id: '5', name: 'Equipamiento', description: 'Proveedores de equipos y materiales', status: 'Activo' },
-];
-
-const mockProviders: Provider[] = [
-  {
-    id: 'PROV-001',
-    name: 'Transportes Occidente S.A.S',
-    providerType: mockProviderTypes[0],
-    phone: '3001234567',
-    email: 'contacto@transportesoccidente.com',
-    address: 'Calle 15 #20-30, Armenia, Quindío',
-    observations: 'Proveedor principal de transporte turístico',
-    status: 'Activo',
-    createdAt: '2024-01-15'
-  },
-  {
-    id: 'PROV-002',
-    name: 'Restaurante La Montaña',
-    providerType: mockProviderTypes[1],
-    phone: '3109876543',
-    email: 'info@restaurantelamontana.com',
-    address: 'Vereda El Paraíso, Salento, Quindío',
-    observations: 'Especialidad en comida típica regional',
-    status: 'Activo',
-    createdAt: '2024-02-01'
-  },
-  {
-    id: 'PROV-003',
-    name: 'Finca Hotel El Descanso',
-    providerType: mockProviderTypes[2],
-    phone: '3201122334',
-    email: 'reservas@fincaeldescanso.com',
-    address: 'Km 5 Vía Pereira-Cartago, Pereira, Risaralda',
-    observations: 'Capacidad para 80 personas',
-    status: 'Activo',
-    createdAt: '2024-01-20'
-  },
-  {
-    id: 'PROV-004',
-    name: 'Eventos y Mariachis del Eje',
-    providerType: mockProviderTypes[3],
-    phone: '3152233445',
-    email: 'eventos@mariachisdeleje.com',
-    address: 'Avenida Bolívar #45-12, Manizales, Caldas',
-    status: 'Activo',
-    createdAt: '2024-03-10'
-  },
-  {
-    id: 'PROV-005',
-    name: 'Equipos Aventura Total',
-    providerType: mockProviderTypes[4],
-    phone: '3003344556',
-    email: 'ventas@aventuratotal.com',
-    address: 'Centro Comercial Plaza Mayor, Local 102',
-    observations: 'Alquiler de equipos de camping y montañismo',
-    status: 'Inactivo',
-    createdAt: '2024-02-15'
-  },
-  {
-    id: 'PROV-006',
-    name: 'Buses del Café Express',
-    providerType: mockProviderTypes[0],
-    phone: '3102223344',
-    email: 'info@busesdelcafe.com',
-    address: 'Terminal de Transportes, Armenia',
-    observations: 'Servicio de transporte intermunicipal',
-    status: 'Activo',
-    createdAt: '2024-03-15'
-  },
-  {
-    id: 'PROV-007',
-    name: 'Cocina Regional del Valle',
-    providerType: mockProviderTypes[1],
-    phone: '3205556677',
-    email: 'contacto@cocinaregional.com',
-    address: 'Carrera 8 #12-45, Calarcá',
-    observations: 'Catering para grupos grandes',
-    status: 'Activo',
-    createdAt: '2024-04-01'
-  },
-  {
-    id: 'PROV-008',
-    name: 'Glamping Paraíso Verde',
-    providerType: mockProviderTypes[2],
-    phone: '3157778899',
-    email: 'reservas@glampingparaiso.com',
-    address: 'Vereda La Bella, Circasia',
-    observations: 'Alojamiento ecológico premium',
-    status: 'Activo',
-    createdAt: '2024-02-20'
-  },
-  {
-    id: 'PROV-009',
-    name: 'Shows y Eventos Culturales',
-    providerType: mockProviderTypes[3],
-    phone: '3009990088',
-    email: 'shows@eventosculturales.com',
-    address: 'Centro Cultural, Pereira',
-    status: 'Activo',
-    createdAt: '2024-05-10'
-  },
-  {
-    id: 'PROV-010',
-    name: 'Deportes Extremos Quindío',
-    providerType: mockProviderTypes[4],
-    phone: '3181112233',
-    email: 'info@deportesextremos.com',
-    address: 'Parque del Café, Montenegro',
-    observations: 'Equipos de seguridad para actividades extremas',
-    status: 'Activo',
-    createdAt: '2024-01-30'
-  },
-  {
-    id: 'PROV-011',
-    name: 'Van Tours del Eje',
-    providerType: mockProviderTypes[0],
-    phone: '3123334455',
-    email: 'reservas@vantours.com',
-    address: 'Avenida Centenario, Manizales',
-    observations: 'Transporte ejecutivo para grupos pequeños',
-    status: 'Activo',
-    createdAt: '2024-03-25'
-  },
-  {
-    id: 'PROV-012',
-    name: 'Sabores del Campo',
-    providerType: mockProviderTypes[1],
-    phone: '3194445566',
-    email: 'pedidos@saborescampo.com',
-    address: 'Finca La Esperanza, Filandia',
-    observations: 'Almuerzos campestres y eventos',
-    status: 'Inactivo',
-    createdAt: '2024-04-15'
-  },
-  {
-    id: 'PROV-013',
-    name: 'Cabañas del Bosque',
-    providerType: mockProviderTypes[2],
-    phone: '3166667788',
-    email: 'info@cabanasbosque.com',
-    address: 'Vereda Alto del Rey, Salento',
-    observations: 'Cabañas rústicas en la montaña',
-    status: 'Activo',
-    createdAt: '2024-02-28'
-  },
-  {
-    id: 'PROV-014',
-    name: 'Grupo Folclórico Café y Cultura',
-    providerType: mockProviderTypes[3],
-    phone: '3177778899',
-    email: 'contacto@folcloricocafe.com',
-    address: 'Casa de la Cultura, Armenia',
-    status: 'Activo',
-    createdAt: '2024-05-20'
-  },
-  {
-    id: 'PROV-015',
-    name: 'Outdoor Adventure Gear',
-    providerType: mockProviderTypes[4],
-    phone: '3088889900',
-    email: 'ventas@outdooradventure.com',
-    address: 'Centro Comercial Unicentro, Pereira',
-    observations: 'Venta y alquiler de equipo de campamento',
-    status: 'Activo',
-    createdAt: '2024-06-01'
-  },
-  {
-    id: 'PROV-016',
-    name: 'Transporte Eco-Turístico',
-    providerType: mockProviderTypes[0],
-    phone: '3199991122',
-    email: 'reservas@ecotransporte.com',
-    address: 'Km 2 Vía Armenia-Calarcá',
-    observations: 'Vehículos híbridos y eléctricos',
-    status: 'Activo',
-    createdAt: '2024-06-10'
-  },
-  {
-    id: 'PROV-017',
-    name: 'Parrilla y Asados El Campestre',
-    providerType: mockProviderTypes[1],
-    phone: '3161112233',
-    email: 'pedidos@parrillaelcampestre.com',
-    address: 'Vereda La Cascada, Circasia',
-    observations: 'Especialidad en parrilladas y asados',
-    status: 'Activo',
-    createdAt: '2024-07-01'
-  },
-  {
-    id: 'PROV-018',
-    name: 'Posada Turística Los Arrayanes',
-    providerType: mockProviderTypes[2],
-    phone: '3172223344',
-    email: 'contacto@posadalosarrayanes.com',
-    address: 'Centro Histórico, Salento',
-    observations: 'Posada colonial en el centro del pueblo',
-    status: 'Activo',
-    createdAt: '2024-03-30'
-  },
-  {
-    id: 'PROV-019',
-    name: 'DJ y Sonido Profesional',
-    providerType: mockProviderTypes[3],
-    phone: '3183334455',
-    email: 'eventos@djsonidopro.com',
-    address: 'Barrio Modelo, Armenia',
-    status: 'Inactivo',
-    createdAt: '2024-08-05'
-  },
-  {
-    id: 'PROV-020',
-    name: 'Bicicletas de Montaña Rent',
-    providerType: mockProviderTypes[4],
-    phone: '3094445566',
-    email: 'alquiler@bicicletasrent.com',
-    address: 'Parque Principal, Filandia',
-    observations: 'Alquiler de bicicletas todo terreno',
-    status: 'Activo',
-    createdAt: '2024-07-15'
-  },
-  {
-    id: 'PROV-021',
-    name: 'Chivas Turísticas del Quindío',
-    providerType: mockProviderTypes[0],
-    phone: '3155556677',
-    email: 'info@chivasturisticas.com',
-    address: 'Parque del Café, Montenegro',
-    observations: 'Tours en chivas tradicionales',
-    status: 'Activo',
-    createdAt: '2024-08-20'
-  },
-  {
-    id: 'PROV-022',
-    name: 'Café y Postres La Tradición',
-    providerType: mockProviderTypes[1],
-    phone: '3106667788',
-    email: 'ventas@cafelatradicion.com',
-    address: 'Calle Real, Salento',
-    observations: 'Servicio de coffee break y refrigerios',
-    status: 'Activo',
-    createdAt: '2024-09-01'
-  }
-];
 
 // ===========================
 // COMPONENTE PRINCIPAL
@@ -342,8 +79,9 @@ interface ProviderManagementProps {
 export function ProviderManagement({ userRole = 'admin' }: ProviderManagementProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
-  const [providers, setProviders] = useState<Provider[]>(mockProviders);
-  const [providerTypes] = useState<ProviderType[]>(mockProviderTypes);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
@@ -356,21 +94,87 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
 
   // Dialogs
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [providerToDelete, setProviderToDelete] = useState<string | null>(null);
+  const [providerToDelete, setProviderToDelete] = useState<number | null>(null);
 
   const isAdmin = userRole === 'admin';
 
-  const handleCreateProvider = (newProvider: Provider) => {
-    setProviders([newProvider, ...providers]);
-    setViewMode('list');
-    toast.success('Proveedor creado exitosamente');
+  // Cargar datos del backend
+  useEffect(() => {
+    loadProviders();
+    loadProviderTypes();
+  }, []);
+
+  const loadProviders = async () => {
+    try {
+      setIsLoading(true);
+      const data = await proveedoresAPI.getAll();
+      console.log('✅ Proveedores cargados:', data);
+      setProviders(data);
+    } catch (error) {
+      console.error('❌ Error cargando proveedores:', error);
+      toast.error('Error al cargar proveedores');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleUpdateProvider = (updatedProvider: Provider) => {
-    setProviders(providers.map(p => p.id === updatedProvider.id ? updatedProvider : p));
-    setViewMode('list');
-    setSelectedProvider(null);
-    toast.success('Proveedor actualizado exitosamente');
+  const loadProviderTypes = async () => {
+    try {
+      const data = await tiposProveedorAPI.getAll();
+      setProviderTypes(data);
+    } catch (error) {
+      console.error('❌ Error cargando tipos de proveedor:', error);
+    }
+  };
+
+  const handleCreateProvider = async (newProvider: Partial<Provider>) => {
+    try {
+      setIsLoading(true);
+      const dataToSend = {
+        nombre: newProvider.nombre!,
+        id_tipo: newProvider.id_tipo!,
+        telefono: newProvider.telefono || '',
+        email: newProvider.email || '',
+        direccion: newProvider.direccion || '',
+        observaciones: newProvider.observaciones || '',
+        estado: true
+      };
+      console.log('📤 Datos que se enviarán al backend:', dataToSend);
+      await proveedoresAPI.create(dataToSend);
+      
+      toast.success('Proveedor creado exitosamente');
+      setViewMode('list');
+      await loadProviders();
+    } catch (error: any) {
+      console.error('❌ Error creando proveedor:', error);
+      toast.error(error.message || 'Error al crear el proveedor');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleUpdateProvider = async (updatedProvider: Partial<Provider>) => {
+    try {
+      setIsLoading(true);
+      await proveedoresAPI.update(selectedProvider!.id_proveedores, {
+        nombre: updatedProvider.nombre,
+        id_tipo: updatedProvider.id_tipo,
+        telefono: updatedProvider.telefono,
+        email: updatedProvider.email,
+        direccion: updatedProvider.direccion,
+        observaciones: updatedProvider.observaciones
+      });
+      
+      toast.success('Proveedor actualizado exitosamente');
+      setViewMode('list');
+      setSelectedProvider(null);
+      await loadProviders();
+    } catch (error: any) {
+      console.error('❌ Error actualizando proveedor:', error);
+      toast.error(error.message || 'Error al actualizar el proveedor');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleViewDetail = (provider: Provider) => {
@@ -383,28 +187,57 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
     setViewMode('edit');
   };
 
-  const handleInitiateDelete = (providerId: string) => {
+  const handleInitiateDelete = (providerId: number) => {
     setProviderToDelete(providerId);
     setShowDeleteDialog(true);
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (providerToDelete) {
-      setProviders(providers.filter(p => p.id !== providerToDelete));
-      setShowDeleteDialog(false);
-      setProviderToDelete(null);
-      toast.success('Proveedor eliminado exitosamente');
+      try {
+        setIsLoading(true);
+        await proveedoresAPI.delete(providerToDelete);
+        toast.success('Proveedor eliminado exitosamente');
+        await loadProviders();
+      } catch (error: any) {
+        console.error('❌ Error eliminando proveedor:', error);
+        toast.error(error.message || 'Error al eliminar el proveedor');
+      } finally {
+        setIsLoading(false);
+        setShowDeleteDialog(false);
+        setProviderToDelete(null);
+      }
     }
   };
 
-  const handleToggleStatus = (providerId: string) => {
-    setProviders(providers.map(p => 
-      p.id === providerId 
-        ? { ...p, status: p.status === 'Activo' ? 'Inactivo' : 'Activo' } 
-        : p
-    ));
-    toast.success('Estado del proveedor actualizado');
+  const handleToggleStatus = async (providerId: number) => {
+    try {
+      const provider = providers.find(p => p.id_proveedores === providerId);
+      if (!provider) return;
+      
+      await proveedoresAPI.update(providerId, {
+        estado: !provider.estado
+      });
+      
+      toast.success('Estado del proveedor actualizado');
+      await loadProviders();
+    } catch (error: any) {
+      console.error('❌ Error actualizando estado:', error);
+      toast.error(error.message || 'Error al actualizar el estado');
+    }
   };
+
+  // Mostrar pantalla de carga mientras se cargan los datos
+  if (isLoading && providers.length === 0) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Cargando proveedores...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 p-6">
@@ -412,7 +245,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
         {viewMode === 'list' && (
           <ProviderListView
             key="list"
-            providers={providers}
+            providers={Array.isArray(providers) ? providers : []}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             filterType={filterType}
@@ -427,7 +260,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
             onEdit={handleEdit}
             onDelete={handleInitiateDelete}
             onToggleStatus={handleToggleStatus}
-            providerTypes={providerTypes}
+            providerTypes={Array.isArray(providerTypes) ? providerTypes : []}
             isAdmin={isAdmin}
           />
         )}
@@ -451,6 +284,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
           <ProviderDetailView
             key="detail"
             provider={selectedProvider}
+            providerTypes={providerTypes}
             onBack={() => {
               setViewMode('list');
               setSelectedProvider(null);
@@ -522,8 +356,8 @@ interface ProviderListViewProps {
   onCreateNew: () => void;
   onViewDetail: (provider: Provider) => void;
   onEdit: (provider: Provider) => void;
-  onDelete: (providerId: string) => void;
-  onToggleStatus: (providerId: string) => void;
+  onDelete: (providerId: number) => void;
+  onToggleStatus: (providerId: number) => void;
   providerTypes: ProviderType[];
   isAdmin: boolean;
 }
@@ -548,23 +382,40 @@ function ProviderListView({
   isAdmin
 }: ProviderListViewProps) {
   
-  const getStatusBadge = (status: Provider['status']) => {
-    const styles = {
-      Activo: 'bg-green-100 text-green-700 border-green-200',
-      Inactivo: 'bg-gray-100 text-gray-700 border-gray-200'
-    };
-    return styles[status];
+  // Validar que los arrays sean válidos - RETORNO TEMPRANO si hay problema
+  if (!Array.isArray(providers) || !Array.isArray(providerTypes)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-600">Cargando proveedores...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  const safeProviders = providers;
+  const safeProviderTypes = providerTypes;
+  
+  const getStatusBadge = (estado: boolean) => {
+    return estado
+      ? 'bg-green-100 text-green-700 border-green-200'
+      : 'bg-gray-100 text-gray-700 border-gray-200';
   };
 
   // Filtrar proveedores
-  const filteredProviders = providers.filter(provider => {
-    const matchesSearch = 
-      provider.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      provider.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      provider.email.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredProviders = safeProviders.filter(provider => {
+    if (!provider) return false;
     
-    const matchesType = filterType === 'all' || provider.providerType.id === filterType;
-    const matchesStatus = filterStatus === 'all' || provider.status === filterStatus;
+    const matchesSearch = 
+      (provider.nombre && provider.nombre.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (provider.id_proveedores && provider.id_proveedores.toString().includes(searchTerm.toLowerCase())) ||
+      (provider.email && provider.email.toLowerCase().includes(searchTerm.toLowerCase()));
+    
+    const matchesType = filterType === 'all' || 
+      (provider.id_tipo && provider.id_tipo.toString() === filterType);
+    const matchesStatus = filterStatus === 'all' || 
+      (filterStatus === 'Activo' && provider.estado) ||
+      (filterStatus === 'Inactivo' && !provider.estado);
     
     return matchesSearch && matchesType && matchesStatus;
   });
@@ -622,9 +473,13 @@ function ProviderListView({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos los tipos</SelectItem>
-                {providerTypes.map(type => (
-                  <SelectItem key={type.id} value={type.id}>{type.name}</SelectItem>
-                ))}
+                {safeProviderTypes
+                  .filter(type => type && type.id_tipo && type.nombre)
+                  .map(type => (
+                    <SelectItem key={type.id_tipo} value={type.id_tipo.toString()}>
+                      {type.nombre}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
 
@@ -675,80 +530,83 @@ function ProviderListView({
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedProviders.map((provider) => (
-                    <TableRow key={provider.id} className="hover:bg-green-50/50">
-                      <TableCell className="font-medium text-green-700">{provider.id}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Building2 className="w-4 h-4 text-green-600" />
-                          <span className="font-medium">{provider.name}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="border-green-200 text-green-700">
-                          {provider.providerType.name}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2 text-gray-600">
-                          <Phone className="w-3 h-3" />
-                          {provider.phone}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2 text-gray-600">
-                          <Mail className="w-3 h-3" />
-                          {provider.email}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {isAdmin && (
-                          <Switch
-                            checked={provider.status === 'Activo'}
-                            onCheckedChange={() => onToggleStatus(provider.id)}
-                            className="data-[state=checked]:bg-green-600"
-                          />
-                        )}
-                        {!isAdmin && (
-                          <Badge className={getStatusBadge(provider.status)}>
-                            {provider.status}
+                  paginatedProviders.map((provider) => {
+                    const tipoProveedor = safeProviderTypes.find(t => t.id_tipo === provider.id_tipo);
+                    return (
+                      <TableRow key={provider.id_proveedores} className="hover:bg-green-50/50">
+                        <TableCell className="font-medium text-green-700">{provider.id_proveedores}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <Building2 className="w-4 h-4 text-green-600" />
+                            <span className="font-medium">{provider.nombre}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="border-green-200 text-green-700">
+                            {tipoProveedor?.nombre || 'Sin tipo'}
                           </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onViewDetail(provider)}
-                            className="hover:bg-green-100 hover:text-green-700"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-gray-600">
+                            <Phone className="w-3 h-3" />
+                            {provider.telefono || '-'}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-gray-600">
+                            <Mail className="w-3 h-3" />
+                            {provider.email || '-'}
+                          </div>
+                        </TableCell>
+                        <TableCell>
                           {isAdmin && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => onEdit(provider)}
-                                className="hover:bg-blue-100 hover:text-blue-700"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => onDelete(provider.id)}
-                                className="hover:bg-red-100 hover:text-red-700"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
+                            <Switch
+                              checked={provider.estado}
+                              onCheckedChange={() => onToggleStatus(provider.id_proveedores)}
+                              className="data-[state=checked]:bg-green-600"
+                            />
+                          )}
+                          {!isAdmin && (
+                            <Badge className={getStatusBadge(provider.estado ?? false)}>
+                              {provider.estado ? 'Activo' : 'Inactivo'}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => onViewDetail(provider)}
+                              className="hover:bg-green-100 hover:text-green-700"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </Button>
+                            {isAdmin && (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => onEdit(provider)}
+                                  className="hover:bg-blue-100 hover:text-blue-700"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => onDelete(provider.id_proveedores)}
+                                  className="hover:bg-red-100 hover:text-red-700"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
                             </>
                           )}
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))
+                  );
+                })
                 )}
               </TableBody>
             </Table>
@@ -799,8 +657,8 @@ interface ProviderFormViewProps {
   mode: 'create' | 'edit';
   provider: Provider | null;
   onBack: () => void;
-  onCreate: (provider: Provider) => void;
-  onUpdate: (provider: Provider) => void;
+  onCreate: (provider: Partial<Provider>) => void;
+  onUpdate: (provider: Partial<Provider>) => void;
   providerTypes: ProviderType[];
 }
 
@@ -812,13 +670,15 @@ function ProviderFormView({
   onUpdate,
   providerTypes
 }: ProviderFormViewProps) {
+  const safeProviderTypes = Array.isArray(providerTypes) ? providerTypes : [];
+  
   const [formData, setFormData] = useState({
-    name: provider?.name || '',
-    providerTypeId: provider?.providerType.id || '',
-    phone: provider?.phone || '',
-    email: provider?.email || '',
-    address: provider?.address || '',
-    observations: provider?.observations || ''
+    nombre: mode === 'create' ? '' : (provider?.nombre || ''),
+    id_tipo: mode === 'create' ? '' : (provider?.id_tipo?.toString() || ''),
+    telefono: mode === 'create' ? '' : (provider?.telefono || ''),
+    email: mode === 'create' ? '' : (provider?.email || ''),
+    direccion: mode === 'create' ? '' : (provider?.direccion || ''),
+    observaciones: mode === 'create' ? '' : (provider?.observaciones || '')
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -826,15 +686,12 @@ function ProviderFormView({
   const validateForm = () => {
     const newErrors: Record<string, string> = {};
 
-    if (!formData.name.trim()) newErrors.name = 'El nombre es obligatorio';
-    if (!formData.providerTypeId) newErrors.providerTypeId = 'El tipo de proveedor es obligatorio';
-    if (!formData.phone.trim()) newErrors.phone = 'El teléfono es obligatorio';
-    if (!formData.email.trim()) {
-      newErrors.email = 'El correo es obligatorio';
-    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+    if (!formData.nombre.trim()) newErrors.nombre = 'El nombre es obligatorio';
+    if (!formData.id_tipo) newErrors.id_tipo = 'El tipo de proveedor es obligatorio';
+    if (!formData.telefono.trim()) newErrors.telefono = 'El teléfono es obligatorio';
+    if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'El correo no es válido';
     }
-    if (!formData.address.trim()) newErrors.address = 'La dirección es obligatoria';
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -848,19 +705,13 @@ function ProviderFormView({
       return;
     }
 
-    const selectedType = providerTypes.find(t => t.id === formData.providerTypeId);
-    if (!selectedType) return;
-
-    const providerData: Provider = {
-      id: provider?.id || `PROV-${String(Date.now()).slice(-3).padStart(3, '0')}`,
-      name: formData.name,
-      providerType: selectedType,
-      phone: formData.phone,
-      email: formData.email,
-      address: formData.address,
-      observations: formData.observations,
-      status: provider?.status || 'Activo',
-      createdAt: provider?.createdAt || new Date().toISOString().split('T')[0]
+    const providerData: Partial<Provider> = {
+      nombre: formData.nombre,
+      id_tipo: parseInt(formData.id_tipo),
+      telefono: formData.telefono || '',
+      email: formData.email || '',
+      direccion: formData.direccion || '',
+      observaciones: formData.observaciones || ''
     };
 
     if (mode === 'create') {
@@ -886,7 +737,7 @@ function ProviderFormView({
               <p className="text-sm text-gray-600 mt-1">
                 {mode === 'create' 
                   ? 'Completa los datos del nuevo proveedor' 
-                  : `Editando: ${provider?.name}`
+                  : `Editando: ${provider?.nombre}`
                 }
               </p>
             </div>
@@ -906,59 +757,61 @@ function ProviderFormView({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Nombre del proveedor */}
               <div className="md:col-span-2">
-                <Label htmlFor="name" className="text-gray-700">
+                <Label htmlFor="nombre" className="text-gray-700">
                   Nombre del Proveedor <span className="text-red-500">*</span>
                 </Label>
                 <Input
-                  id="name"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  id="nombre"
+                  value={formData.nombre}
+                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
                   placeholder="Ej: Transportes Occidente S.A.S"
-                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.name ? 'border-red-500' : ''}`}
+                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.nombre ? 'border-red-500' : ''}`}
                 />
-                {errors.name && <p className="text-sm text-red-500 mt-1">{errors.name}</p>}
+                {errors.nombre && <p className="text-sm text-red-500 mt-1">{errors.nombre}</p>}
               </div>
 
               {/* Tipo de proveedor */}
               <div>
-                <Label htmlFor="providerType" className="text-gray-700">
+                <Label htmlFor="id_tipo" className="text-gray-700">
                   Tipo de Proveedor <span className="text-red-500">*</span>
                 </Label>
                 <Select 
-                  value={formData.providerTypeId} 
-                  onValueChange={(value) => setFormData({ ...formData, providerTypeId: value })}
+                  value={formData.id_tipo}
+                  onValueChange={(value: string) => setFormData({ ...formData, id_tipo: value })}
                 >
-                  <SelectTrigger className={`mt-1 border-green-200 focus:border-green-500 ${errors.providerTypeId ? 'border-red-500' : ''}`}>
+                  <SelectTrigger className={`mt-1 border-green-200 focus:border-green-500 ${errors.id_tipo ? 'border-red-500' : ''}`}>
                     <SelectValue placeholder="Selecciona un tipo" />
                   </SelectTrigger>
                   <SelectContent>
-                    {providerTypes.filter(t => t.status === 'Activo').map(type => (
-                      <SelectItem key={type.id} value={type.id}>{type.name}</SelectItem>
+                    {safeProviderTypes.map(type => (
+                      <SelectItem key={type.id_tipo} value={type.id_tipo.toString()}>
+                        {type.nombre}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                {errors.providerTypeId && <p className="text-sm text-red-500 mt-1">{errors.providerTypeId}</p>}
+                {errors.id_tipo && <p className="text-sm text-red-500 mt-1">{errors.id_tipo}</p>}
               </div>
 
               {/* Teléfono */}
               <div>
-                <Label htmlFor="phone" className="text-gray-700">
+                <Label htmlFor="telefono" className="text-gray-700">
                   Teléfono <span className="text-red-500">*</span>
                 </Label>
                 <Input
-                  id="phone"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  id="telefono"
+                  value={formData.telefono}
+                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
                   placeholder="Ej: 3001234567"
-                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.phone ? 'border-red-500' : ''}`}
+                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.telefono ? 'border-red-500' : ''}`}
                 />
-                {errors.phone && <p className="text-sm text-red-500 mt-1">{errors.phone}</p>}
+                {errors.telefono && <p className="text-sm text-red-500 mt-1">{errors.telefono}</p>}
               </div>
 
               {/* Correo */}
               <div className="md:col-span-2">
                 <Label htmlFor="email" className="text-gray-700">
-                  Correo Electrónico <span className="text-red-500">*</span>
+                  Correo Electrónico
                 </Label>
                 <Input
                   id="email"
@@ -973,28 +826,28 @@ function ProviderFormView({
 
               {/* Dirección */}
               <div className="md:col-span-2">
-                <Label htmlFor="address" className="text-gray-700">
-                  Dirección <span className="text-red-500">*</span>
+                <Label htmlFor="direccion" className="text-gray-700">
+                  Dirección
                 </Label>
                 <Input
-                  id="address"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  id="direccion"
+                  value={formData.direccion}
+                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
                   placeholder="Ej: Calle 15 #20-30, Armenia, Quindío"
-                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.address ? 'border-red-500' : ''}`}
+                  className={`mt-1 border-green-200 focus:border-green-500 ${errors.direccion ? 'border-red-500' : ''}`}
                 />
-                {errors.address && <p className="text-sm text-red-500 mt-1">{errors.address}</p>}
+                {errors.direccion && <p className="text-sm text-red-500 mt-1">{errors.direccion}</p>}
               </div>
 
               {/* Observaciones */}
               <div className="md:col-span-2">
-                <Label htmlFor="observations" className="text-gray-700">
+                <Label htmlFor="observaciones" className="text-gray-700">
                   Observaciones (opcional)
                 </Label>
                 <Textarea
-                  id="observations"
-                  value={formData.observations}
-                  onChange={(e) => setFormData({ ...formData, observations: e.target.value })}
+                  id="observaciones"
+                  value={formData.observaciones}
+                  onChange={(e) => setFormData({ ...formData, observaciones: e.target.value })}
                   placeholder="Información adicional sobre el proveedor..."
                   className="mt-1 border-green-200 focus:border-green-500 min-h-[100px]"
                 />
@@ -1031,21 +884,26 @@ function ProviderFormView({
 
 interface ProviderDetailViewProps {
   provider: Provider;
+  providerTypes: ProviderType[];
   onBack: () => void;
   onEdit: (provider: Provider) => void;
-  onDelete: (providerId: string) => void;
-  onToggleStatus: (providerId: string) => void;
+  onDelete: (providerId: number) => void;
+  onToggleStatus: (providerId: number) => void;
   isAdmin: boolean;
 }
 
 function ProviderDetailView({
   provider,
+  providerTypes,
   onBack,
   onEdit,
   onDelete,
   onToggleStatus,
   isAdmin
 }: ProviderDetailViewProps) {
+  const safeProviderTypes = Array.isArray(providerTypes) ? providerTypes : [];
+  const tipoProveedor = safeProviderTypes.find(t => t.id_tipo === provider.id_tipo);
+  
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -1075,11 +933,11 @@ function ProviderDetailView({
             {/* Encabezado con estado */}
             <div className="flex items-start justify-between pb-6 border-b border-green-100">
               <div>
-                <h2 className="text-2xl font-semibold text-gray-900">{provider.name}</h2>
-                <p className="text-gray-600 mt-1">ID: {provider.id}</p>
+                <h2 className="text-2xl font-semibold text-gray-900">{provider.nombre}</h2>
+                <p className="text-gray-600 mt-1">ID: {provider.id_proveedores}</p>
               </div>
-              <Badge className={provider.status === 'Activo' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
-                {provider.status}
+              <Badge className={provider.estado ? 'bg-green-100 text-green-700 border-green-200' : 'bg-gray-100 text-gray-700 border-gray-200'}>
+                {provider.estado ? 'Activo' : 'Inactivo'}
               </Badge>
             </div>
 
@@ -1090,17 +948,19 @@ function ProviderDetailView({
                   <Label className="text-gray-600">Tipo de Proveedor</Label>
                   <div className="mt-1 flex items-center gap-2">
                     <Badge variant="outline" className="border-green-200 text-green-700">
-                      {provider.providerType.name}
+                      {tipoProveedor?.nombre || 'Sin tipo'}
                     </Badge>
                   </div>
-                  <p className="text-sm text-gray-500 mt-1">{provider.providerType.description}</p>
+                  {tipoProveedor?.descripcion && (
+                    <p className="text-sm text-gray-500 mt-1">{tipoProveedor.descripcion}</p>
+                  )}
                 </div>
 
                 <div>
                   <Label className="text-gray-600">Teléfono</Label>
                   <div className="mt-1 flex items-center gap-2 text-gray-900">
                     <Phone className="w-4 h-4 text-green-600" />
-                    {provider.phone}
+                    {provider.telefono || '-'}
                   </div>
                 </div>
 
@@ -1108,7 +968,7 @@ function ProviderDetailView({
                   <Label className="text-gray-600">Correo Electrónico</Label>
                   <div className="mt-1 flex items-center gap-2 text-gray-900">
                     <Mail className="w-4 h-4 text-green-600" />
-                    {provider.email}
+                    {provider.email || '-'}
                   </div>
                 </div>
               </div>
@@ -1118,21 +978,23 @@ function ProviderDetailView({
                   <Label className="text-gray-600">Dirección</Label>
                   <div className="mt-1 flex items-start gap-2 text-gray-900">
                     <MapPin className="w-4 h-4 text-green-600 mt-1" />
-                    <span>{provider.address}</span>
+                    <span>{provider.direccion || '-'}</span>
                   </div>
                 </div>
 
                 <div>
                   <Label className="text-gray-600">Fecha de Registro</Label>
-                  <p className="mt-1 text-gray-900">{new Date(provider.createdAt).toLocaleDateString('es-ES')}</p>
+                  <p className="mt-1 text-gray-900">
+                    {provider.fecha_registro ? new Date(provider.fecha_registro).toLocaleDateString('es-ES') : '-'}
+                  </p>
                 </div>
 
-                {provider.observations && (
+                {provider.observaciones && (
                   <div>
                     <Label className="text-gray-600">Observaciones</Label>
                     <div className="mt-1 flex items-start gap-2">
                       <FileText className="w-4 h-4 text-green-600 mt-1" />
-                      <p className="text-gray-900">{provider.observations}</p>
+                      <p className="text-gray-900">{provider.observaciones}</p>
                     </div>
                   </div>
                 )}
@@ -1150,15 +1012,15 @@ function ProviderDetailView({
                   Editar
                 </Button>
                 <Button
-                  onClick={() => onToggleStatus(provider.id)}
+                  onClick={() => onToggleStatus(provider.id_proveedores)}
                   variant="outline"
                   className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
                 >
                   <Power className="w-4 h-4 mr-2" />
-                  {provider.status === 'Activo' ? 'Desactivar' : 'Activar'}
+                  {provider.estado ? 'Desactivar' : 'Activar'}
                 </Button>
                 <Button
-                  onClick={() => onDelete(provider.id)}
+                  onClick={() => onDelete(provider.id_proveedores)}
                   variant="outline"
                   className="border-red-300 text-red-700 hover:bg-red-50"
                 >

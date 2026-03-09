@@ -45,163 +45,18 @@ import {
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { Switch } from './ui/switch';
-
-// Mock data de propietarios
-const mockOwners = [
-  {
-    id: '1',
-    fullName: 'Juan Carlos Pérez',
-    documentType: 'CC',
-    documentNumber: '1234567890',
-    phone: '+57 310 123 4567',
-    email: 'juan.perez@email.com',
-    address: 'Calle 10 #20-30, Bogotá',
-    isActive: true,
-    registrationDate: '2023-01-15',
-    observations: 'Propietario de Finca El Paraíso, excelente colaborador'
-  },
-  {
-    id: '2',
-    fullName: 'María Fernanda López',
-    documentType: 'CC',
-    documentNumber: '9876543210',
-    phone: '+57 320 456 7890',
-    email: 'maria.lopez@email.com',
-    address: 'Carrera 15 #45-20, Medellín',
-    isActive: true,
-    registrationDate: '2023-03-22',
-    observations: 'Propietaria de Hacienda Los Robles'
-  },
-  {
-    id: '3',
-    fullName: 'Carlos Eduardo Ramírez',
-    documentType: 'CE',
-    documentNumber: '7654321098',
-    phone: '+57 315 789 1234',
-    email: 'carlos.ramirez@email.com',
-    address: 'Avenida 5 #12-45, Cali',
-    isActive: false,
-    registrationDate: '2023-05-10',
-    observations: 'Temporalmente inactivo por remodelaciones'
-  },
-  {
-    id: '4',
-    fullName: 'Ana Isabel García',
-    documentType: 'CC',
-    documentNumber: '5432167890',
-    phone: '+57 311 234 5678',
-    email: 'ana.garcia@email.com',
-    address: 'Calle 20 #30-40, Cartagena',
-    isActive: true,
-    registrationDate: '2023-02-18',
-    observations: 'Propietaria de Villa Caribeña'
-  },
-  {
-    id: '5',
-    fullName: 'Diego Alejandro Torres',
-    documentType: 'CC',
-    documentNumber: '3216549870',
-    phone: '+57 312 345 6789',
-    email: 'diego.torres@email.com',
-    address: 'Carrera 8 #15-25, Pereira',
-    isActive: true,
-    registrationDate: '2023-04-05',
-    observations: 'Propietario de Finca Cafetera Los Andes'
-  },
-  {
-    id: '6',
-    fullName: 'Laura Valentina Morales',
-    documentType: 'CC',
-    documentNumber: '6549873210',
-    phone: '+57 313 456 7890',
-    email: 'laura.morales@email.com',
-    address: 'Calle 30 #40-50, Bucaramanga',
-    isActive: true,
-    registrationDate: '2023-06-12',
-    observations: 'Propietaria de Eco Lodge El Refugio'
-  },
-  {
-    id: '7',
-    fullName: 'Roberto Antonio Silva',
-    documentType: 'CE',
-    documentNumber: '8520147963',
-    phone: '+57 314 567 8901',
-    email: 'roberto.silva@email.com',
-    address: 'Avenida 10 #25-35, Santa Marta',
-    isActive: false,
-    registrationDate: '2023-07-20',
-    observations: 'En proceso de renovación de permisos'
-  },
-  {
-    id: '8',
-    fullName: 'Patricia Elena Vargas',
-    documentType: 'CC',
-    documentNumber: '7410258963',
-    phone: '+57 315 678 9012',
-    email: 'patricia.vargas@email.com',
-    address: 'Carrera 12 #18-28, Manizales',
-    isActive: true,
-    registrationDate: '2023-08-15',
-    observations: 'Propietaria de Posada Rural La Esperanza'
-  },
-  {
-    id: '9',
-    fullName: 'Fernando José Martínez',
-    documentType: 'CC',
-    documentNumber: '9630258741',
-    phone: '+57 316 789 0123',
-    email: 'fernando.martinez@email.com',
-    address: 'Calle 5 #10-20, Armenia',
-    isActive: true,
-    registrationDate: '2023-09-08',
-    observations: 'Propietario de Finca El Recuerdo'
-  },
-  {
-    id: '10',
-    fullName: 'Claudia Marcela Hernández',
-    documentType: 'CC',
-    documentNumber: '1472583690',
-    phone: '+57 317 890 1234',
-    email: 'claudia.hernandez@email.com',
-    address: 'Avenida 3 #8-15, Pasto',
-    isActive: false,
-    registrationDate: '2023-10-22',
-    observations: 'Propietaria de Hostería La Montaña, temporalmente cerrada'
-  },
-  {
-    id: '11',
-    fullName: 'Andrés Felipe Gómez',
-    documentType: 'CC',
-    documentNumber: '3691472580',
-    phone: '+57 318 901 2345',
-    email: 'andres.gomez@email.com',
-    address: 'Carrera 20 #35-45, Ibagué',
-    isActive: true,
-    registrationDate: '2023-11-10',
-    observations: 'Propietario de Granja Turística El Edén'
-  },
-  {
-    id: '12',
-    fullName: 'Sandra Milena Rojas',
-    documentType: 'CE',
-    documentNumber: '2583691470',
-    phone: '+57 319 012 3456',
-    email: 'sandra.rojas@email.com',
-    address: 'Calle 15 #22-32, Villavicencio',
-    isActive: true,
-    registrationDate: '2023-12-05',
-    observations: 'Propietaria de Finca Los Llanos'
-  }
-];
+import { propietariosAPI, Propietario } from '../services/api';
 
 interface OwnersManagementProps {
+
   isReadOnly?: boolean;
 }
 
 export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) {
-  const [owners, setOwners] = useState(mockOwners);
+  const [owners, setOwners] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -213,14 +68,49 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
 
   // Form state
   const [formData, setFormData] = useState({
-    fullName: '',
-    documentType: 'CC',
-    documentNumber: '',
-    phone: '',
+    nombre: '',
+    apellido: '',
+    tipo_documento: 'CC',
+    numero_documento: '',
+    telefono: '',
     email: '',
-    address: '',
-    observations: ''
+    direccion: ''
   });
+
+  // Cargar propietarios desde la BD
+  useEffect(() => {
+    loadPropietarios();
+  }, []);
+
+  const loadPropietarios = async () => {
+    try {
+      setIsLoading(true);
+      const propietariosFromDB = await propietariosAPI.getAll();
+      
+      // Mapear propietarios de BD al formato del frontend
+      const mappedOwners = propietariosFromDB.map(prop => ({
+        id: prop.id_propietario.toString(),
+        fullName: `${prop.nombre} ${prop.apellido || ''}`.trim(),
+        documentType: prop.tipo_documento || 'CC',
+        documentNumber: prop.numero_documento || '',
+        phone: prop.telefono || '',
+        email: prop.email || '',
+        address: prop.direccion || '',
+        isActive: prop.estado !== false,
+        registrationDate: prop.fecha_registro ? new Date(prop.fecha_registro).toISOString().split('T')[0] : '',
+        // Guardar datos originales para edición
+        _original: prop
+      }));
+      
+      setOwners(mappedOwners);
+      console.log('✅ Propietarios cargados desde BD:', mappedOwners);
+    } catch (error) {
+      console.error('❌ Error cargando propietarios:', error);
+      toast.error('Error al cargar propietarios');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // Filtrar propietarios
   const filteredOwners = owners.filter(owner => {
@@ -243,62 +133,81 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   }, [searchTerm]);
 
   // Crear propietario
-  const handleCreateOwner = () => {
-    if (!formData.fullName || !formData.documentNumber || !formData.phone || !formData.email) {
-      toast.error('Por favor complete todos los campos requeridos');
+  const handleCreateOwner = async () => {
+    if (!formData.nombre || !formData.telefono) {
+      toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
       return;
     }
     
-    const newOwner = {
-      id: (owners.length + 1).toString(),
-      fullName: formData.fullName,
-      documentType: formData.documentType,
-      documentNumber: formData.documentNumber,
-      phone: formData.phone,
-      email: formData.email,
-      address: formData.address,
-      isActive: true,
-      registrationDate: new Date().toISOString().split('T')[0],
-      observations: formData.observations
-    };
-    
-    setOwners([...owners, newOwner]);
-    toast.success('Propietario registrado correctamente');
-    setIsCreateModalOpen(false);
-    resetForm();
+    try {
+      const propietarioData = {
+        nombre: formData.nombre,
+        apellido: formData.apellido || undefined,
+        tipo_documento: formData.tipo_documento || undefined,
+        numero_documento: formData.numero_documento || undefined,
+        telefono: formData.telefono,
+        email: formData.email || undefined,
+        direccion: formData.direccion || undefined
+      };
+      
+      console.log('📤 Creando propietario:', propietarioData);
+      await propietariosAPI.create(propietarioData);
+      
+      toast.success('Propietario registrado exitosamente');
+      setIsCreateModalOpen(false);
+      resetForm();
+      await loadPropietarios();
+    } catch (error: any) {
+      console.error('❌ Error creando propietario:', error);
+      toast.error(error.message || 'Error al crear propietario');
+    }
   };
 
   // Editar propietario
   const handleEditOwner = (owner: any) => {
     setSelectedOwner(owner);
+    const original = owner._original;
     setFormData({
-      fullName: owner.fullName,
-      documentType: owner.documentType,
-      documentNumber: owner.documentNumber,
-      phone: owner.phone,
-      email: owner.email,
-      address: owner.address,
-      observations: owner.observations
+      nombre: original.nombre,
+      apellido: original.apellido || '',
+      tipo_documento: original.tipo_documento || 'CC',
+      numero_documento: original.numero_documento || '',
+      telefono: original.telefono || '',
+      email: original.email || '',
+      direccion: original.direccion || ''
     });
     setIsEditModalOpen(true);
   };
 
-  const handleUpdateOwner = () => {
-    if (!formData.fullName || !formData.documentNumber || !formData.phone || !formData.email) {
-      toast.error('Por favor complete todos los campos requeridos');
+  const handleUpdateOwner = async () => {
+    if (!formData.nombre || !formData.telefono) {
+      toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
       return;
     }
     
-    setOwners(owners.map(o => 
-      o.id === selectedOwner.id 
-        ? { ...o, ...formData }
-        : o
-    ));
-    
-    toast.success('Propietario actualizado correctamente');
-    setIsEditModalOpen(false);
-    setSelectedOwner(null);
-    resetForm();
+    try {
+      const propietarioData = {
+        nombre: formData.nombre,
+        apellido: formData.apellido || undefined,
+        tipo_documento: formData.tipo_documento || undefined,
+        numero_documento: formData.numero_documento || undefined,
+        telefono: formData.telefono,
+        email: formData.email || undefined,
+        direccion: formData.direccion || undefined
+      };
+      
+      console.log('📤 Actualizando propietario:', propietarioData);
+      await propietariosAPI.update(parseInt(selectedOwner.id), propietarioData);
+      
+      toast.success('Propietario actualizado exitosamente');
+      setIsEditModalOpen(false);
+      setSelectedOwner(null);
+      resetForm();
+      await loadPropietarios();
+    } catch (error: any) {
+      console.error('❌ Error actualizando propietario:', error);
+      toast.error(error.message || 'Error al actualizar propietario');
+    }
   };
 
   // Eliminar propietario
@@ -307,11 +216,19 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
     setIsDeleteModalOpen(true);
   };
 
-  const confirmDeleteOwner = () => {
-    setOwners(owners.filter(o => o.id !== selectedOwner.id));
-    toast.success('Propietario eliminado correctamente');
-    setIsDeleteModalOpen(false);
-    setSelectedOwner(null);
+  const confirmDeleteOwner = async () => {
+    try {
+      console.log('🗑️ Eliminando propietario:', selectedOwner.id);
+      await propietariosAPI.delete(parseInt(selectedOwner.id));
+      
+      toast.success('Propietario eliminado exitosamente');
+      setIsDeleteModalOpen(false);
+      setSelectedOwner(null);
+      await loadPropietarios();
+    } catch (error: any) {
+      console.error('❌ Error eliminando propietario:', error);
+      toast.error(error.message || 'Error al eliminar propietario');
+    }
   };
 
   // Ver detalles
@@ -323,13 +240,13 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   // Reset form
   const resetForm = () => {
     setFormData({
-      fullName: '',
-      documentType: 'CC',
-      documentNumber: '',
-      phone: '',
+      nombre: '',
+      apellido: '',
+      tipo_documento: 'CC',
+      numero_documento: '',
+      telefono: '',
       email: '',
-      address: '',
-      observations: ''
+      direccion: ''
     });
   };
 
@@ -587,52 +504,58 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <Label htmlFor="fullName">Nombre Completo *</Label>
+              <div>
+                <Label htmlFor="nombre">Nombre *</Label>
                 <Input
-                  id="fullName"
-                  placeholder="Juan Pérez García"
-                  value={formData.fullName}
-                  onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                  id="nombre"
+                  placeholder="Juan"
+                  value={formData.nombre}
+                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="documentType">Tipo de Documento *</Label>
-                <Select 
-                  value={formData.documentType} 
-                  onValueChange={(value) => setFormData({ ...formData, documentType: value })}
+                <Label htmlFor="apellido">Apellido</Label>
+                <Input
+                  id="apellido"
+                  placeholder="Pérez García"
+                  value={formData.apellido}
+                  onChange={(e) => setFormData({ ...formData, apellido: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="tipo_documento">Tipo de Documento</Label>
+                <select
+                  id="tipo_documento"
+                  value={formData.tipo_documento}
+                  onChange={(e) => setFormData({ ...formData, tipo_documento: e.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Seleccione" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="CC">Cédula de Ciudadanía</SelectItem>
-                    <SelectItem value="CE">Cédula de Extranjería</SelectItem>
-                    <SelectItem value="NIT">NIT</SelectItem>
-                    <SelectItem value="PAS">Pasaporte</SelectItem>
-                  </SelectContent>
-                </Select>
+                  <option value="CC">Cédula de Ciudadanía</option>
+                  <option value="CE">Cédula de Extranjería</option>
+                  <option value="NIT">NIT</option>
+                  <option value="PAS">Pasaporte</option>
+                </select>
               </div>
               <div>
-                <Label htmlFor="documentNumber">Número de Documento *</Label>
+                <Label htmlFor="numero_documento">Número de Documento</Label>
                 <Input
-                  id="documentNumber"
+                  id="numero_documento"
                   placeholder="1234567890"
-                  value={formData.documentNumber}
-                  onChange={(e) => setFormData({ ...formData, documentNumber: e.target.value })}
+                  value={formData.numero_documento}
+                  onChange={(e) => setFormData({ ...formData, numero_documento: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="phone">Teléfono *</Label>
+                <Label htmlFor="telefono">Teléfono *</Label>
                 <Input
-                  id="phone"
+                  id="telefono"
                   placeholder="+57 300 000 0000"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  value={formData.telefono}
+                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="email">Correo Electrónico *</Label>
+                <Label htmlFor="email">Correo Electrónico</Label>
                 <Input
                   id="email"
                   type="email"
@@ -642,22 +565,12 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                 />
               </div>
               <div className="md:col-span-2">
-                <Label htmlFor="address">Dirección</Label>
+                <Label htmlFor="direccion">Dirección</Label>
                 <Input
-                  id="address"
+                  id="direccion"
                   placeholder="Calle 10 #20-30, Ciudad"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                />
-              </div>
-              <div className="md:col-span-2">
-                <Label htmlFor="observations">Observaciones</Label>
-                <Textarea
-                  id="observations"
-                  placeholder="Información adicional sobre el propietario..."
-                  value={formData.observations}
-                  onChange={(e) => setFormData({ ...formData, observations: e.target.value })}
-                  rows={3}
+                  value={formData.direccion}
+                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
                 />
               </div>
             </div>
@@ -693,52 +606,58 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="md:col-span-2">
-                <Label htmlFor="fullName">Nombre Completo *</Label>
+              <div>
+                <Label htmlFor="nombre">Nombre *</Label>
                 <Input
-                  id="fullName"
-                  placeholder="Juan Pérez García"
-                  value={formData.fullName}
-                  onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                  id="nombre"
+                  placeholder="Juan"
+                  value={formData.nombre}
+                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="documentType">Tipo de Documento *</Label>
-                <Select 
-                  value={formData.documentType} 
-                  onValueChange={(value) => setFormData({ ...formData, documentType: value })}
+                <Label htmlFor="apellido">Apellido</Label>
+                <Input
+                  id="apellido"
+                  placeholder="Pérez García"
+                  value={formData.apellido}
+                  onChange={(e) => setFormData({ ...formData, apellido: e.target.value })}
+                />
+              </div>
+              <div>
+                <Label htmlFor="tipo_documento">Tipo de Documento</Label>
+                <select
+                  id="tipo_documento"
+                  value={formData.tipo_documento}
+                  onChange={(e) => setFormData({ ...formData, tipo_documento: e.target.value })}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Seleccione" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="CC">Cédula de Ciudadanía</SelectItem>
-                    <SelectItem value="CE">Cédula de Extranjería</SelectItem>
-                    <SelectItem value="NIT">NIT</SelectItem>
-                    <SelectItem value="PAS">Pasaporte</SelectItem>
-                  </SelectContent>
-                </Select>
+                  <option value="CC">Cédula de Ciudadanía</option>
+                  <option value="CE">Cédula de Extranjería</option>
+                  <option value="NIT">NIT</option>
+                  <option value="PAS">Pasaporte</option>
+                </select>
               </div>
               <div>
-                <Label htmlFor="documentNumber">Número de Documento *</Label>
+                <Label htmlFor="numero_documento">Número de Documento</Label>
                 <Input
-                  id="documentNumber"
+                  id="numero_documento"
                   placeholder="1234567890"
-                  value={formData.documentNumber}
-                  onChange={(e) => setFormData({ ...formData, documentNumber: e.target.value })}
+                  value={formData.numero_documento}
+                  onChange={(e) => setFormData({ ...formData, numero_documento: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="phone">Teléfono *</Label>
+                <Label htmlFor="telefono">Teléfono *</Label>
                 <Input
-                  id="phone"
+                  id="telefono"
                   placeholder="+57 300 000 0000"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  value={formData.telefono}
+                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
                 />
               </div>
               <div>
-                <Label htmlFor="email">Correo Electrónico *</Label>
+                <Label htmlFor="email">Correo Electrónico</Label>
                 <Input
                   id="email"
                   type="email"
@@ -748,22 +667,12 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                 />
               </div>
               <div className="md:col-span-2">
-                <Label htmlFor="address">Dirección</Label>
+                <Label htmlFor="direccion">Dirección</Label>
                 <Input
-                  id="address"
+                  id="direccion"
                   placeholder="Calle 10 #20-30, Ciudad"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                />
-              </div>
-              <div className="md:col-span-2">
-                <Label htmlFor="observations">Observaciones</Label>
-                <Textarea
-                  id="observations"
-                  placeholder="Información adicional sobre el propietario..."
-                  value={formData.observations}
-                  onChange={(e) => setFormData({ ...formData, observations: e.target.value })}
-                  rows={3}
+                  value={formData.direccion}
+                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
                 />
               </div>
             </div>
