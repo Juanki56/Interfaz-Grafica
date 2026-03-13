@@ -11,10 +11,8 @@ import {
   Home,
   DollarSign,
   User,
-  Maximize,
   ChevronLeft,
   ChevronRight,
-  Star,
   X
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -92,9 +90,11 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
         pricePerNight: finca.precio_por_noche || 0,
         imagen_principal: finca.imagen_principal || '',
         status: finca.estado ? 'active' : 'inactive',
-        // Datos del propietario
-        propietario_nombre: finca.propietario_nombre || '',
-        propietario_apellido: finca.propietario_apellido || ''
+        fecha_registro: finca.fecha_registro,
+        // Datos del propietario (JOIN)
+        owner: finca.propietario_nombre 
+          ? `${finca.propietario_nombre} ${finca.propietario_apellido || ''}`.trim()
+          : 'N/A'
       }));
       
       setFarms(mappedFarms);
@@ -472,14 +472,12 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
               <table className="w-full">
                 <thead className="bg-green-50 border-b border-green-200">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Fotos</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Finca</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Ubicación</th>
+                    <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Dirección</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Capacidad</th>
-                    <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Área</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Precio/Noche</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Propietario</th>
-                    <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Rating</th>
                     <th className="px-4 py-3 text-left text-xs text-gray-700 uppercase tracking-wider">Estado</th>
                     <th className="px-4 py-3 text-center text-xs text-gray-700 uppercase tracking-wider">Acciones</th>
                   </tr>
@@ -493,27 +491,13 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                       transition={{ delay: index * 0.05 }}
                       className="hover:bg-green-50 transition-colors"
                     >
-                      {/* Fotos */}
-                      <td className="px-4 py-4">
-                        <div className="flex items-center justify-center w-16 h-16 rounded-lg bg-green-100">
-                          <div className="text-center">
-                            <p className="text-xl text-green-700">
-                              {farm.images?.length || 0}
-                            </p>
-                            <p className="text-[10px] text-gray-600">
-                              {farm.images?.length === 1 ? 'foto' : 'fotos'}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-
                       {/* Finca */}
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-2">
                           <Home className="w-4 h-4 text-green-600 flex-shrink-0" />
                           <div>
-                            <p className="text-sm text-gray-900">{farm.name}</p>
-                            <p className="text-xs text-gray-500 line-clamp-1">{farm.description}</p>
+                            <p className="text-sm font-medium text-gray-900">{farm.name}</p>
+                            <p className="text-xs text-gray-500 line-clamp-1">{farm.description || 'Sin descripción'}</p>
                           </div>
                         </div>
                       </td>
@@ -522,23 +506,20 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1 text-sm text-gray-700">
                           <MapPin className="w-3 h-3 text-green-600 flex-shrink-0" />
-                          <span>{farm.location}</span>
+                          <span>{farm.location || 'N/A'}</span>
                         </div>
+                      </td>
+
+                      {/* Dirección */}
+                      <td className="px-4 py-4">
+                        <p className="text-sm text-gray-700">{farm.direccion || 'N/A'}</p>
                       </td>
 
                       {/* Capacidad */}
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1 text-sm text-gray-700">
                           <Users className="w-3 h-3 text-green-600" />
-                          <span>{farm.capacity}</span>
-                        </div>
-                      </td>
-
-                      {/* Área */}
-                      <td className="px-4 py-4">
-                        <div className="flex items-center gap-1 text-sm text-gray-700">
-                          <Maximize className="w-3 h-3 text-green-600" />
-                          <span>{farm.area}</span>
+                          <span>{farm.capacity || 'N/A'}</span>
                         </div>
                       </td>
 
@@ -546,8 +527,8 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1">
                           <DollarSign className="w-3 h-3 text-green-600" />
-                          <span className="text-sm text-green-700">
-                            ${farm.pricePerNight?.toLocaleString()}
+                          <span className="text-sm font-medium text-green-700">
+                            {farm.pricePerNight ? `$${farm.pricePerNight.toLocaleString()}` : 'N/A'}
                           </span>
                         </div>
                       </td>
@@ -556,15 +537,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1 text-sm text-gray-700">
                           <User className="w-3 h-3 text-green-600" />
-                          <span>{farm.owner || 'N/A'}</span>
-                        </div>
-                      </td>
-
-                      {/* Rating */}
-                      <td className="px-4 py-4">
-                        <div className="flex items-center gap-1 text-sm text-gray-700">
-                          <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
-                          <span>{farm.rating}</span>
+                          <span>{farm.owner}</span>
                         </div>
                       </td>
 
@@ -700,68 +673,51 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
           </DialogHeader>
           {selectedFarm && (
             <div className="space-y-4">
-              {/* Galería de imágenes */}
-              <div className="space-y-2">
+              {/* Imagen principal */}
+              {selectedFarm.imagen_principal && (
                 <div className="aspect-video rounded-lg overflow-hidden">
                   <ImageWithFallback
-                    src={selectedFarm.images?.[selectedImageIndex] || 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=800'}
+                    src={selectedFarm.imagen_principal}
                     alt={selectedFarm.name}
                     className="w-full h-full object-cover"
                   />
                 </div>
-                <div className="grid grid-cols-8 gap-2">
-                  {selectedFarm.images?.map((image: string, idx: number) => (
-                    <button
-                      key={idx}
-                      onClick={() => setSelectedImageIndex(idx)}
-                      className={`aspect-square rounded overflow-hidden border-2 ${
-                        selectedImageIndex === idx ? 'border-green-600' : 'border-gray-200'
-                      }`}
-                    >
-                      <ImageWithFallback
-                        src={image}
-                        alt={`${selectedFarm.name} ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-gray-500">Nombre</Label>
-                  <p>{selectedFarm.name}</p>
+                  <p className="font-medium">{selectedFarm.name}</p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Ubicación</Label>
-                  <p>{selectedFarm.location}</p>
+                  <p>{selectedFarm.location || 'N/A'}</p>
                 </div>
                 <div>
-                  <Label className="text-gray-500">Área</Label>
-                  <p>{selectedFarm.area || 'N/A'}</p>
+                  <Label className="text-gray-500">Dirección</Label>
+                  <p>{selectedFarm.direccion || 'N/A'}</p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Capacidad</Label>
-                  <p>{selectedFarm.capacity} personas</p>
+                  <p>{selectedFarm.capacity ? `${selectedFarm.capacity} personas` : 'N/A'}</p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Precio por Noche</Label>
-                  <p className="text-green-600">
-                    ${selectedFarm.pricePerNight?.toLocaleString()}
+                  <p className="text-green-600 font-medium">
+                    {selectedFarm.pricePerNight ? `$${selectedFarm.pricePerNight.toLocaleString()}` : 'N/A'}
                   </p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Propietario</Label>
-                  <p>{selectedFarm.owner || 'N/A'}</p>
+                  <p>{selectedFarm.owner}</p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Estado</Label>
                   <div className="mt-1">{getStatusBadge(selectedFarm.status)}</div>
                 </div>
                 <div>
-                  <Label className="text-gray-500">Rating</Label>
-                  <p>⭐ {selectedFarm.rating || 'N/A'}</p>
+                  <Label className="text-gray-500">Fecha de Registro</Label>
+                  <p className="text-sm">{selectedFarm.fecha_registro ? new Date(selectedFarm.fecha_registro).toLocaleDateString('es-CO') : 'N/A'}</p>
                 </div>
                 <div className="col-span-2">
                   <Label className="text-gray-500">Descripción</Label>

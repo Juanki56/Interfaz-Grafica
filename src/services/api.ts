@@ -21,6 +21,25 @@ export interface Usuario {
   tipo_usuario?: string;
 }
 
+export interface UsuarioBackend {
+  id?: number | string;
+  id_usuario?: number;
+  id_usuarios?: number;
+  nombre?: string;
+  apellido?: string | null;
+  correo?: string;
+  email?: string;
+  telefono?: string | null;
+  rol?: string;
+  rol_nombre?: string;
+  role?: string;
+  tipo_usuario?: string;
+  estado?: boolean | string | null;
+  fecha_registro?: string | null;
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+}
+
 export interface Cliente {
   id_cliente: number;
   nombre: string;
@@ -94,6 +113,14 @@ export interface Finca {
   propietario_apellido?: string;
   propietario_telefono?: string;
   propietario_email?: string;
+}
+
+export interface Rol {
+  id_roles: number;
+  nombre: string;
+  descripcion?: string;
+  estado?: boolean;
+  fecha_creacion?: string;
 }
 
 // =====================================================
@@ -183,6 +210,27 @@ export const authAPI = {
 // =====================================================
 // CLIENTES
 // =====================================================
+
+export const usersAPI = {
+  getAll: async (): Promise<UsuarioBackend[]> => {
+    const response = await fetchAPI<{ data: UsuarioBackend[] }>('/api/usuarios');
+    return response.data || [];
+  },
+
+  update: async (id: number | string, userData: Record<string, any>) => {
+    return fetchAPI(`/api/usuarios/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(userData),
+    });
+  },
+
+  updateRole: async (correo: string, rol: string) => {
+    return fetchAPI('/api/usuarios/role', {
+      method: 'PUT',
+      body: JSON.stringify({ correo, rol }),
+    });
+  },
+};
 
 export const clientesAPI = {
   getAll: async (): Promise<Cliente[]> => {
@@ -449,22 +497,24 @@ export const dashboardAPI = {
 // =====================================================
 
 export const rolesAPI = {
-  getAll: async () => {
-    return fetchAPI('/api/roles');
+  getAll: async (): Promise<Rol[]> => {
+    const response = await fetchAPI<{ data: Rol[] }>('/api/roles');
+    return response.data || [];
   },
 
-  getById: async (id: number) => {
-    return fetchAPI(`/api/roles/${id}`);
+  getById: async (id: number): Promise<Rol> => {
+    const response = await fetchAPI<{ data: Rol }>(`/api/roles/${id}`);
+    return response.data;
   },
 
-  create: async (rolData: { nombre: string; descripcion?: string }) => {
+  create: async (rolData: Partial<Rol>) => {
     return fetchAPI('/api/roles', {
       method: 'POST',
       body: JSON.stringify(rolData),
     });
   },
 
-  update: async (id: number, rolData: { nombre?: string; descripcion?: string; estado?: boolean }) => {
+  update: async (id: number, rolData: Partial<Rol>) => {
     return fetchAPI(`/api/roles/${id}`, {
       method: 'PUT',
       body: JSON.stringify(rolData),

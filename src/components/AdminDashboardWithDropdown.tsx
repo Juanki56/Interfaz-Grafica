@@ -100,7 +100,6 @@ import { DashboardLayout, DashboardSection, DashboardGrid } from './DashboardLay
 import { toast } from 'sonner@2.0.3';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Area, AreaChart } from 'recharts';
 import {
-  mockUsers,
   mockPackages,
   mockBookings,
   mockFarms,
@@ -126,9 +125,10 @@ import { ProviderManagement } from './ProviderManagement';
 import { ProviderTypeManagement } from './ProviderTypeManagement';
 import { RoutesManagement } from './RoutesManagement';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { rolesAPI, usersAPI } from '../services/api';
 
 export function AdminDashboardWithDropdown() {
-  const { getAllUsers, updateUserRole, adminActiveTab, setAdminActiveTab } = useAuth();
+  const { adminActiveTab, setAdminActiveTab } = useAuth();
   const [activeTab, setActiveTab] = useState(adminActiveTab);
   const [salesSubTab, setSalesSubTab] = useState('historial');
   const [searchTerm, setSearchTerm] = useState('');
@@ -141,10 +141,12 @@ export function AdminDashboardWithDropdown() {
   const itemsPerPage = 10;
   
   // Estado local para usuarios para manejar actualizaciones reactivas
-  const [localUsers, setLocalUsers] = useState(mockUsers);
+  const [localUsers, setLocalUsers] = useState<any[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
   
   // Estado local para roles para manejar actualizaciones reactivas
   const [localRoles, setLocalRoles] = useState(mockRoles);
+  const [loadingRoles, setLoadingRoles] = useState(false);
 
   // Estado local para rutas para manejar actualizaciones reactivas
   const [localRoutes, setLocalRoutes] = useState(mockRoutes);
@@ -173,7 +175,7 @@ export function AdminDashboardWithDropdown() {
       label: 'Usuarios', 
       icon: Users, 
       description: 'Gestión de usuarios',
-      badge: mockUsers.length.toString()
+      badge: loadingUsers ? '...' : localUsers.length.toString()
     },
     { 
       id: 'clients', 
@@ -276,6 +278,109 @@ export function AdminDashboardWithDropdown() {
   const currentMenuItem = getCurrentMenuItem();
   const CurrentIcon = currentMenuItem.icon;
 
+  const normalizarRolUsuario = (rol?: string | null) => {
+    const rolNormalizado = (rol || '').toLowerCase().trim();
+    const mapaRoles: Record<string, string> = {
+      admin: 'Administrador',
+      administrador: 'Administrador',
+      advisor: 'Asesor',
+      asesor: 'Asesor',
+      guide: 'Guía',
+      guia: 'Guía',
+      'guía': 'Guía',
+      client: 'Cliente',
+      cliente: 'Cliente',
+    };
+
+    return mapaRoles[rolNormalizado] || rol || 'Cliente';
+  };
+
+  const rolFrontendABackend = (rol?: string | null) => {
+    const rolNormalizado = (rol || '').toLowerCase().trim();
+    const mapaRoles: Record<string, string> = {
+      admin: 'Administrador',
+      administrador: 'Administrador',
+      advisor: 'Asesor',
+      asesor: 'Asesor',
+      guide: 'Guía',
+      guia: 'Guía',
+      'guía': 'Guía',
+      'guía turístico': 'Guía',
+      'guia turístico': 'Guía',
+      client: 'Cliente',
+      cliente: 'Cliente',
+    };
+
+    return mapaRoles[rolNormalizado] || rol || 'Cliente';
+  };
+
+  const formatearFechaUsuario = (fecha?: string | null) => {
+    if (!fecha) return '−';
+
+    const fechaObj = new Date(fecha);
+    if (Number.isNaN(fechaObj.getTime())) return fecha;
+
+    return fechaObj.toLocaleDateString('es-CO', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+  };
+
+  const mapearUsuarioBackend = (usuario: any) => {
+    const nombreCompleto = [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ').trim();
+
+    const rolRaw = (usuario?.rol_nombre || usuario?.rol || usuario?.role || usuario?.tipo_usuario || '').toString();
+    const rolNormalizado = rolRaw.toLowerCase().trim();
+    const mapaRolVista: Record<string, string> = {
+      administrador: 'admin',
+      admin: 'admin',
+      asesor: 'advisor',
+      advisor: 'advisor',
+      guía: 'guide',
+      guia: 'guide',
+      guide: 'guide',
+      cliente: 'client',
+      client: 'client'
+    };
+
+    const estadoRaw = usuario?.estado;
+    const estado = typeof estadoRaw === 'boolean'
+      ? (estadoRaw ? 'Activo' : 'Inactivo')
+      : ((estadoRaw || 'Activo').toString());
+
+    return {
+      id: String(usuario?.id_usuarios ?? usuario?.id_usuario ?? usuario?.id ?? usuario?.correo ?? Date.now()),
+      id_usuarios: usuario?.id_usuarios ?? usuario?.id_usuario ?? usuario?.id,
+      name: nombreCompleto || usuario?.correo || usuario?.email || 'Sin nombre',
+      email: usuario?.correo || usuario?.email || '−',
+      role: mapaRolVista[rolNormalizado] || rolNormalizado || 'client',
+      status: estado,
+      phone: usuario?.telefono || usuario?.phone || '−',
+      joinDate: formatearFechaUsuario(
+        usuario?.fecha_ingreso ||
+        usuario?.fecha_contratacion ||
+        usuario?.fecha_registro ||
+        usuario?.fecha_creacion ||
+        usuario?.created_at
+      ),
+      fecha_creacion: usuario?.fecha_creacion || usuario?.fecha_registro || usuario?.created_at || null,
+    };
+  };
+
+  const cargarUsuarios = async () => {
+    setLoadingUsers(true);
+    try {
+      const usuariosData = await usersAPI.getAll();
+      setLocalUsers(usuariosData.map(mapearUsuarioBackend));
+    } catch (error) {
+      console.error('Error al cargar usuarios:', error);
+      toast.error('Error al cargar usuarios desde la base de datos');
+    } finally {
+      setLoadingUsers(false);
+    }
+  };
+
   // Get data based on active tab
   const getCurrentData = () => {
     switch (activeTab) {
@@ -302,6 +407,40 @@ export function AdminDashboardWithDropdown() {
     });
   };
 
+  // Cargar roles desde la BD
+  useEffect(() => {
+    const cargarDatosTab = async () => {
+      if (activeTab === 'users') {
+        await cargarUsuarios();
+      }
+
+      if (activeTab === 'roles') {
+        setLoadingRoles(true);
+        try {
+          const rolesData = await rolesAPI.getAll();
+          const rolesAdaptados = rolesData.map(rol => ({
+            id: rol.id_roles?.toString() || '',
+            id_roles: rol.id_roles,
+            nombre: rol.nombre || '',
+            name: rol.nombre || '',
+            descripcion: rol.descripcion || '',
+            description: rol.descripcion || '',
+            estado: rol.estado,
+            status: rol.estado ? 'Activo' : 'Inactivo',
+            fecha_creacion: rol.fecha_creacion
+          }));
+          setLocalRoles(rolesAdaptados as any);
+        } catch (error) {
+          console.error('Error al cargar roles:', error);
+          toast.error('Error al cargar roles desde la base de datos');
+        } finally {
+          setLoadingRoles(false);
+        }
+      }
+    };
+    cargarDatosTab();
+  }, [activeTab]);
+
   // Reset pagination when changing tabs or searching
   useEffect(() => {
     setCurrentPage(1);
@@ -309,6 +448,11 @@ export function AdminDashboardWithDropdown() {
 
   // Handle CRUD operations
   const handleCreate = () => {
+    if (activeTab === 'users') {
+      toast.error('La creación de usuarios desde esta vista aún no está alineada con el backend actual.');
+      return;
+    }
+
     setFormData({});
     setIsCreateModalOpen(true);
   };
@@ -325,20 +469,121 @@ export function AdminDashboardWithDropdown() {
   };
 
   const handleDelete = (item: any) => {
+    if (activeTab === 'users') {
+      toast.error('La eliminación de usuarios aún no está disponible desde el backend.');
+      return;
+    }
+
     toast.success(`${getItemName(item)} eliminado correctamente`);
   };
 
-  const handleSave = () => {
-    const action = selectedItem ? 'actualizado' : 'creado';
-    toast.success(`Registro ${action} correctamente`);
-    setIsCreateModalOpen(false);
-    setIsEditModalOpen(false);
-    setFormData({});
-    setSelectedItem(null);
+  const handleSave = async () => {
+    try {
+      if (activeTab === 'users') {
+        if (!selectedItem) {
+          toast.error('La creación de usuarios desde esta vista aún no está alineada con el backend actual.');
+          return;
+        }
+
+        const idUsuario = selectedItem.id_usuarios || selectedItem.id;
+        if (!idUsuario) {
+          throw new Error('No se encontró el ID del usuario a editar');
+        }
+
+        const estadoString = formData.status || selectedItem.status || 'Activo';
+        const payload = {
+          nombre: formData.name ?? selectedItem.name ?? null,
+          correo: formData.email ?? selectedItem.email ?? null,
+          telefono: formData.phone ?? selectedItem.phone ?? null,
+          rol: rolFrontendABackend(formData.role ?? selectedItem.role ?? 'client'),
+          estado: estadoString === 'Activo'
+        };
+
+        const usuarioActualizadoLocal = mapearUsuarioBackend({
+          ...selectedItem,
+          id_usuarios: idUsuario,
+          nombre: payload.nombre,
+          correo: payload.correo,
+          telefono: payload.telefono,
+          rol_nombre: payload.rol,
+          estado: payload.estado,
+          fecha_ingreso: selectedItem.joinDate,
+          fecha_creacion: selectedItem.fecha_creacion,
+        });
+
+        const usuariosPrevios = localUsers;
+        setLocalUsers(prev => prev.map((user: any) => 
+          user.id === selectedItem.id ? usuarioActualizadoLocal : user
+        ));
+
+        setIsCreateModalOpen(false);
+        setIsEditModalOpen(false);
+        setFormData({});
+        setSelectedItem(null);
+
+        void (async () => {
+          try {
+            await usersAPI.update(idUsuario, payload);
+            toast.success('Usuario actualizado correctamente');
+            void cargarUsuarios();
+          } catch (error: any) {
+            setLocalUsers(usuariosPrevios);
+            console.error('Error al guardar usuario:', error);
+            toast.error(error?.message || 'Error al guardar el usuario');
+          }
+        })();
+
+        return;
+      } else if (activeTab === 'roles') {
+        // Guardar rol en BD
+        const rolData = {
+          nombre: formData.name,
+          descripcion: formData.description || null,
+          estado: formData.status === 'Activo' ? true : false
+        };
+
+        if (selectedItem) {
+          // Actualizar rol existente
+          await rolesAPI.update(selectedItem.id_roles, rolData);
+          toast.success('Rol actualizado correctamente');
+        } else {
+          // Crear nuevo rol
+          await rolesAPI.create(rolData);
+          toast.success('Rol creado correctamente');
+        }
+        
+        // Recargar roles desde BD
+        const rolesData = await rolesAPI.getAll();
+        const rolesAdaptados = rolesData.map(rol => ({
+          id: rol.id_roles?.toString() || '',
+          id_roles: rol.id_roles,
+          nombre: rol.nombre || '',
+          name: rol.nombre || '',
+          descripcion: rol.descripcion || '',
+          description: rol.descripcion || '',
+          estado: rol.estado,
+          status: rol.estado ? 'Activo' : 'Inactivo',
+          fecha_creacion: rol.fecha_creacion
+        }));
+        setLocalRoles(rolesAdaptados as any);
+      } else {
+        // Otros tabs (comportamiento mock actual)
+        const action = selectedItem ? 'actualizado' : 'creado';
+        toast.success(`Registro ${action} correctamente`);
+      }
+      
+      setIsCreateModalOpen(false);
+      setIsEditModalOpen(false);
+      setFormData({});
+      setSelectedItem(null);
+    } catch (error: any) {
+      console.error('Error al guardar:', error);
+      toast.error(error?.message || 'Error al guardar el registro');
+    }
   };
 
   const getItemName = (item: any) => {
-    return item?.name || item?.packageName || item?.clientName || item?.vehicleType || 'Elemento';
+    return item?.name || item?.email || item?.nombre || item?.packageName || item?.clientName || item?.vehicleType || 'Elemento';
   };
 
   // Render overview dashboard
@@ -482,7 +727,7 @@ export function AdminDashboardWithDropdown() {
       case 'sales':
         return ['Cliente', 'Servicio', 'Total', 'Pagado', 'Pendiente', 'Estado', 'Fecha', 'Acciones'];
       case 'roles':
-        return ['Rol', 'Descripción', 'Usuarios', 'Permisos', 'Estado', 'Acciones'];
+        return ['ID', 'Nombre', 'Descripción', 'Estado', 'Fecha Creación', 'Acciones'];
       default:
         return [];
     }
@@ -537,7 +782,7 @@ export function AdminDashboardWithDropdown() {
                   variant="outline"
                   onClick={() => {
                     const newStatus = item.status === 'Activo' ? 'Inactivo' : 'Activo';
-                    setLocalUsers(prev => prev.map(u => 
+                    setLocalUsers(prev => prev.map((u: any) => 
                       u.id === item.id ? { ...u, status: newStatus } : u
                     ));
                     toast.success(`Usuario ${newStatus === 'Activo' ? 'activado' : 'desactivado'} exitosamente`);
@@ -910,22 +1155,19 @@ export function AdminDashboardWithDropdown() {
       case 'roles':
         return (
           <TableRow key={item.id}>
-            <TableCell className="font-medium">{item.name}</TableCell>
-            <TableCell className="max-w-xs truncate">{item.description}</TableCell>
-            <TableCell>
-              <Badge variant="secondary">{item.usersCount}</Badge>
-            </TableCell>
-            <TableCell>
-              <div className="flex flex-wrap gap-1">
-                {item.permissions?.slice(0, 3).map((perm: string) => (
-                  <Badge key={perm} variant="outline" className="text-xs">{perm}</Badge>
-                ))}
-                {item.permissions?.length > 3 && (
-                  <Badge variant="outline" className="text-xs">+{item.permissions.length - 3}</Badge>
-                )}
-              </div>
-            </TableCell>
+            <TableCell className="font-medium">{item.id_roles}</TableCell>
+            <TableCell className="font-medium">{item.nombre}</TableCell>
+            <TableCell className="max-w-xs truncate">{item.descripcion || '−'}</TableCell>
             <TableCell>{getStatusBadge(item.status)}</TableCell>
+            <TableCell className="text-sm text-gray-600">
+              {item.fecha_creacion ? new Date(item.fecha_creacion).toLocaleDateString('es-CO', { 
+                year: 'numeric', 
+                month: 'short', 
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              }) : '−'}
+            </TableCell>
             <TableCell>
               <div className="flex space-x-2">
                 <Button size="sm" variant="outline" onClick={() => handleView(item)}>
@@ -937,16 +1179,21 @@ export function AdminDashboardWithDropdown() {
                 <Button 
                   size="sm" 
                   variant="outline"
-                  onClick={() => {
-                    const newStatus = item.status === 'Activo' ? 'Inactivo' : 'Activo';
-                    setLocalRoles(prev => prev.map(r => 
-                      r.id === item.id ? { ...r, status: newStatus } : r
-                    ));
-                    toast.success(`Rol ${newStatus === 'Activo' ? 'activado' : 'desactivado'} exitosamente`);
+                  onClick={async () => {
+                    const newEstado = !item.estado;
+                    try {
+                      await rolesAPI.update(item.id_roles, { estado: newEstado });
+                      setLocalRoles(prev => prev.map(r => 
+                        r.id === item.id ? { ...r, estado: newEstado, status: newEstado ? 'Activo' : 'Inactivo' } : r
+                      ));
+                      toast.success(`Rol ${newEstado ? 'activado' : 'desactivado'} exitosamente`);
+                    } catch (error) {
+                      toast.error('Error al actualizar el estado del rol');
+                    }
                   }}
-                  className={item.status === 'Activo' ? 'hover:bg-yellow-50 hover:text-yellow-600' : 'hover:bg-green-50 hover:text-green-600'}
+                  className={item.estado ? 'hover:bg-yellow-50 hover:text-yellow-600' : 'hover:bg-green-50 hover:text-green-600'}
                 >
-                  {item.status === 'Activo' ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                  {item.estado ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                 </Button>
                 <AlertDialog>
                   <AlertDialogTrigger asChild>

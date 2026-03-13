@@ -24,6 +24,17 @@ export const API_CONFIG = {
     GET_ALL: '/api/users'
   },
   
+  // Endpoints de roles
+  ROLES: {
+    BASE: '/api/roles',
+    GET_ALL: '/api/roles',
+    GET_BY_ID: '/api/roles/:id',
+    CREATE: '/api/roles',
+    UPDATE: '/api/roles/:id',
+    DELETE: '/api/roles/:id',
+    PERMISOS: '/api/roles/:id/permisos'
+  },
+  
   // Timeout para las peticiones (en milisegundos)
   TIMEOUT: 10000
 };

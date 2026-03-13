@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key, Loader2 } from 'lucide-react';
+import { rolesAPI, type Rol } from '../services/api';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -22,12 +23,14 @@ interface Permission {
 }
 
 interface Role {
-  id: string;
-  name: string;
-  description: string;
-  permissions: string[];
-  userCount: number;
-  isSystem: boolean;
+  id_roles: number;
+  nombre: string;
+  descripcion: string;
+  estado?: boolean;
+  fecha_creacion?: string;
+  permissions?: string[];
+  userCount?: number;
+  isSystem?: boolean;
   color?: string;
 }
 
@@ -43,55 +46,10 @@ interface User {
 
 export function RoleManagement() {
   const [activeTab, setActiveTab] = useState('roles');
+  const [loading, setLoading] = useState(true);
   
-  const [roles, setRoles] = useState<Role[]>([
-    {
-      id: '1',
-      name: 'Administrador',
-      description: 'Acceso completo al sistema',
-      permissions: ['all'],
-      userCount: 2,
-      isSystem: true,
-      color: 'bg-red-100 text-red-800'
-    },
-    {
-      id: '2',
-      name: 'Asesor',
-      description: 'Gestión de clientes y reservas',
-      permissions: ['read_users', 'read_tours', 'create_bookings', 'read_bookings'],
-      userCount: 5,
-      isSystem: true,
-      color: 'bg-blue-100 text-blue-800'
-    },
-    {
-      id: '3',
-      name: 'Guía Turístico',
-      description: 'Gestión de rutas y grupos',
-      permissions: ['read_tours', 'read_routes', 'manage_groups'],
-      userCount: 8,
-      isSystem: true,
-      color: 'bg-green-100 text-green-800'
-    },
-    {
-      id: '4',
-      name: 'Cliente',
-      description: 'Acceso básico de usuario',
-      permissions: ['read_tours', 'create_bookings'],
-      userCount: 23,
-      isSystem: true,
-      color: 'bg-gray-100 text-gray-800'
-    }
-  ]);
-
-  const [users, setUsers] = useState<User[]>([
-    { id: '1', name: 'Administrador Principal', email: 'admin@occitours.com', role: 'Administrador', status: 'Activo', joinDate: '2024-01-15', lastActive: '2024-03-15' },
-    { id: '2', name: 'Ana García Asesor', email: 'asesor@occitours.com', role: 'Asesor', status: 'Activo', joinDate: '2024-01-20', lastActive: '2024-03-15' },
-    { id: '3', name: 'Carlos Ruiz Guía', email: 'guia@occitours.com', role: 'Guía Turístico', status: 'Activo', joinDate: '2024-02-01', lastActive: '2024-03-14' },
-    { id: '4', name: 'María López Cliente', email: 'cliente@occitours.com', role: 'Cliente', status: 'Activo', joinDate: '2024-02-15', lastActive: '2024-03-15' },
-    { id: '5', name: 'Jorge Martínez', email: 'jorge@email.com', role: 'Asesor', status: 'Activo', joinDate: '2024-02-20', lastActive: '2024-03-13' },
-    { id: '6', name: 'Laura Rodríguez', email: 'laura@email.com', role: 'Guía Turístico', status: 'Inactivo', joinDate: '2024-03-01', lastActive: '2024-03-10' },
-    { id: '7', name: 'Pedro González', email: 'pedro@email.com', role: 'Cliente', status: 'Activo', joinDate: '2024-03-05', lastActive: '2024-03-15' }
-  ]);
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [users, setUsers] = useState<User[]>([]); // TODO: Cargar desde BD cuando exista tabla de usuarios
 
   const [permissions] = useState<Permission[]>([
     { id: 'read_users', name: 'Ver Usuarios', description: 'Puede ver la lista de usuarios', category: 'Usuarios' },
@@ -118,10 +76,49 @@ export function RoleManagement() {
   const [selectedRole, setSelectedRole] = useState<Role | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [newRole, setNewRole] = useState({
-    name: '',
-    description: '',
+    nombre: '',
+    descripcion: '',
     permissions: [] as string[]
   });
+
+  // Cargar roles desde la base de datos
+  useEffect(() => {
+    cargarRoles();
+  }, []);
+
+  const cargarRoles = async () => {
+    try {
+      setLoading(true);
+      const rolesData = await rolesAPI.getAll();
+      
+      // Adaptar los roles de la BD al formato del componente
+      const rolesAdaptados = rolesData.map(rol => ({
+        ...rol,
+        permissions: [],
+        userCount: 0,
+        isSystem: ['Administrador', 'Cliente', 'Asesor', 'Guía'].includes(rol.nombre),
+        color: obtenerColorRol(rol.nombre)
+      }));
+      
+      setRoles(rolesAdaptados as any);
+    } catch (error) {
+      console.error('Error al cargar roles desde el backend:', error);
+      toast.error('Error al conectar con el backend. Verifica que esté corriendo en http://localhost:3000');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const obtenerColorRol = (nombre: string) => {
+    const colores: Record<string, string> = {
+      'Administrador': 'bg-red-100 text-red-800',
+      'Asesor': 'bg-blue-100 text-blue-800',
+      'Guía': 'bg-green-100 text-green-800',
+      'Guía Turístico': 'bg-green-100 text-green-800',
+      'Cliente': 'bg-gray-100 text-gray-800'
+    };
+    return colores[nombre] || 'bg-purple-100 text-purple-800';
+  };
 
   // Filter users based on search and filters
   const filteredUsers = users.filter(user => {
@@ -134,65 +131,77 @@ export function RoleManagement() {
   });
 
   const handleCreateRole = async () => {
-    if (!newRole.name.trim()) {
+    if (!newRole.nombre.trim()) {
       toast.error('El nombre del rol es obligatorio');
       return;
     }
 
-    const role: Role = {
-      id: Date.now().toString(),
-      name: newRole.name,
-      description: newRole.description,
-      permissions: newRole.permissions,
-      userCount: 0,
-      isSystem: false,
-      color: 'bg-purple-100 text-purple-800'
-    };
+    try {
+      await rolesAPI.create({
+        nombre: newRole.nombre,
+        descripcion: newRole.descripcion
+      });
 
-    setRoles(prev => [...prev, role]);
-    setNewRole({ name: '', description: '', permissions: [] });
-    setShowCreateModal(false);
-    toast.success('Rol creado exitosamente');
+      toast.success('Rol creado exitosamente');
+      setShowCreateModal(false);
+      setNewRole({ nombre: '', descripcion: '', permissions: [] });
+      await cargarRoles();
+    } catch (error) {
+      console.error('Error al crear rol:', error);
+      toast.error('Error al crear el rol');
+    }
   };
 
   const handleEditRole = async () => {
-    if (!selectedRole || !newRole.name.trim()) {
+    if (!selectedRole || !newRole.nombre.trim()) {
       toast.error('Datos del rol incompletos');
       return;
     }
 
-    setRoles(prev => prev.map(role => 
-      role.id === selectedRole.id 
-        ? { ...role, name: newRole.name, description: newRole.description, permissions: newRole.permissions }
-        : role
-    ));
+    try {
+      await rolesAPI.update(selectedRole.id_roles, {
+        nombre: newRole.nombre,
+        descripcion: newRole.descripcion
+      });
 
-    setShowEditModal(false);
-    setSelectedRole(null);
-    setNewRole({ name: '', description: '', permissions: [] });
-    toast.success('Rol actualizado exitosamente');
+      toast.success('Rol actualizado exitosamente');
+      setShowEditModal(false);
+      setSelectedRole(null);
+      setNewRole({ nombre: '', descripcion: '', permissions: [] });
+      await cargarRoles();
+    } catch (error) {
+      console.error('Error al actualizar rol:', error);
+      toast.error('Error al actualizar el rol');
+    }
   };
 
-  const handleDeleteRole = (roleId: string) => {
-    const role = roles.find(r => r.id === roleId);
+  const handleDeleteRole = async (roleId: number) => {
+    const role = roles.find(r => r.id_roles === roleId);
     if (role?.isSystem) {
       toast.error('No se pueden eliminar roles del sistema');
       return;
     }
 
-    if (role?.userCount > 0) {
+    if ((role?.userCount ?? 0) > 0) {
       toast.error('No se puede eliminar un rol que tiene usuarios asignados');
       return;
     }
 
-    setRoles(prev => prev.filter(r => r.id !== roleId));
-    toast.success('Rol eliminado exitosamente');
+    try {
+      await rolesAPI.delete(roleId);
+      toast.success('Rol eliminado exitosamente');
+      await cargarRoles();
+    } catch (error) {
+      console.error('Error al eliminar rol:', error);
+      toast.error('Error al eliminar el rol');
+    }
   };
 
   const handleAssignRole = (newRoleId: string) => {
     if (!selectedUser) return;
-
-    const newRoleName = roles.find(r => r.id === newRoleId)?.name || '';
+    
+    const roleIdNumber = parseInt(newRoleId, 10);
+    const newRoleName = roles.find(r => r.id_roles === roleIdNumber)?.nombre || '';
     
     setUsers(prev => prev.map(user => 
       user.id === selectedUser.id 
@@ -213,9 +222,9 @@ export function RoleManagement() {
     
     setSelectedRole(role);
     setNewRole({
-      name: role.name,
-      description: role.description,
-      permissions: [...role.permissions]
+      nombre: role.nombre,
+      descripcion: role.descripcion,
+      permissions: [...(role.permissions || [])]
     });
     setShowEditModal(true);
   };
@@ -352,62 +361,79 @@ export function RoleManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {roles.map((role) => (
-                    <TableRow key={role.id}>
-                      <TableCell>
-                        <div className="flex items-center space-x-3">
-                          <Shield className="w-4 h-4 text-gray-500" />
-                          <div>
-                            <span className="font-medium">{role.name}</span>
-                            <Badge className={`ml-2 ${role.color}`}>
-                              {role.isSystem ? 'Sistema' : 'Personalizado'}
-                            </Badge>
-                          </div>
+                  {loading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8">
+                        <div className="flex items-center justify-center space-x-2">
+                          <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+                          <span className="text-gray-500">Cargando roles...</span>
                         </div>
                       </TableCell>
-                      <TableCell className="text-gray-600 max-w-xs">
-                        <span className="truncate">{role.description}</span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{role.userCount} usuarios</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-sm text-gray-500">
-                          {role.permissions.includes('all') ? 'Todos los permisos' : `${role.permissions.length} permisos`}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
-                              <Eye className="w-4 h-4 mr-2" />
-                              Ver Detalles
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => openEditModal(role)}
-                              disabled={role.isSystem}
-                            >
-                              <Edit className="w-4 h-4 mr-2" />
-                              Editar
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => handleDeleteRole(role.id)}
-                              disabled={role.isSystem || role.userCount > 0}
-                              className="text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Eliminar
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                    </TableRow>
+                  ) : roles.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-gray-500">
+                        No hay roles disponibles
                       </TableCell>
                     </TableRow>
-                  ))}
+                  ) : (
+                    roles.map((role) => (
+                      <TableRow key={role.id_roles}>
+                        <TableCell>
+                          <div className="flex items-center space-x-3">
+                            <Shield className="w-4 h-4 text-gray-500" />
+                            <div>
+                              <span className="font-medium">{role.nombre}</span>
+                              <Badge className={`ml-2 ${role.color}`}>
+                                {role.isSystem ? 'Sistema' : 'Personalizado'}
+                              </Badge>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-gray-600 max-w-xs">
+                          <span className="truncate">{role.descripcion}</span>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="secondary">{role.userCount || 0} usuarios</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <span className="text-sm text-gray-500">
+                            {role.permissions?.length || 0} permisos
+                          </span>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="sm">
+                                <MoreVertical className="w-4 h-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem>
+                                <Eye className="w-4 h-4 mr-2" />
+                                Ver Detalles
+                              </DropdownMenuItem>
+                              <DropdownMenuItem 
+                                onClick={() => openEditModal(role)}
+                                disabled={role.isSystem}
+                              >
+                                <Edit className="w-4 h-4 mr-2" />
+                                Editar
+                              </DropdownMenuItem>
+                              <DropdownMenuItem 
+                                onClick={() => handleDeleteRole(role.id_roles)}
+                                disabled={role.isSystem || (role.userCount ?? 0) > 0}
+                                className="text-red-600"
+                              >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Eliminar
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
                 </TableBody>
               </Table>
             </CardContent>
@@ -439,7 +465,7 @@ export function RoleManagement() {
                     <SelectContent>
                       <SelectItem value="all">Todos los roles</SelectItem>
                       {roles.map(role => (
-                        <SelectItem key={role.id} value={role.name}>{role.name}</SelectItem>
+                        <SelectItem key={role.id_roles} value={role.nombre}>{role.nombre}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -481,7 +507,7 @@ export function RoleManagement() {
                 </TableHeader>
                 <TableBody>
                   {filteredUsers.map((user) => {
-                    const userRole = roles.find(r => r.name === user.role);
+                    const userRole = roles.find(r => r.nombre === user.role);
                     return (
                       <TableRow key={user.id}>
                         <TableCell>
@@ -556,20 +582,20 @@ export function RoleManagement() {
             </CardHeader>
             <CardContent className="space-y-6">
               {Object.entries(groupedPermissions).map(([category, perms]) => (
-                <div key={category} className="space-y-3">
-                  <h3 className="font-semibold text-lg text-gray-900 border-b pb-2">{category}</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {perms.map((permission) => (
-                      <div key={permission.id} className="border rounded-lg p-4 space-y-2">
-                        <div className="flex items-center space-x-2">
-                          <Badge variant="outline">{permission.name}</Badge>
+                  <div key={category} className="space-y-3">
+                    <h3 className="font-semibold text-lg text-gray-900 border-b pb-2">{category}</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {perms.map((permission) => (
+                        <div key={permission.id} className="border rounded-lg p-4 space-y-2">
+                          <div className="flex items-center space-x-2">
+                            <Badge variant="outline">{permission.name}</Badge>
+                          </div>
+                          <p className="text-sm text-gray-600">{permission.description}</p>
                         </div>
-                        <p className="text-sm text-gray-600">{permission.description}</p>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
             </CardContent>
           </Card>
         </TabsContent>
@@ -594,8 +620,8 @@ export function RoleManagement() {
               <Input
                 id="roleName"
                 placeholder="Ej: Coordinador"
-                value={newRole.name}
-                onChange={(e) => setNewRole(prev => ({ ...prev, name: e.target.value }))}
+                value={newRole.nombre}
+                onChange={(e) => setNewRole(prev => ({ ...prev, nombre: e.target.value }))}
               />
             </div>
 
@@ -604,8 +630,8 @@ export function RoleManagement() {
               <Input
                 id="roleDescription"
                 placeholder="Describe las responsabilidades del rol"
-                value={newRole.description}
-                onChange={(e) => setNewRole(prev => ({ ...prev, description: e.target.value }))}
+                value={newRole.descripcion}
+                onChange={(e) => setNewRole(prev => ({ ...prev, descripcion: e.target.value }))}
               />
             </div>
 
@@ -618,11 +644,11 @@ export function RoleManagement() {
                     {perms.map((permission) => (
                       <div key={permission.id} className="flex items-center space-x-2">
                         <Checkbox
-                          id={permission.id}
+                          id={`create-${permission.id}`}
                           checked={newRole.permissions.includes(permission.id)}
                           onCheckedChange={() => togglePermission(permission.id)}
                         />
-                        <Label htmlFor={permission.id} className="flex-1 cursor-pointer">
+                        <Label htmlFor={`create-${permission.id}`} className="flex-1 cursor-pointer">
                           <span className="font-medium">{permission.name}</span>
                           <span className="text-sm text-gray-500 block">{permission.description}</span>
                         </Label>
@@ -673,8 +699,8 @@ export function RoleManagement() {
               <Input
                 id="editRoleName"
                 placeholder="Ej: Coordinador"
-                value={newRole.name}
-                onChange={(e) => setNewRole(prev => ({ ...prev, name: e.target.value }))}
+                value={newRole.nombre}
+                onChange={(e) => setNewRole(prev => ({ ...prev, nombre: e.target.value }))}
               />
             </div>
 
@@ -683,8 +709,8 @@ export function RoleManagement() {
               <Input
                 id="editRoleDescription"
                 placeholder="Describe las responsabilidades del rol"
-                value={newRole.description}
-                onChange={(e) => setNewRole(prev => ({ ...prev, description: e.target.value }))}
+                value={newRole.descripcion}
+                onChange={(e) => setNewRole(prev => ({ ...prev, descripcion: e.target.value }))}
               />
             </div>
 
@@ -775,10 +801,14 @@ export function RoleManagement() {
                 </SelectTrigger>
                 <SelectContent>
                   {roles.map(role => (
-                    <SelectItem key={role.id} value={role.id} disabled={role.name === selectedUser?.role}>
+                    <SelectItem 
+                      key={role.id_roles} 
+                      value={role.id_roles.toString()} 
+                      disabled={role.nombre === selectedUser?.role}
+                    >
                       <div className="flex items-center space-x-2">
-                        <Badge className={role.color}>{role.name}</Badge>
-                        <span className="text-sm text-gray-500">- {role.description}</span>
+                        <Badge className={role.color}>{role.nombre}</Badge>
+                        <span className="text-sm text-gray-500">- {role.descripcion || 'Sin descripción'}</span>
                       </div>
                     </SelectItem>
                   ))}
