@@ -104,7 +104,6 @@ import {
   mockBookings,
   mockFarms,
   mockRoutes,
-  mockServices,
   mockSales,
   mockRoles,
   overviewStats,
@@ -126,9 +125,11 @@ import { ProviderTypeManagement } from './ProviderTypeManagement';
 import { RoutesManagement } from './RoutesManagement';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { rolesAPI, usersAPI } from '../services/api';
+import { useServices } from '../hooks/useServices';
 
 export function AdminDashboardWithDropdown() {
   const { adminActiveTab, setAdminActiveTab } = useAuth();
+  const { services } = useServices();
   const [activeTab, setActiveTab] = useState(adminActiveTab);
   const [salesSubTab, setSalesSubTab] = useState('historial');
   const [searchTerm, setSearchTerm] = useState('');
@@ -224,7 +225,7 @@ export function AdminDashboardWithDropdown() {
       label: 'Servicios', 
       icon: Settings, 
       description: 'Gestión de servicios',
-      badge: mockServices.length.toString()
+      badge: services.length.toString()
     },
     { 
       id: 'sales', 
@@ -389,7 +390,7 @@ export function AdminDashboardWithDropdown() {
       case 'bookings': return mockBookings;
       case 'farms': return mockFarms;
       case 'routes': return localRoutes;
-      case 'services': return mockServices;
+      case 'services': return services;
       case 'sales': return mockSales;
       case 'roles': return localRoles;
       default: return [];
@@ -1953,7 +1954,7 @@ export function AdminDashboardWithDropdown() {
               <div>
                 <Label>Servicios Incluidos</Label>
                 <div className="space-y-2 max-h-32 overflow-y-auto border rounded p-2">
-                  {mockServices.map(service => (
+                  {services.map(service => (
                     <div key={service.id} className="flex items-center space-x-2">
                       <input
                         type="checkbox"

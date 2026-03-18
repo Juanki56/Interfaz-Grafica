@@ -113,7 +113,7 @@ export function ServiceManagement() {
     });
   };
 
-  const handleCreateService = () => {
+  const handleCreateService = async () => {
     if (!formData.name || !formData.category || !formData.price) {
       toast.error('Por favor completa los campos requeridos');
       return;
@@ -133,13 +133,17 @@ export function ServiceManagement() {
       contactNumber: formData.contactNumber
     };
 
-    addService(serviceData);
-    setShowCreateDialog(false);
-    resetForm();
-    toast.success('Servicio creado exitosamente');
+    try {
+      await addService(serviceData);
+      setShowCreateDialog(false);
+      resetForm();
+      toast.success('Servicio creado exitosamente');
+    } catch {
+      // El hook ya notifica el error
+    }
   };
 
-  const handleEditService = () => {
+  const handleEditService = async () => {
     if (!editingService || !formData.name || !formData.category || !formData.price) {
       toast.error('Por favor completa los campos requeridos');
       return;
@@ -157,20 +161,28 @@ export function ServiceManagement() {
       contactNumber: formData.contactNumber
     };
 
-    updateService(editingService.id, updatedServiceData);
-    setShowEditDialog(false);
-    setEditingService(null);
-    resetForm();
-    toast.success('Servicio actualizado exitosamente');
+    try {
+      await updateService(editingService.id, updatedServiceData);
+      setShowEditDialog(false);
+      setEditingService(null);
+      resetForm();
+      toast.success('Servicio actualizado exitosamente');
+    } catch {
+      // El hook ya notifica el error
+    }
   };
 
   const handleDeleteService = (service: Service) => {
     setDeleteData({
       item: service,
       type: 'servicio',
-      onConfirm: () => {
-        deleteService(service.id);
-        toast.success('Servicio eliminado exitosamente');
+      onConfirm: async () => {
+        try {
+          await deleteService(service.id);
+          toast.success('Servicio eliminado exitosamente');
+        } catch {
+          // El hook ya notifica el error
+        }
       }
     });
     setShowDeleteModal(true);
@@ -511,9 +523,13 @@ export function ServiceManagement() {
                       <div className="flex items-center space-x-2">
                         <Switch
                           checked={service.status === 'active'}
-                          onCheckedChange={(checked) => {
-                            updateService(service.id, { status: checked ? 'active' : 'inactive' });
-                            toast.success('Estado actualizado exitosamente');
+                          onCheckedChange={async (checked) => {
+                            try {
+                              await updateService(service.id, { status: checked ? 'active' : 'inactive' });
+                              toast.success('Estado actualizado exitosamente');
+                            } catch {
+                              // El hook ya notifica el error
+                            }
                           }}
                           className="data-[state=checked]:bg-green-600"
                         />
