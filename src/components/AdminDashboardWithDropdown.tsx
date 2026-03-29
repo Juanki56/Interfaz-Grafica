@@ -157,7 +157,7 @@ export function AdminDashboardWithDropdown() {
   const [availablePermisos, setAvailablePermisos] = useState<any[]>([]);
   const [selectedPermissionModule, setSelectedPermissionModule] = useState<string>('');
 
-  // Auditoría de roles (fecha y usuario de modificación) en memoria
+  // Auditoría de roles (fecha y usuario de modificación)
   const [roleAuditInfo, setRoleAuditInfo] = useState<Record<number, {fecha_modificacion: string; usuario_modifico: string}>>({});
 
   // Estado local para rutas para manejar actualizaciones reactivas
@@ -475,6 +475,8 @@ export function AdminDashboardWithDropdown() {
       id_usuarios: usuario?.id_usuarios ?? usuario?.id_usuario ?? usuario?.id,
       name: nombreCompleto || usuario?.correo || usuario?.email || 'Sin nombre',
       email: usuario?.correo || usuario?.email || '−',
+      numero_documento: usuario?.numero_documento || '−',
+      tipo_documento: usuario?.tipo_documento || '−',
       role: mapaRolVista[rolNormalizado] || rolNormalizado || 'client',
       status: estado,
       phone: usuario?.telefono || usuario?.phone || '−',
@@ -575,7 +577,6 @@ export function AdminDashboardWithDropdown() {
             .filter((id: number) => !Number.isNaN(id));
 
           const totalUsuariosRol = usuarioPorRol[rol.nombre] || 0;
-          const auditInfo = roleAuditInfo[rol.id_roles] || roleAuditInfo[Number(rol.id_roles)] || null;
 
           return {
             id: rol.id_roles?.toString() || '',
@@ -590,8 +591,8 @@ export function AdminDashboardWithDropdown() {
             estado: rol.estado,
             status: rol.estado ? 'Activo' : 'Inactivo',
             fecha_creacion: rol.fecha_creacion || rol.created_at,
-            fecha_modificacion: auditInfo?.fecha_modificacion || rol.fecha_modificacion || rol.updated_at || '',
-            usuario_modifico: auditInfo?.usuario_modifico || rol.usuario_modifico || rol.usuario_modifico || '—',
+            fecha_modificacion: rol.fecha_modificacion || rol.updated_at || '',
+            usuario_modifico: rol.usuario_modifico || '—',
           };
         });
       };
@@ -675,7 +676,18 @@ export function AdminDashboardWithDropdown() {
   // Handle CRUD operations
   const handleCreate = () => {
     if (activeTab === 'users') {
-      toast.error('La creación de usuarios desde esta vista aún no está alineada con el backend actual.');
+      setFormData({
+        name: '',
+        email: '',
+        phone: '',
+        role: 'client',
+        status: 'Activo',
+        documentType: '',
+        documentNumber: '',
+        password: ''
+      });
+      setSelectedItem(null);
+      setIsCreateModalOpen(true);
       return;
     }
 
@@ -707,6 +719,12 @@ export function AdminDashboardWithDropdown() {
         ...item,
         permissions: item.permissions || [],
         permissionIds: item.permissionIds || [],
+      });
+    } else if (activeTab === 'users') {
+      setFormData({
+        ...item,
+        documentType: item.tipo_documento,
+        documentNumber: item.numero_documento,
       });
     } else {
       setFormData(item);
@@ -853,77 +871,128 @@ export function AdminDashboardWithDropdown() {
       { key: 'userCount', label: 'Usuarios asignados', value: item?.userCount ?? 0 },
       { key: 'estado', label: 'Estado', value: estadoRol },
       { key: 'fecha_creacion', label: 'Fecha de creación', value: item?.fecha_creacion ? formatearFechaUsuario(item.fecha_creacion) : '—' },
-      { key: 'fecha_modificacion', label: 'Última modificación', value: item?.fecha_modificacion ? formatearFechaUsuario(item.fecha_modificacion) : '—' },
-      { key: 'usuario_modifico', label: 'Modificado por', value: item?.usuario_modifico || '—' },
+      { key: 'fecha_modificacion', label: 'Última modificación', value: item?.fecha_modificacion ? formatearFechaUsuario(item.fecha_modificacion) : 'No modificado aún' },
+      { key: 'usuario_modifico', label: 'Modificado por', value: item?.usuario_modifico && item?.usuario_modifico !== '—' ? item.usuario_modifico : 'No modificado aún' },
       { key: 'permissions', label: 'Permisos', value: permissionList, isPermissions: true },
+    ];
+  };
+
+  const getUserDetailsForView = (item: any) => {
+    return [
+      { key: 'id_usuarios', label: 'ID Usuario', value: item?.id_usuarios ?? '—' },
+      { key: 'name', label: 'Nombre Completo', value: item?.name || '—' },
+      { key: 'email', label: 'Correo Electrónico', value: item?.email || '—' },
+      { key: 'numero_documento', label: 'Número de Documento', value: item?.numero_documento || '—' },
+      { key: 'tipo_documento', label: 'Tipo de Documento', value: item?.tipo_documento || '—' },
+      { key: 'role', label: 'Rol', value: item?.role || '—' },
+      { key: 'status', label: 'Estado', value: item?.status || '—' },
+      { key: 'phone', label: 'Teléfono', value: item?.phone || '—' },
+      { key: 'joinDate', label: 'Fecha de Ingreso', value: item?.joinDate || '—' },
+      { key: 'tipo_usuario', label: 'Tipo de Usuario', value: item?.tipo_usuario || '—' },
     ];
   };
 
   const handleSave = async () => {
     try {
       if (activeTab === 'users') {
+        const estadoString = formData.status || selectedItem?.status || 'Activo';
+        const nombreCompleto = formData.name ?? selectedItem?.name ?? '';
+        const nombreParts = nombreCompleto.trim().split(/\s+/);
+        const firstName = nombreParts.shift() || '';
+        const lastName = nombreParts.join(' ') || (selectedItem?.apellido || '');
+
+        const payload: any = {
+          nombre: firstName || null,
+          apellido: lastName || null,
+          correo: formData.email ?? selectedItem?.email ?? null,
+          telefono: formData.phone ?? selectedItem?.phone ?? null,
+          numero_documento: formData.documentNumber ?? selectedItem?.numero_documento ?? null,
+          tipo_documento: formData.documentType ?? selectedItem?.tipo_documento ?? null,
+          rol: rolFrontendABackend(formData.role ?? selectedItem?.role ?? 'client'),
+          estado: estadoString === 'Activo',
+        };
+
         if (!selectedItem) {
-          toast.error('La creación de usuarios desde esta vista aún no está alineada con el backend actual.');
+          if (!formData.password) {
+            toast.error('Debe ingresar una contraseña para el nuevo usuario');
+            return;
+          }
+
+          payload.password = formData.password;
+        } else if (formData.password) {
+          payload.password = formData.password;
+        }
+
+        if (selectedItem) {
+          const idUsuario = selectedItem.id_usuarios || selectedItem.id;
+          if (!idUsuario) {
+            throw new Error('No se encontró el ID del usuario a editar');
+          }
+
+          const usuarioActualizadoLocal = mapearUsuarioBackend({
+            ...selectedItem,
+            id_usuarios: idUsuario,
+            nombre: payload.nombre,
+            apellido: payload.apellido,
+            correo: payload.correo,
+            telefono: payload.telefono,
+            numero_documento: payload.numero_documento,
+            tipo_documento: payload.tipo_documento,
+rol_nombre: payload.rol,
+            estado: payload.estado,
+            joinDate: selectedItem.joinDate,
+            fecha_creacion: selectedItem.fecha_creacion,
+          });
+
+          const usuariosPrevios = localUsers;
+          setLocalUsers(prev => prev.map((user: any) => 
+            user.id === selectedItem.id ? usuarioActualizadoLocal : user
+          ));
+
+          setIsCreateModalOpen(false);
+          setIsEditModalOpen(false);
+          setFormData({});
+          setSelectedItem(null);
+
+          void (async () => {
+            try {
+              await usersAPI.update(idUsuario, payload);
+              toast.success('Usuario actualizado correctamente');
+              void cargarUsuarios();
+            } catch (error: any) {
+              setLocalUsers(usuariosPrevios);
+              console.error('Error al guardar usuario:', error);
+              toast.error(error?.message || 'Error al guardar el usuario');
+            }
+          })();
+
           return;
         }
 
-        const idUsuario = selectedItem.id_usuarios || selectedItem.id;
-        if (!idUsuario) {
-          throw new Error('No se encontró el ID del usuario a editar');
-        }
-
-        const estadoString = formData.status || selectedItem.status || 'Activo';
-        const payload = {
-          nombre: formData.name ?? selectedItem.name ?? null,
-          correo: formData.email ?? selectedItem.email ?? null,
-          telefono: formData.phone ?? selectedItem.phone ?? null,
-          rol: rolFrontendABackend(formData.role ?? selectedItem.role ?? 'client'),
-          estado: estadoString === 'Activo'
-        };
-
-        const usuarioActualizadoLocal = mapearUsuarioBackend({
-          ...selectedItem,
-          id_usuarios: idUsuario,
-          nombre: payload.nombre,
-          correo: payload.correo,
-          telefono: payload.telefono,
-          rol_nombre: payload.rol,
-          estado: payload.estado,
-          fecha_ingreso: selectedItem.joinDate,
-          fecha_creacion: selectedItem.fecha_creacion,
-        });
-
-        const usuariosPrevios = localUsers;
-        setLocalUsers(prev => prev.map((user: any) => 
-          user.id === selectedItem.id ? usuarioActualizadoLocal : user
-        ));
-
+        // CREAR NUEVO USUARIO
         setIsCreateModalOpen(false);
         setIsEditModalOpen(false);
         setFormData({});
-        setSelectedItem(null);
 
-        void (async () => {
-          try {
-            await usersAPI.update(idUsuario, payload);
-            toast.success('Usuario actualizado correctamente');
-            void cargarUsuarios();
-          } catch (error: any) {
-            setLocalUsers(usuariosPrevios);
-            console.error('Error al guardar usuario:', error);
-            toast.error(error?.message || 'Error al guardar el usuario');
-          }
-        })();
+        try {
+          await usersAPI.create(payload);
+          toast.success('Usuario creado correctamente');
+          void cargarUsuarios();
+        } catch (error: any) {
+          console.error('Error al crear usuario:', error);
+          toast.error(error?.message || 'Error al crear el usuario');
+        }
 
         return;
       } else if (activeTab === 'roles') {
         const ahora = new Date().toISOString();
-        const rolData = {
+        
+        // Base de datos del rol (igual para crear y editar)
+        const rolDataBase = {
           nombre: formData.name,
           descripcion: formData.description || null,
           estado: formData.status === 'Activo',
-          fecha_modificacion: ahora,
-          usuario_modifico: user?.name || user?.email || 'Sistema',
+          fecha_creacion: ahora,
         };
 
         const permisosSeleccionadosIds = (formData.permissionIds || [])
@@ -938,6 +1007,15 @@ export function AdminDashboardWithDropdown() {
         }
 
         if (selectedItem) {
+          // EDITAR: agregar auditoría (SIN fecha_creacion que ya existe)
+          const rolData = {
+            nombre: formData.name,
+            descripcion: formData.description || null,
+            estado: formData.status === 'Activo',
+            fecha_modificacion: ahora,
+            usuario_modifico: user?.name || user?.email || 'Sistema',
+          };
+
           const rolOptimista = {
             ...selectedItem,
             nombre: formData.name,
@@ -1029,8 +1107,8 @@ export function AdminDashboardWithDropdown() {
             estado: true,
             status: 'Activo',
             fecha_creacion: ahora,
-            fecha_modificacion: ahora,
-            usuario_modifico: user?.name || user?.email || 'Sistema',
+            fecha_modificacion: '',
+            usuario_modifico: '',
           };
           const rolesPrevios = localRoles;
           setLocalRoles(prev => [...prev, rolNuevo]);
@@ -1041,7 +1119,7 @@ export function AdminDashboardWithDropdown() {
 
           void (async () => {
             try {
-              const respuestaCrear: any = await rolesAPI.create(rolData);
+              const respuestaCrear: any = await rolesAPI.create(rolDataBase);
               console.log('Respuesta crear rol:', respuestaCrear);
               
               const idRolObjetivo =
@@ -1052,14 +1130,7 @@ export function AdminDashboardWithDropdown() {
               console.log('ID rol objetivo:', idRolObjetivo);
               
               if (idRolObjetivo) {
-                setRoleAuditInfo(prev => ({
-                  ...prev,
-                  [Number(idRolObjetivo)]: {
-                    fecha_modificacion: ahora,
-                    usuario_modifico: user?.name || user?.email || 'Sistema',
-                  },
-                }));
-
+                // El backend debe retornar fecha_creacion y usuario_creo
                 try {
                   await Promise.all(
                     permisosSeleccionadosIds.map((id: number) => 
@@ -1235,7 +1306,7 @@ export function AdminDashboardWithDropdown() {
   const getTableColumns = () => {
     switch (activeTab) {
       case 'users':
-        return ['Nombre', 'Email', 'Rol', 'Estado', 'Teléfono', 'Fecha Ingreso', 'Acciones'];
+        return ['Nombre', 'Email', 'Documento', 'Tipo Documento', 'Rol', 'Estado', 'Teléfono', 'Acciones'];
       case 'packages':
         return ['Paquete', 'Precio', 'Duración', 'Capacidad', 'Guía', 'Rating', 'Rutas/Servicios', 'Acciones'];
       case 'bookings':
@@ -1281,6 +1352,8 @@ export function AdminDashboardWithDropdown() {
           <TableRow key={item.id}>
             <TableCell className="font-medium">{item.name}</TableCell>
             <TableCell>{item.email}</TableCell>
+            <TableCell>{item.numero_documento}</TableCell>
+            <TableCell>{item.tipo_documento}</TableCell>
             <TableCell>
               <Badge variant="outline">{item.role}</Badge>
             </TableCell>
@@ -1290,7 +1363,6 @@ export function AdminDashboardWithDropdown() {
               </Badge>
             </TableCell>
             <TableCell>{item.phone}</TableCell>
-            <TableCell className="text-sm text-gray-600">{item.joinDate}</TableCell>
             <TableCell>
               <div className="flex space-x-2">
                 <Button size="sm" variant="outline" onClick={() => handleView(item)}>
@@ -1839,15 +1911,19 @@ export function AdminDashboardWithDropdown() {
                     placeholder="Ingrese el número de documento"
                   />
                 </div>
-                <div className="md:col-span-2">
-                  <Label htmlFor="address">Dirección</Label>
-                  <Input 
-                    id="address" 
-                    value={formData.address || ''} 
-                    onChange={(e) => setFormData({...formData, address: e.target.value})}
-                    placeholder="Dirección de residencia o contacto"
-                  />
-                </div>
+                {!isEdit && (
+                  <div>
+                    <Label htmlFor="password">Contraseña</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      value={formData.password || ''}
+                      onChange={(e) => setFormData({...formData, password: e.target.value})}
+                      placeholder="Ingrese una contraseña"
+                    />
+                  </div>
+                )}
+
               </>
             )}
 
@@ -3388,20 +3464,22 @@ export function AdminDashboardWithDropdown() {
         <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Detalles de {getItemName(selectedItem)}</DialogTitle>
+              <DialogTitle className="text-green-800">
+                {activeTab === 'users' ? 'Detalles del Usuario' : `Detalles de ${getItemName(selectedItem)}`}
+              </DialogTitle>
               <DialogDescription>
-                Información completa del registro seleccionado.
+                {activeTab === 'users' ? 'Información completa del usuario seleccionado.' : 'Información completa del registro seleccionado.'}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              {selectedItem && activeTab === 'roles'
-                ? getRoleDetailsForView(selectedItem).map((detail: any) => {
+              {selectedItem && (activeTab === 'roles' || activeTab === 'users')
+                ? (activeTab === 'roles' ? getRoleDetailsForView(selectedItem) : getUserDetailsForView(selectedItem)).map((detail: any) => {
                     if (detail.isPermissions) {
                       const permissions = detail.value as any[];
                       return (
                         <Collapsible key={detail.key} className="border-b pb-2">
                           <div className="flex items-center justify-between py-2">
-                            <span className="font-medium shrink-0">{detail.label}:</span>
+                            <span className="font-medium shrink-0 text-green-800">{detail.label}:</span>
                             <CollapsibleTrigger asChild>
                               <Button variant="ghost" size="sm" className="gap-2">
                                 <Badge variant="secondary">{permissions.length} permisos</Badge>
@@ -3427,9 +3505,9 @@ export function AdminDashboardWithDropdown() {
                     }
 
                     return (
-                      <div key={detail.key} className="flex justify-between gap-4 py-2 border-b">
-                        <span className="font-medium shrink-0">{detail.label}:</span>
-                        <span className="text-gray-600 text-right break-words max-w-md">{String(detail.value)}</span>
+                      <div key={detail.key} className="flex justify-between gap-4 py-2 border-b border-green-100">
+                        <span className="font-medium shrink-0 text-green-800">{detail.label}:</span>
+                        <span className="text-gray-600 text-right break-words max-w-md bg-green-50 px-2 py-1 rounded">{String(detail.value)}</span>
                       </div>
                     );
                   })

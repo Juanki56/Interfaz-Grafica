@@ -224,6 +224,13 @@ export const usersAPI = {
     return response.data || [];
   },
 
+  create: async (userData: Record<string, any>) => {
+    return fetchAPI('/api/usuarios', {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    });
+  },
+
   update: async (id: number | string, userData: Record<string, any>) => {
     return fetchAPI(`/api/usuarios/${id}`, {
       method: 'PUT',
