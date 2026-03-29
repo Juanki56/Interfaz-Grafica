@@ -105,7 +105,6 @@ import {
   mockFarms,
   mockRoutes,
   mockSales,
-  mockRoles,
   overviewStats,
   salesAnalytics
 } from '../utils/adminMockData';
@@ -124,11 +123,11 @@ import { ProviderManagement } from './ProviderManagement';
 import { ProviderTypeManagement } from './ProviderTypeManagement';
 import { RoutesManagement } from './RoutesManagement';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { rolesAPI, usersAPI } from '../services/api';
+import { permisosAPI, rolesAPI, usersAPI } from '../services/api';
 import { useServices } from '../hooks/useServices';
 
 export function AdminDashboardWithDropdown() {
-  const { adminActiveTab, setAdminActiveTab } = useAuth();
+  const { adminActiveTab, setAdminActiveTab, user } = useAuth();
   const { services } = useServices();
   const [activeTab, setActiveTab] = useState(adminActiveTab);
   const [salesSubTab, setSalesSubTab] = useState('historial');
@@ -137,6 +136,13 @@ export function AdminDashboardWithDropdown() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [isPermisosDialogOpen, setIsPermisosDialogOpen] = useState(false);
+  const [permisoDialogRole, setPermisoDialogRole] = useState<any>(null);
+  const [activePermissionsRole, setActivePermissionsRole] = useState<any>(null);
+  const [permissionsSearchTerm, setPermissionsSearchTerm] = useState('');
+  const [isDeleteRoleDialogOpen, setIsDeleteRoleDialogOpen] = useState(false);
+  const [roleToDelete, setRoleToDelete] = useState<any>(null);
+  const [selectedReassignRole, setSelectedReassignRole] = useState<string>('');
   const [formData, setFormData] = useState<any>({});
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
@@ -146,8 +152,13 @@ export function AdminDashboardWithDropdown() {
   const [loadingUsers, setLoadingUsers] = useState(false);
   
   // Estado local para roles para manejar actualizaciones reactivas
-  const [localRoles, setLocalRoles] = useState(mockRoles);
+  const [localRoles, setLocalRoles] = useState<any[]>([]);
   const [loadingRoles, setLoadingRoles] = useState(false);
+  const [availablePermisos, setAvailablePermisos] = useState<any[]>([]);
+  const [selectedPermissionModule, setSelectedPermissionModule] = useState<string>('');
+
+  // Auditoría de roles (fecha y usuario de modificación) en memoria
+  const [roleAuditInfo, setRoleAuditInfo] = useState<Record<number, {fecha_modificacion: string; usuario_modifico: string}>>({});
 
   // Estado local para rutas para manejar actualizaciones reactivas
   const [localRoutes, setLocalRoutes] = useState(mockRoutes);
@@ -267,7 +278,7 @@ export function AdminDashboardWithDropdown() {
       label: 'Roles', 
       icon: UserCheck, 
       description: 'Permisos y roles',
-      badge: mockRoles.length.toString()
+      badge: loadingRoles ? '...' : localRoles.length.toString()
     }
   ];
 
@@ -278,6 +289,115 @@ export function AdminDashboardWithDropdown() {
 
   const currentMenuItem = getCurrentMenuItem();
   const CurrentIcon = currentMenuItem.icon;
+
+  const rolePermissionActions = [
+    { key: 'leer', label: 'Leer' },
+    { key: 'crear', label: 'Crear' },
+    { key: 'editar', label: 'Editar' },
+    { key: 'eliminar', label: 'Eliminar' },
+  ];
+
+  const moduleLabelMap: Record<string, string> = {
+    dashboard: 'Dashboard',
+    usuarios: 'Usuarios',
+    clientes: 'Clientes',
+    propietarios: 'Propietarios',
+    reservas: 'Reservas',
+    fincas: 'Fincas',
+    rutas: 'Rutas',
+    servicios: 'Servicios',
+    ventas: 'Ventas',
+    abonos: 'Abonos',
+    pagos: 'Pagos',
+    proveedores: 'Proveedores',
+    tipos_proveedor: 'Tipos de Proveedor',
+    empleados: 'Empleados',
+    roles: 'Roles',
+    reportes: 'Reportes',
+  };
+
+  const getPermissionModules = () => {
+    const modules = Array.from(
+      new Set(
+        (availablePermisos || [])
+          .map((perm: any) => String(perm?.nombre || '').split('.')[0])
+          .filter((mod: string) => !!mod)
+      )
+    ) as string[];
+
+    return modules.sort((a, b) => a.localeCompare(b));
+  };
+
+  const getPermissionRecord = (moduleName: string, actionKey: string) => {
+    const actionCandidates = actionKey === 'editar' ? ['editar', 'actualizar'] : [actionKey];
+    return (availablePermisos || []).find((perm: any) => {
+      const permName = String(perm?.nombre || '');
+      return actionCandidates.some((candidate) => permName === `${moduleName}.${candidate}`);
+    });
+  };
+
+  const isPermissionChecked = (moduleName: string, actionKey: string) => {
+    const permissions = formData.permissions || [];
+    const actionCandidates = actionKey === 'editar' ? ['editar', 'actualizar'] : [actionKey];
+    return actionCandidates.some((candidate) => permissions.includes(`${moduleName}.${candidate}`));
+  };
+
+  const togglePermissionAction = (moduleName: string, actionKey: string, checked: boolean) => {
+    const permissionRecord = getPermissionRecord(moduleName, actionKey);
+    const permissions = formData.permissions || [];
+    const permissionIds = formData.permissionIds || [];
+    const actionCandidates = actionKey === 'editar' ? ['editar', 'actualizar'] : [actionKey];
+
+    if (checked) {
+      if (!permissionRecord) {
+        toast.error(`No existe el permiso ${moduleName}.${actionKey} en la tabla permisos`);
+        return;
+      }
+
+      const permissionName = permissionRecord.nombre;
+      const permissionId = permissionRecord.id_permisos;
+      setFormData({
+        ...formData,
+        permissions: Array.from(new Set([...permissions, permissionName])),
+        permissionIds: Array.from(new Set([...permissionIds, permissionId])),
+      });
+      return;
+    }
+
+    const namesToRemove = actionCandidates.map((candidate) => `${moduleName}.${candidate}`);
+    const idsToRemove = (availablePermisos || [])
+      .filter((perm: any) => namesToRemove.includes(String(perm?.nombre || '')))
+      .map((perm: any) => perm.id_permisos);
+
+    setFormData({
+      ...formData,
+      permissions: permissions.filter((name: string) => !namesToRemove.includes(name)),
+      permissionIds: permissionIds.filter((id: number) => !idsToRemove.includes(id)),
+    });
+  };
+
+  const selectAllRolePermissions = () => {
+    const allPermissions = (availablePermisos || []).filter((perm: any) => !!perm?.nombre);
+    setFormData({
+      ...formData,
+      permissions: Array.from(new Set(allPermissions.map((perm: any) => String(perm.nombre)))),
+      permissionIds: Array.from(
+        new Set(
+          allPermissions
+            .map((perm: any) => Number(perm?.id_permisos))
+            .filter((id: number) => Number.isFinite(id))
+        )
+      ),
+    });
+  };
+
+  const clearAllRolePermissions = () => {
+    setFormData({
+      ...formData,
+      permissions: [],
+      permissionIds: [],
+    });
+  };
 
   const normalizarRolUsuario = (rol?: string | null) => {
     const rolNormalizado = (rol || '').toLowerCase().trim();
@@ -408,7 +528,120 @@ export function AdminDashboardWithDropdown() {
     });
   };
 
-  // Cargar roles desde la BD
+  const cargarRolesConDetalle = async () => {
+    setLoadingRoles(true);
+    try {
+      const [rolesData, usuariosData, catalogoPermisos] = await Promise.all([
+        rolesAPI.getAll(),
+        usersAPI.getAll(),
+        permisosAPI.getAll(),
+      ]);
+
+      setAvailablePermisos(catalogoPermisos || []);
+      
+      // Guardar usuarios en state para poder usarlos en getRoleUserCount
+      setLocalUsers(usuariosData.map(mapearUsuarioBackend));
+
+      const usuarioPorRol = usuariosData.reduce((acc: Record<string, number>, usuario: any) => {
+        const rolUsuario = normalizarRolUsuario(
+          usuario?.rol_nombre || usuario?.rol || usuario?.role || usuario?.tipo_usuario
+        );
+        acc[rolUsuario] = (acc[rolUsuario] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      const adaptarRoles = (rolesFuente: any[], detallesPermisosPorRol: Record<number, any[]> = {}) => {
+        return rolesFuente.map((rol: any) => {
+          const permisosRaw = detallesPermisosPorRol[rol.id_roles] || rol.permisos || [];
+
+          const permisosNormalizados = (permisosRaw || []).map((permiso: any) => {
+            if (typeof permiso === 'string') {
+              const permisoCatalogo = catalogoPermisos.find((p: any) => p.nombre === permiso);
+              return {
+                id_permisos: permisoCatalogo?.id_permisos,
+                nombre: permiso,
+              };
+            }
+
+            return {
+              id_permisos: permiso?.id_permisos,
+              nombre: permiso?.nombre || permiso?.codigo || permiso?.permiso || `${permiso?.modulo || 'permiso'}.${permiso?.accion || 'ver'}`,
+            };
+          });
+
+          const permisosFormateados = permisosNormalizados.map((perm: any) => perm.nombre);
+          const permissionIds = permisosNormalizados
+            .map((perm: any) => Number(perm.id_permisos))
+            .filter((id: number) => !Number.isNaN(id));
+
+          const totalUsuariosRol = usuarioPorRol[rol.nombre] || 0;
+          const auditInfo = roleAuditInfo[rol.id_roles] || roleAuditInfo[Number(rol.id_roles)] || null;
+
+          return {
+            id: rol.id_roles?.toString() || '',
+            id_roles: rol.id_roles,
+            nombre: rol.nombre || '',
+            name: rol.nombre || '',
+            descripcion: rol.descripcion || '',
+            description: rol.descripcion || '',
+            permissions: permisosFormateados,
+            permissionIds,
+            userCount: totalUsuariosRol,
+            estado: rol.estado,
+            status: rol.estado ? 'Activo' : 'Inactivo',
+            fecha_creacion: rol.fecha_creacion || rol.created_at,
+            fecha_modificacion: auditInfo?.fecha_modificacion || rol.fecha_modificacion || rol.updated_at || '',
+            usuario_modifico: auditInfo?.usuario_modifico || rol.usuario_modifico || rol.usuario_modifico || '—',
+          };
+        });
+      };
+
+      // Fase 1: pinta rápido con datos base (sin esperar detalle por rol)
+      const rolesRapidos = adaptarRoles(rolesData);
+      setLocalRoles(rolesRapidos as any);
+      setLoadingRoles(false);
+
+      // Si la API ya trae permisos embedded, no hacemos refresco adicional por rol
+      const rolConPermisosEnLista = rolesData.every((rol: any) => Array.isArray(rol.permisos));
+      if (rolConPermisosEnLista) {
+        return;
+      }
+
+      // Fase 2: hidrata permisos en segundo plano (solo si hace falta)
+      void (async () => {
+        try {
+          const detalles = await Promise.all(
+            rolesData.map(async (rol) => {
+              try {
+                const detalleRol: any = await rolesAPI.getByIdWithPermisos(rol.id_roles);
+                const permisosDetalle = detalleRol?.permisos || detalleRol?.data?.permisos || [];
+                return { idRol: rol.id_roles, permisos: permisosDetalle };
+              } catch {
+                return { idRol: rol.id_roles, permisos: [] };
+              }
+            })
+          );
+
+          const detallesPermisosPorRol = detalles.reduce((acc: Record<number, any[]>, item: any) => {
+            acc[item.idRol] = item.permisos;
+            return acc;
+          }, {});
+
+          const rolesConDetalle = adaptarRoles(rolesData, detallesPermisosPorRol);
+          setLocalRoles(rolesConDetalle as any);
+        } catch (error) {
+          console.error('Error al hidratar permisos de roles:', error);
+        }
+      })();
+    } catch (error) {
+      console.error('Error al cargar roles:', error);
+      toast.error('Error al cargar roles desde la base de datos');
+    } finally {
+      setLoadingRoles(false);
+    }
+  };
+
+  // Cargar datos de tabs desde la BD
   useEffect(() => {
     const cargarDatosTab = async () => {
       if (activeTab === 'users') {
@@ -416,36 +649,28 @@ export function AdminDashboardWithDropdown() {
       }
 
       if (activeTab === 'roles') {
-        setLoadingRoles(true);
-        try {
-          const rolesData = await rolesAPI.getAll();
-          const rolesAdaptados = rolesData.map(rol => ({
-            id: rol.id_roles?.toString() || '',
-            id_roles: rol.id_roles,
-            nombre: rol.nombre || '',
-            name: rol.nombre || '',
-            descripcion: rol.descripcion || '',
-            description: rol.descripcion || '',
-            estado: rol.estado,
-            status: rol.estado ? 'Activo' : 'Inactivo',
-            fecha_creacion: rol.fecha_creacion
-          }));
-          setLocalRoles(rolesAdaptados as any);
-        } catch (error) {
-          console.error('Error al cargar roles:', error);
-          toast.error('Error al cargar roles desde la base de datos');
-        } finally {
-          setLoadingRoles(false);
-        }
+        // Cargar tanto roles como usuarios para que podamos contar usuarios por rol
+        await Promise.all([cargarRolesConDetalle(), cargarUsuarios()]);
       }
     };
     cargarDatosTab();
   }, [activeTab]);
 
-  // Reset pagination when changing tabs or searching
   useEffect(() => {
-    setCurrentPage(1);
-  }, [activeTab, searchTerm]);
+    if (activeTab !== 'roles') return;
+
+    const modules = getPermissionModules();
+    if (!selectedPermissionModule && modules.length > 0) {
+      setSelectedPermissionModule(modules[0]);
+    }
+  }, [activeTab, availablePermisos, selectedPermissionModule]);
+
+  // Reset search term when permissions modal opens
+  useEffect(() => {
+    if (isPermisosDialogOpen) {
+      setPermissionsSearchTerm('');
+    }
+  }, [isPermisosDialogOpen]);
 
   // Handle CRUD operations
   const handleCreate = () => {
@@ -454,13 +679,38 @@ export function AdminDashboardWithDropdown() {
       return;
     }
 
-    setFormData({});
+    if (activeTab === 'roles') {
+      const modules = getPermissionModules();
+      if (modules.length > 0) {
+        setSelectedPermissionModule(modules[0]);
+      }
+      setFormData({
+        name: '',
+        description: '',
+        status: 'Activo',
+        permissions: [],
+        permissionIds: [],
+      });
+    } else {
+      setFormData({});
+    }
     setIsCreateModalOpen(true);
   };
 
   const handleEdit = (item: any) => {
     setSelectedItem(item);
-    setFormData(item);
+    if (activeTab === 'roles') {
+      const modules = getPermissionModules();
+      const firstPermissionModule = (item.permissions || [])[0]?.split('.')?.[0];
+      setSelectedPermissionModule(firstPermissionModule || modules[0] || '');
+      setFormData({
+        ...item,
+        permissions: item.permissions || [],
+        permissionIds: item.permissionIds || [],
+      });
+    } else {
+      setFormData(item);
+    }
     setIsEditModalOpen(true);
   };
 
@@ -469,13 +719,144 @@ export function AdminDashboardWithDropdown() {
     setIsViewModalOpen(true);
   };
 
-  const handleDelete = (item: any) => {
+  const getRoleUserCount = (roleName: string): number => {
+    const normalizedRoleName = normalizarRolUsuario(roleName);
+    return localUsers.filter((user: any) => {
+      const userRole = normalizarRolUsuario(
+        user?.rol_nombre || user?.rol || user?.role || user?.tipo_usuario
+      );
+      return userRole === normalizedRoleName;
+    }).length;
+  };
+
+  const handleDelete = async (item: any) => {
     if (activeTab === 'users') {
       toast.error('La eliminación de usuarios aún no está disponible desde el backend.');
       return;
     }
 
-    toast.success(`${getItemName(item)} eliminado correctamente`);
+    if (activeTab === 'roles') {
+      // Recalcular userCount en tiempo real
+      const actualUserCount = getRoleUserCount(item.nombre || item.name);
+      
+      // SIEMPRE mostrar diálogo de confirmación antes de eliminar
+      setRoleToDelete({ ...item, userCount: actualUserCount });
+      setSelectedReassignRole('');
+      setIsDeleteRoleDialogOpen(true);
+      return;
+    }
+
+    toast.error('La eliminación para este módulo aún no está conectada al backend.');
+  };
+
+  const getRoleDescriptionText = (item: any) => {
+    const description = item?.descripcion ?? item?.description ?? '';
+    return typeof description === 'string' && description.trim()
+      ? description
+      : 'Este rol no tiene descripción';
+  };
+
+  const handleConfirmDeleteRole = async () => {
+    if (!roleToDelete) return;
+
+    try {
+      const roleId = Number(roleToDelete.id_roles ?? roleToDelete.id);
+      if (!Number.isFinite(roleId) || roleId <= 0) {
+        throw new Error('ID de rol inválido');
+      }
+
+      const currentRoleName = normalizarRolUsuario(roleToDelete.nombre || roleToDelete.name || '');
+      const hasUsers = (roleToDelete?.userCount || 0) > 0;
+
+      // Si el rol tiene usuarios, DEBE seleccionar un rol para reasignar
+      if (hasUsers && !selectedReassignRole) {
+        toast.error('Debe seleccionar un rol para reasignar los usuarios');
+        return;
+      }
+
+      if (hasUsers && selectedReassignRole) {
+        const newRoleId = Number(selectedReassignRole);
+        if (!Number.isFinite(newRoleId) || newRoleId <= 0) {
+          throw new Error('Rol de reasignación inválido');
+        }
+
+        const roleToKeep = localRoles.find(
+          (role: any) => Number(role.id_roles ?? role.id) === newRoleId
+        );
+
+        if (!roleToKeep) {
+          throw new Error('No se encontró el rol para reasignar');
+        }
+
+        const roleToKeepName = roleToKeep.nombre || roleToKeep.name || '';
+
+        // Reasignar usuarios en la UI local
+        const usuariosAReasignar = localUsers.filter((user: any) =>
+          normalizarRolUsuario(user.role) === currentRoleName
+        );
+
+        setLocalUsers(prev =>
+          prev.map((user: any) =>
+            normalizarRolUsuario(user.role) === currentRoleName
+              ? { ...user, role: roleToKeepName }
+              : user
+          )
+        );
+
+        // Reasignar usuarios en el backend (si el endpoint existe)
+        if (usuariosAReasignar.length > 0) {
+          await Promise.all(
+            usuariosAReasignar.map((user: any) =>
+              usersAPI.updateRole(user.email, roleToKeepName).catch((err: any) => {
+                console.error('Error reasignando usuario:', user, err);
+                return Promise.resolve();
+              })
+            )
+          );
+        }
+
+        toast.success(
+          `${usuariosAReasignar.length} usuario(s) reasignado(s) a '${roleToKeepName}'`,
+        );
+      }
+
+      // Eliminar el rol
+      await rolesAPI.delete(roleId);
+      setLocalRoles(prev =>
+        prev.filter((role: any) => Number(role.id_roles ?? role.id) !== roleId)
+      );
+      toast.success('Rol eliminado correctamente');
+      void cargarRolesConDetalle();
+
+      // Cerrar diálogo
+      setIsDeleteRoleDialogOpen(false);
+      setRoleToDelete(null);
+      setSelectedReassignRole('');
+    } catch (error: any) {
+      toast.error(error?.message || 'Error al eliminar el rol');
+    }
+  };
+
+  const getRoleDetailsForView = (item: any) => {
+    const permissionList = Array.isArray(item?.permissions)
+      ? item.permissions
+      : typeof item?.permissions === 'string'
+        ? item.permissions.split(',').map((perm: string) => perm.trim()).filter(Boolean)
+        : [];
+
+    const estadoRol = item?.status || (item?.estado === true ? 'Activo' : item?.estado === false ? 'Inactivo' : '—');
+
+    return [
+      { key: 'id_roles', label: 'ID Rol', value: item?.id_roles ?? '—' },
+      { key: 'nombre', label: 'Nombre', value: item?.nombre || item?.name || '—' },
+      { key: 'descripcion', label: 'Descripción', value: getRoleDescriptionText(item) },
+      { key: 'userCount', label: 'Usuarios asignados', value: item?.userCount ?? 0 },
+      { key: 'estado', label: 'Estado', value: estadoRol },
+      { key: 'fecha_creacion', label: 'Fecha de creación', value: item?.fecha_creacion ? formatearFechaUsuario(item.fecha_creacion) : '—' },
+      { key: 'fecha_modificacion', label: 'Última modificación', value: item?.fecha_modificacion ? formatearFechaUsuario(item.fecha_modificacion) : '—' },
+      { key: 'usuario_modifico', label: 'Modificado por', value: item?.usuario_modifico || '—' },
+      { key: 'permissions', label: 'Permisos', value: permissionList, isPermissions: true },
+    ];
   };
 
   const handleSave = async () => {
@@ -536,37 +917,177 @@ export function AdminDashboardWithDropdown() {
 
         return;
       } else if (activeTab === 'roles') {
-        // Guardar rol en BD
+        const ahora = new Date().toISOString();
         const rolData = {
           nombre: formData.name,
           descripcion: formData.description || null,
-          estado: formData.status === 'Activo' ? true : false
+          estado: formData.status === 'Activo',
+          fecha_modificacion: ahora,
+          usuario_modifico: user?.name || user?.email || 'Sistema',
         };
 
-        if (selectedItem) {
-          // Actualizar rol existente
-          await rolesAPI.update(selectedItem.id_roles, rolData);
-          toast.success('Rol actualizado correctamente');
-        } else {
-          // Crear nuevo rol
-          await rolesAPI.create(rolData);
-          toast.success('Rol creado correctamente');
+        const permisosSeleccionadosIds = (formData.permissionIds || [])
+          .map((id: any) => Number(id))
+          .filter((id: number) => !Number.isNaN(id));
+
+        const permisosFormateados: string[] = formData.permissions || [];
+
+        if (permisosSeleccionadosIds.length === 0) {
+          toast.error('Debe asignar al menos un permiso al rol');
+          return;
         }
-        
-        // Recargar roles desde BD
-        const rolesData = await rolesAPI.getAll();
-        const rolesAdaptados = rolesData.map(rol => ({
-          id: rol.id_roles?.toString() || '',
-          id_roles: rol.id_roles,
-          nombre: rol.nombre || '',
-          name: rol.nombre || '',
-          descripcion: rol.descripcion || '',
-          description: rol.descripcion || '',
-          estado: rol.estado,
-          status: rol.estado ? 'Activo' : 'Inactivo',
-          fecha_creacion: rol.fecha_creacion
-        }));
-        setLocalRoles(rolesAdaptados as any);
+
+        if (selectedItem) {
+          const rolOptimista = {
+            ...selectedItem,
+            nombre: formData.name,
+            name: formData.name,
+            descripcion: formData.description || '',
+            description: formData.description || '',
+            permissions: permisosFormateados,
+            permissionIds: permisosSeleccionadosIds,
+            estado: formData.status === 'Activo',
+            status: formData.status,
+            fecha_creacion: selectedItem.fecha_creacion || selectedItem.created_at || selectedItem.fecha_creacion || null,
+            fecha_modificacion: ahora,
+            usuario_modifico: user?.name || user?.email || 'Sistema',
+          };
+          const rolesPrevios = localRoles;
+          setLocalRoles(prev => prev.map(r => r.id === selectedItem.id ? rolOptimista : r));
+          setRoleAuditInfo(prev => ({
+            ...prev,
+            [Number(selectedItem.id_roles ?? selectedItem.id)]: {
+              fecha_modificacion: ahora,
+              usuario_modifico: user?.name || user?.email || 'Sistema',
+            },
+          }));
+          setIsCreateModalOpen(false);
+          setIsEditModalOpen(false);
+          setFormData({});
+          setSelectedItem(null);
+
+          void (async () => {
+            try {
+              await rolesAPI.update(selectedItem.id_roles, rolData);
+              const idRolObjetivo = selectedItem.id_roles;
+              const detalleActualizado: any = await rolesAPI.getByIdWithPermisos(Number(idRolObjetivo));
+              const permisosActualesRaw = detalleActualizado?.permisos || detalleActualizado?.data?.permisos || [];
+              const permisosActualesIds = permisosActualesRaw
+                .map((perm: any) => Number(perm?.id_permisos))
+                .filter((id: number) => !Number.isNaN(id));
+              const idsParaAgregar = permisosSeleccionadosIds.filter((id: number) => !permisosActualesIds.includes(id));
+              const idsParaQuitar = permisosActualesIds.filter((id: number) => !permisosSeleccionadosIds.includes(id));
+              
+              try {
+                await Promise.all(
+                  idsParaAgregar.map((id: number) => 
+                    rolesAPI.asignarPermiso(Number(idRolObjetivo), id)
+                      .catch((err: any) => {
+                        console.error(`Error asignando permiso ${id}:`, err);
+                        return Promise.resolve();
+                      })
+                  )
+                );
+              } catch (err: any) {
+                console.error('Error al agregar permisos:', err);
+              }
+              
+              try {
+                await Promise.all(
+                  idsParaQuitar.map((id: number) => 
+                    rolesAPI.removerPermiso(Number(idRolObjetivo), id)
+                      .catch((err: any) => {
+                        console.error(`Error removiendo permiso ${id}:`, err);
+                        return Promise.resolve();
+                      })
+                  )
+                );
+              } catch (err: any) {
+                console.error('Error al remover permisos:', err);
+              }
+              
+              toast.success('Rol actualizado correctamente');
+              void cargarRolesConDetalle();
+            } catch (error: any) {
+              console.error('Error al actualizar rol:', error);
+              setLocalRoles(rolesPrevios);
+              toast.error(error?.message || 'Error al actualizar el rol');
+            }
+          })();
+        } else {
+          const idTemporal = `temp-${Date.now()}`;
+          const rolNuevo: any = {
+            id: idTemporal,
+            id_roles: null,
+            nombre: formData.name,
+            name: formData.name,
+            descripcion: formData.description || '',
+            description: formData.description || '',
+            permissions: permisosFormateados,
+            permissionIds: permisosSeleccionadosIds,
+            userCount: 0,
+            estado: true,
+            status: 'Activo',
+            fecha_creacion: ahora,
+            fecha_modificacion: ahora,
+            usuario_modifico: user?.name || user?.email || 'Sistema',
+          };
+          const rolesPrevios = localRoles;
+          setLocalRoles(prev => [...prev, rolNuevo]);
+          setIsCreateModalOpen(false);
+          setIsEditModalOpen(false);
+          setFormData({});
+          setSelectedItem(null);
+
+          void (async () => {
+            try {
+              const respuestaCrear: any = await rolesAPI.create(rolData);
+              console.log('Respuesta crear rol:', respuestaCrear);
+              
+              const idRolObjetivo =
+                respuestaCrear?.data?.id_roles ||
+                respuestaCrear?.id_roles ||
+                respuestaCrear?.data?.[0]?.id_roles;
+              
+              console.log('ID rol objetivo:', idRolObjetivo);
+              
+              if (idRolObjetivo) {
+                setRoleAuditInfo(prev => ({
+                  ...prev,
+                  [Number(idRolObjetivo)]: {
+                    fecha_modificacion: ahora,
+                    usuario_modifico: user?.name || user?.email || 'Sistema',
+                  },
+                }));
+
+                try {
+                  await Promise.all(
+                    permisosSeleccionadosIds.map((id: number) => 
+                      rolesAPI.asignarPermiso(Number(idRolObjetivo), id)
+                        .catch((err: any) => {
+                          console.error(`Error asignando permiso ${id}:`, err);
+                          return Promise.resolve();
+                        })
+                    )
+                  );
+                } catch (err: any) {
+                  console.error('Error al asignar permisos:', err);
+                }
+              } else {
+                console.warn('No se pudo extraer el ID del rol creado. Datos recibidos:', respuestaCrear);
+              }
+              
+              toast.success('Rol creado correctamente');
+              void cargarRolesConDetalle();
+            } catch (error: any) {
+              console.error('Error al crear el rol:', error);
+              setLocalRoles(rolesPrevios);
+              toast.error(error?.message || 'Error al crear el rol');
+            }
+          })();
+        }
+
+        return;
       } else {
         // Otros tabs (comportamiento mock actual)
         const action = selectedItem ? 'actualizado' : 'creado';
@@ -728,7 +1249,7 @@ export function AdminDashboardWithDropdown() {
       case 'sales':
         return ['Cliente', 'Servicio', 'Total', 'Pagado', 'Pendiente', 'Estado', 'Fecha', 'Acciones'];
       case 'roles':
-        return ['ID', 'Nombre', 'Descripción', 'Estado', 'Fecha Creación', 'Acciones'];
+        return ['Rol', 'Descripción', 'Usuarios', 'Permisos', 'Estado', 'Acciones'];
       default:
         return [];
     }
@@ -807,7 +1328,7 @@ export function AdminDashboardWithDropdown() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                       <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDelete(item)}>
+                      <AlertDialogAction onClick={() => void handleDelete(item)}>
                         Eliminar
                       </AlertDialogAction>
                     </AlertDialogFooter>
@@ -1156,19 +1677,37 @@ export function AdminDashboardWithDropdown() {
       case 'roles':
         return (
           <TableRow key={item.id}>
-            <TableCell className="font-medium">{item.id_roles}</TableCell>
             <TableCell className="font-medium">{item.nombre}</TableCell>
-            <TableCell className="max-w-xs truncate">{item.descripcion || '−'}</TableCell>
-            <TableCell>{getStatusBadge(item.status)}</TableCell>
-            <TableCell className="text-sm text-gray-600">
-              {item.fecha_creacion ? new Date(item.fecha_creacion).toLocaleDateString('es-CO', { 
-                year: 'numeric', 
-                month: 'short', 
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-              }) : '−'}
+            <TableCell className="max-w-xs truncate">{getRoleDescriptionText(item)}</TableCell>
+            <TableCell>
+              <Badge variant="secondary">{item.userCount || 0}</Badge>
             </TableCell>
+            <TableCell>
+              <div className="flex flex-wrap gap-1">
+                {(item.permissions || []).slice(0, 3).map((perm: string) => (
+                  <Badge key={perm} variant="outline" className="text-xs">{perm}</Badge>
+                ))}
+                {(item.permissions || []).length > 3 && (
+                  <button
+                    type="button"
+                    className="text-xs focus:outline-none"
+                    onClick={() => {
+                      setPermisoDialogRole(item);
+                      setPermissionsSearchTerm('');
+                      setIsPermisosDialogOpen(true);
+                    }}
+                  >
+                    <Badge variant="outline" className="text-xs cursor-pointer hover:bg-gray-100">
+                      +{item.permissions.length - 3}
+                    </Badge>
+                  </button>
+                )}
+                {(item.permissions || []).length === 0 && (
+                  <Badge variant="outline" className="text-xs">Sin permisos</Badge>
+                )}
+              </div>
+            </TableCell>
+            <TableCell>{getStatusBadge(item.status)}</TableCell>
             <TableCell>
               <div className="flex space-x-2">
                 <Button size="sm" variant="outline" onClick={() => handleView(item)}>
@@ -1196,27 +1735,13 @@ export function AdminDashboardWithDropdown() {
                 >
                   {item.estado ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                 </Button>
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button size="sm" variant="outline">
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Esta acción no se puede deshacer. Se eliminará permanentemente el rol.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                      <AlertDialogAction onClick={() => handleDelete(item)}>
-                        Eliminar
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => handleDelete(item)}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
               </div>
             </TableCell>
           </TableRow>
@@ -1981,80 +2506,137 @@ export function AdminDashboardWithDropdown() {
         {/* Roles Permissions Section */}
         {activeTab === 'roles' && (
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Permisos y Accesos</h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label>Módulos de Acceso</Label>
-                <div className="space-y-2 max-h-32 overflow-y-auto border rounded p-2">
-                  {['Dashboard', 'Usuarios', 'Paquetes', 'Reservas', 'Fincas', 'Rutas', 'Servicios', 'Ventas', 'Roles', 'Reportes'].map(module => (
-                    <div key={module} className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id={`module-${module}`}
-                        checked={formData.modules?.includes(module) || false}
-                        onChange={(e) => {
-                          const modules = formData.modules || [];
-                          if (e.target.checked) {
-                            setFormData({...formData, modules: [...modules, module]});
-                          } else {
-                            setFormData({...formData, modules: modules.filter((m: string) => m !== module)});
-                          }
-                        }}
-                      />
-                      <label htmlFor={`module-${module}`} className="text-sm">{module}</label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <Label>Permisos</Label>
-                <div className="space-y-2 max-h-32 overflow-y-auto border rounded p-2">
-                  {['crear', 'leer', 'editar', 'eliminar', 'gestionar', 'reportes'].map(permission => (
-                    <div key={permission} className="flex items-center space-x-2">
-                      <input
-                        type="checkbox"
-                        id={`permission-${permission}`}
-                        checked={formData.permissions?.some((p: string) => p.includes(permission)) || false}
-                        onChange={(e) => {
-                          const permissions = formData.permissions || [];
-                          const basePermissions = ['usuarios', 'paquetes', 'reservas', 'fincas', 'rutas', 'servicios', 'ventas', 'personal', 'roles'];
-                          if (e.target.checked) {
-                            const newPermissions = basePermissions.map(bp => `${bp}.${permission}`);
-                            setFormData({...formData, permissions: [...permissions, ...newPermissions]});
-                          } else {
-                            setFormData({...formData, permissions: permissions.filter((p: string) => !p.includes(permission))});
-                          }
-                        }}
-                      />
-                      <label htmlFor={`permission-${permission}`} className="text-sm capitalize">{permission}</label>
-                    </div>
-                  ))}
-                </div>
-              </div>
+            <h4 className="font-medium text-gray-900">Permisos por Módulo</h4>
+
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={selectAllRolePermissions}>
+                Seleccionar todos
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={clearAllRolePermissions}>
+                Deseleccionar todos
+              </Button>
             </div>
-            <div>
-              <Label>Vistas Disponibles</Label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 border rounded p-2">
-                {['Lista completa', 'Formularios', 'Detalles', 'Reportes', 'Estadísticas', 'Calendario'].map(view => (
-                  <div key={view} className="flex items-center space-x-2">
-                    <input
-                      type="checkbox"
-                      id={`view-${view}`}
-                      checked={formData.views?.includes(view) || false}
-                      onChange={(e) => {
-                        const views = formData.views || [];
-                        if (e.target.checked) {
-                          setFormData({...formData, views: [...views, view]});
-                        } else {
-                          setFormData({...formData, views: views.filter((v: string) => v !== view)});
-                        }
-                      }}
-                    />
-                    <label htmlFor={`view-${view}`} className="text-xs">{view}</label>
+
+            {getPermissionModules().length === 0 ? (
+              <div className="border rounded p-3 text-sm text-gray-500">
+                No hay permisos cargados desde la base de datos.
+              </div>
+            ) : (
+              <>
+                <div>
+                  <Label>Módulo</Label>
+                  <div className="flex flex-wrap gap-2 border rounded p-2">
+                    {getPermissionModules().map((moduleName) => (
+                      <button
+                        key={moduleName}
+                        type="button"
+                        onClick={() => setSelectedPermissionModule(moduleName)}
+                        className={`px-3 py-1 rounded text-sm border transition-colors ${
+                          selectedPermissionModule === moduleName
+                            ? 'bg-green-600 text-white border-green-600'
+                            : 'bg-white text-gray-700 border-gray-300 hover:border-green-400'
+                        }`}
+                      >
+                        {moduleLabelMap[moduleName] || moduleName}
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+
+                <div>
+                  <Label>Acciones del módulo {moduleLabelMap[selectedPermissionModule] || selectedPermissionModule}</Label>
+                  <div className="flex flex-wrap gap-3 mb-3">
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full px-4 py-1 shadow-sm border border-green-700/30 transition-all"
+                      onClick={() => {
+                        // Seleccionar todos los permisos de este módulo
+                        const newPermissions = [...(formData.permissions || [])];
+                        const newPermissionIds = [...(formData.permissionIds || [])];
+                        rolePermissionActions.forEach((action) => {
+                          const permissionRecord = getPermissionRecord(selectedPermissionModule, action.key);
+                          if (permissionRecord) {
+                            if (!newPermissions.includes(permissionRecord.nombre)) {
+                              newPermissions.push(permissionRecord.nombre);
+                            }
+                            if (!newPermissionIds.includes(permissionRecord.id_permisos)) {
+                              newPermissionIds.push(permissionRecord.id_permisos);
+                            }
+                          }
+                        });
+                        setFormData({
+                          ...formData,
+                          permissions: newPermissions,
+                          permissionIds: newPermissionIds,
+                        });
+                      }}
+                    >
+                      Seleccionar todos
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="border-gray-400 text-gray-700 font-semibold rounded-full px-4 py-1 hover:bg-gray-100 transition-all"
+                      onClick={() => {
+                        // Deseleccionar todos los permisos de este módulo
+                        const namesToRemove = rolePermissionActions.flatMap((action) => {
+                          return action.key === 'editar'
+                            ? [`${selectedPermissionModule}.editar`, `${selectedPermissionModule}.actualizar`]
+                            : [`${selectedPermissionModule}.${action.key}`];
+                        });
+                        const idsToRemove = (availablePermisos || [])
+                          .filter((perm) => namesToRemove.includes(String(perm?.nombre || '')))
+                          .map((perm) => perm.id_permisos);
+                        setFormData({
+                          ...formData,
+                          permissions: (formData.permissions || []).filter((name) => !namesToRemove.includes(name)),
+                          permissionIds: (formData.permissionIds || []).filter((id) => !idsToRemove.includes(id)),
+                        });
+                      }}
+                    >
+                      Deseleccionar todos
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 border rounded p-3">
+                    {rolePermissionActions.map((action) => {
+                      const actionId = `perm-action-${selectedPermissionModule}-${action.key}`;
+                      return (
+                        <div key={action.key} className="flex items-center space-x-2">
+                          <input
+                            id={actionId}
+                            type="checkbox"
+                            checked={isPermissionChecked(selectedPermissionModule, action.key)}
+                            onChange={(e) => togglePermissionAction(selectedPermissionModule, action.key, e.target.checked)}
+                            disabled={!selectedPermissionModule}
+                          />
+                          <label htmlFor={actionId} className="text-sm">{action.label}</label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Resumen de permisos seleccionados</Label>
+                  <div className="border rounded p-3 min-h-[56px]">
+                    {(formData.permissions || []).length === 0 ? (
+                      <p className="text-xs text-gray-500">Aún no has seleccionado permisos para este rol.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {(formData.permissions || []).map((perm: string) => (
+                          <span key={perm} className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 border">
+                            {perm}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -2494,6 +3076,42 @@ export function AdminDashboardWithDropdown() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {/* Permisos completos Modal */}
+        <Dialog open={isPermisosDialogOpen} onOpenChange={setIsPermisosDialogOpen}>
+          <DialogContent className="max-w-xl">
+            <DialogHeader>
+              <DialogTitle>Permisos de rol: {permisoDialogRole?.nombre || permisoDialogRole?.name || 'Rol'}</DialogTitle>
+              <DialogDescription>
+                Lista completa de permisos asignados a este rol.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4">
+              {permisoDialogRole && Array.isArray(permisoDialogRole.permissions) && permisoDialogRole.permissions.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Permiso</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {permisoDialogRole.permissions.map((perm: string, index: number) => (
+                        <tr key={perm + index}>
+                          <td className="px-4 py-2 text-sm text-gray-700">{index + 1}</td>
+                          <td className="px-4 py-2 text-sm text-gray-700">{perm}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-gray-500">Este rol no tiene permisos asignados.</p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   };
@@ -2669,7 +3287,7 @@ export function AdminDashboardWithDropdown() {
               </div>
             </CardContent>
           </Card>
-          
+
           {/* Paginación Mejorada */}
           {shouldPaginate && totalPages > 1 && (
             <motion.div 
@@ -2776,80 +3394,262 @@ export function AdminDashboardWithDropdown() {
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              {selectedItem && Object.entries(selectedItem).map(([key, value]) => {
-                // Manejo especial para permisos
-                if (key.toLowerCase() === 'permissions') {
-                  let permissions = [];
-                  
-                  // Si es array, usar directamente
-                  if (Array.isArray(value)) {
-                    permissions = value;
-                  } 
-                  // Si es string, dividir por comas
-                  else if (typeof value === 'string') {
-                    permissions = value.split(',').map(p => p.trim()).filter(p => p);
-                  }
-                  
-                  if (permissions.length > 0) {
-                    return (
-                      <Collapsible key={key} className="border-b pb-2">
-                        <div className="flex items-center justify-between py-2">
-                          <span className="font-medium capitalize">{key}:</span>
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm" className="gap-2">
-                              <Badge variant="secondary">{permissions.length} permisos</Badge>
-                              <ChevronDown className="h-4 w-4" />
-                            </Button>
-                          </CollapsibleTrigger>
-                        </div>
-                        <CollapsibleContent className="pt-2">
-                          <div className="flex flex-wrap gap-2">
-                            {permissions.map((permission, idx) => (
-                              <Badge key={idx} variant="outline" className="text-xs">
-                                {permission}
-                              </Badge>
-                            ))}
+              {selectedItem && activeTab === 'roles'
+                ? getRoleDetailsForView(selectedItem).map((detail: any) => {
+                    if (detail.isPermissions) {
+                      const permissions = detail.value as any[];
+                      return (
+                        <Collapsible key={detail.key} className="border-b pb-2">
+                          <div className="flex items-center justify-between py-2">
+                            <span className="font-medium shrink-0">{detail.label}:</span>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm" className="gap-2">
+                                <Badge variant="secondary">{permissions.length} permisos</Badge>
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
                           </div>
-                        </CollapsibleContent>
-                      </Collapsible>
-                    );
-                  }
-                }
-                
-                // Manejo especial para otros arrays (modules, views, etc.)
-                if (Array.isArray(value) && value.length > 0 && (key.toLowerCase() === 'modules' || key.toLowerCase() === 'views')) {
-                  return (
-                    <Collapsible key={key} className="border-b pb-2">
-                      <div className="flex items-center justify-between py-2">
-                        <span className="font-medium capitalize">{key}:</span>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="ghost" size="sm" className="gap-2">
-                            <Badge variant="secondary">{value.length} items</Badge>
-                            <ChevronDown className="h-4 w-4" />
-                          </Button>
-                        </CollapsibleTrigger>
+                          <CollapsibleContent className="pt-2">
+                            {permissions.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {permissions.map((permission: any, idx: number) => (
+                                  <Badge key={idx} variant="outline" className="text-xs">
+                                    {String(permission)}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-gray-500 text-sm">Sin permisos asignados</span>
+                            )}
+                          </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    }
+
+                    return (
+                      <div key={detail.key} className="flex justify-between gap-4 py-2 border-b">
+                        <span className="font-medium shrink-0">{detail.label}:</span>
+                        <span className="text-gray-600 text-right break-words max-w-md">{String(detail.value)}</span>
                       </div>
-                      <CollapsibleContent className="pt-2">
-                        <div className="flex flex-wrap gap-2">
-                          {value.map((item, idx) => (
-                            <Badge key={idx} variant="outline" className="text-xs">
-                              {String(item)}
-                            </Badge>
-                          ))}
+                    );
+                  })
+                : selectedItem && Object.entries(selectedItem).map(([key, value]) => {
+                    // Manejo especial para permisos
+                    if (key.toLowerCase() === 'permissions') {
+                      let permissions = [];
+                      
+                      // Si es array, usar directamente
+                      if (Array.isArray(value)) {
+                        permissions = value;
+                      } 
+                      // Si es string, dividir por comas
+                      else if (typeof value === 'string') {
+                        permissions = value.split(',').map(p => p.trim()).filter(p => p);
+                      }
+                      
+                      if (permissions.length > 0) {
+                        return (
+                          <Collapsible key={key} className="border-b pb-2">
+                            <div className="flex items-center justify-between py-2">
+                              <span className="font-medium capitalize">{key}:</span>
+                              <CollapsibleTrigger asChild>
+                                <Button variant="ghost" size="sm" className="gap-2">
+                                  <Badge variant="secondary">{permissions.length} permisos</Badge>
+                                  <ChevronDown className="h-4 w-4" />
+                                </Button>
+                              </CollapsibleTrigger>
+                            </div>
+                            <CollapsibleContent className="pt-2">
+                              <div className="flex flex-wrap gap-2">
+                                {permissions.map((permission, idx) => (
+                                  <Badge key={idx} variant="outline" className="text-xs">
+                                    {permission}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </CollapsibleContent>
+                          </Collapsible>
+                        );
+                      }
+                    }
+                    
+                    // Manejo especial para otros arrays (modules, views, etc.)
+                    if (Array.isArray(value) && value.length > 0 && (key.toLowerCase() === 'modules' || key.toLowerCase() === 'views')) {
+                      return (
+                        <Collapsible key={key} className="border-b pb-2">
+                          <div className="flex items-center justify-between py-2">
+                            <span className="font-medium capitalize">{key}:</span>
+                            <CollapsibleTrigger asChild>
+                              <Button variant="ghost" size="sm" className="gap-2">
+                                <Badge variant="secondary">{value.length} items</Badge>
+                                <ChevronDown className="h-4 w-4" />
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                          <CollapsibleContent className="pt-2">
+                            <div className="flex flex-wrap gap-2">
+                              {value.map((item, idx) => (
+                                <Badge key={idx} variant="outline" className="text-xs">
+                                  {String(item)}
+                                </Badge>
+                              ))}
+                            </div>
+                          </CollapsibleContent>
+                        </Collapsible>
+                      );
+                    }
+                    
+                    // Renderizado normal para otros campos con word-wrap
+                    return (
+                      <div key={key} className="flex justify-between gap-4 py-2 border-b">
+                        <span className="font-medium capitalize shrink-0">{key}:</span>
+                        <span className="text-gray-600 text-right break-words max-w-md">{String(value)}</span>
+                      </div>
+                    );
+                  })}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Permisos Modal */}
+        <Dialog open={isPermisosDialogOpen} onOpenChange={setIsPermisosDialogOpen}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>Permisos de rol: {permisoDialogRole?.nombre || permisoDialogRole?.name || 'Rol'}</DialogTitle>
+              <DialogDescription>
+                Lista completa de permisos asignados a este rol.
+              </DialogDescription>
+            </DialogHeader>
+
+            {/* Buscador */}
+            <div className="relative mb-4">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+              <Input
+                placeholder="Buscar permisos por nombre..."
+                value={permissionsSearchTerm}
+                onChange={(e) => setPermissionsSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+
+            {/* Lista de permisos */}
+            <div className="overflow-y-auto max-h-96">
+              {permisoDialogRole && Array.isArray(permisoDialogRole.permissions) && permisoDialogRole.permissions.length > 0 ? (
+                (() => {
+                  const filteredPermissions = permisoDialogRole.permissions
+                    .filter((perm: string) =>
+                      perm.toLowerCase().includes(permissionsSearchTerm.toLowerCase())
+                    )
+                    .sort((a: string, b: string) => a.localeCompare(b));
+
+                  return filteredPermissions.length > 0 ? (
+                    <div className="space-y-2">
+                      {filteredPermissions.map((perm: string, index: number) => (
+                        <div key={perm} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                          <div className="flex items-center space-x-3">
+                            <span className="text-sm font-medium text-gray-600 w-8">{index + 1}.</span>
+                            <span className="text-sm text-gray-900">{perm}</span>
+                          </div>
+                          <Badge variant="outline" className="text-xs">
+                            {perm.split('.')[0]}
+                          </Badge>
                         </div>
-                      </CollapsibleContent>
-                    </Collapsible>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8">
+                      <Search className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                      <p className="text-gray-500">Este permiso no ha sido encontrado</p>
+                      <p className="text-sm text-gray-400 mt-1">
+                        Intenta con otro término de búsqueda
+                      </p>
+                    </div>
                   );
-                }
-                
-                // Renderizado normal para otros campos con word-wrap
-                return (
-                  <div key={key} className="flex justify-between gap-4 py-2 border-b">
-                    <span className="font-medium capitalize shrink-0">{key}:</span>
-                    <span className="text-gray-600 text-right break-words max-w-md">{String(value)}</span>
-                  </div>
-                );
-              })}
+                })()
+              ) : (
+                <div className="text-center py-8">
+                  <Shield className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                  <p className="text-gray-500">Este rol no tiene permisos asignados</p>
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Role Dialog */}
+        <Dialog open={isDeleteRoleDialogOpen} onOpenChange={setIsDeleteRoleDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center space-x-2">
+                <AlertTriangle className="w-5 h-5 text-red-600" />
+                <span>
+                  {(roleToDelete?.userCount || 0) > 0
+                    ? 'Eliminar Rol con Usuarios Asignados'
+                    : 'Confirmar Eliminación de Rol'}
+                </span>
+              </DialogTitle>
+              <DialogDescription>
+                {(roleToDelete?.userCount || 0) > 0 ? (
+                  <>
+                    El rol "{roleToDelete?.nombre || roleToDelete?.name}" tiene {roleToDelete?.userCount || 0} usuario(s) asignado(s).
+                    Debe reasignar estos usuarios a otro rol antes de eliminarlo.
+                  </>
+                ) : (
+                  <>
+                    ¿Estás seguro de que deseas eliminar el rol "{roleToDelete?.nombre || roleToDelete?.name}"?
+                    Esta acción no se puede deshacer.
+                  </>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              {(roleToDelete?.userCount || 0) > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="reassignRole">Seleccionar rol para reasignar usuarios</Label>
+                  <Select value={selectedReassignRole} onValueChange={setSelectedReassignRole}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Seleccione un rol..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {localRoles
+                        .filter(role => role.id_roles !== roleToDelete?.id_roles)
+                        .map(role => (
+                          <SelectItem key={role.id_roles} value={role.id_roles.toString()}>
+                            {role.nombre || role.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="flex space-x-2 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsDeleteRoleDialogOpen(false);
+                    setRoleToDelete(null);
+                    setSelectedReassignRole('');
+                  }}
+                  className="flex-1"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleConfirmDeleteRole}
+                  disabled={
+                    (roleToDelete?.userCount || 0) > 0 && !selectedReassignRole
+                  }
+                  className="flex-1 bg-red-600 hover:bg-red-700"
+                >
+                  {(roleToDelete?.userCount || 0) > 0
+                    ? 'Eliminar y Reasignar'
+                    : 'Eliminar'}
+                </Button>
+              </div>
             </div>
           </DialogContent>
         </Dialog>

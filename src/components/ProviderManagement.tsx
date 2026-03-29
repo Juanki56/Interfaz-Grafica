@@ -6,7 +6,6 @@ import {
   Edit,
   Trash2,
   X,
-  Filter,
   ChevronLeft,
   ChevronRight,
   Building2,
@@ -15,7 +14,6 @@ import {
   MapPin,
   FileText,
   AlertTriangle,
-  Check,
   Power
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
@@ -68,6 +66,14 @@ export interface ProviderType extends TipoProveedor {}
 
 type ViewMode = 'list' | 'create' | 'edit' | 'detail';
 
+const PROVIDERS_CACHE_TTL_MS = 30_000;
+let providersCache: Provider[] | null = null;
+let providersCacheAt = 0;
+let providerTypesCache: ProviderType[] | null = null;
+let providerTypesCacheAt = 0;
+
+const isCacheFresh = (cacheAt: number) => Date.now() - cacheAt < PROVIDERS_CACHE_TTL_MS;
+
 // ===========================
 // COMPONENTE PRINCIPAL
 // ===========================
@@ -100,30 +106,53 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
 
   // Cargar datos del backend
   useEffect(() => {
-    loadProviders();
-    loadProviderTypes();
+    const initData = async () => {
+      if (providersCache && isCacheFresh(providersCacheAt)) {
+        setProviders(providersCache);
+        setIsLoading(false);
+        void loadProviders(true);
+      } else {
+        await loadProviders();
+      }
+
+      if (providerTypesCache && isCacheFresh(providerTypesCacheAt)) {
+        setProviderTypes(providerTypesCache);
+        void loadProviderTypes(true);
+      } else {
+        void loadProviderTypes();
+      }
+    };
+
+    void initData();
   }, []);
 
-  const loadProviders = async () => {
+  const loadProviders = async (silent: boolean = false) => {
     try {
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       const data = await proveedoresAPI.getAll();
       console.log('✅ Proveedores cargados:', data);
       setProviders(data);
+      providersCache = data;
+      providersCacheAt = Date.now();
     } catch (error) {
       console.error('❌ Error cargando proveedores:', error);
       toast.error('Error al cargar proveedores');
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
-  const loadProviderTypes = async () => {
+  const loadProviderTypes = async (silent: boolean = false) => {
     try {
       const data = await tiposProveedorAPI.getAll();
       setProviderTypes(data);
+      providerTypesCache = data;
+      providerTypesCacheAt = Date.now();
     } catch (error) {
       console.error('❌ Error cargando tipos de proveedor:', error);
+      if (!silent) {
+        toast.error('Error al cargar tipos de proveedor');
+      }
     }
   };
 

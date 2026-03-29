@@ -11,7 +11,6 @@ import {
   Tag,
   FileText,
   AlertTriangle,
-  Check,
   Power
 } from 'lucide-react';
 import { tiposProveedorAPI, TipoProveedor } from '../services/api';
@@ -60,6 +59,11 @@ export interface ProviderType extends TipoProveedor {
 
 type ViewMode = 'list' | 'create' | 'edit' | 'detail';
 
+const PROVIDER_TYPES_CACHE_TTL_MS = 30_000;
+let providerTypesListCache: ProviderType[] | null = null;
+let providerTypesListCacheAt = 0;
+const isProviderTypesCacheFresh = (cacheAt: number) => Date.now() - cacheAt < PROVIDER_TYPES_CACHE_TTL_MS;
+
 // ===========================
 // COMPONENTE PRINCIPAL
 // ===========================
@@ -90,20 +94,30 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
 
   // Cargar datos del backend
   useEffect(() => {
-    loadProviderTypes();
+    if (providerTypesListCache && isProviderTypesCacheFresh(providerTypesListCacheAt)) {
+      setProviderTypes(providerTypesListCache);
+      void loadProviderTypes(true);
+      return;
+    }
+
+    void loadProviderTypes();
   }, []);
 
-  const loadProviderTypes = async () => {
+  const loadProviderTypes = async (silent: boolean = false) => {
     try {
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       const data = await tiposProveedorAPI.getAll();
       console.log('✅ Tipos de proveedor cargados:', data);
       setProviderTypes(data);
+      providerTypesListCache = data;
+      providerTypesListCacheAt = Date.now();
     } catch (error) {
       console.error('❌ Error cargando tipos de proveedor:', error);
-      toast.error('Error al cargar tipos de proveedor');
+      if (!silent) {
+        toast.error('Error al cargar tipos de proveedor');
+      }
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
@@ -204,6 +218,7 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
           <ProviderTypeListView
             key="list"
             providerTypes={providerTypes}
+            isLoading={isLoading}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             filterStatus={filterStatus}
@@ -297,6 +312,7 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
 
 interface ProviderTypeListViewProps {
   providerTypes: ProviderType[];
+  isLoading: boolean;
   searchTerm: string;
   setSearchTerm: (value: string) => void;
   filterStatus: string;
@@ -314,6 +330,7 @@ interface ProviderTypeListViewProps {
 
 function ProviderTypeListView({
   providerTypes,
+  isLoading,
   searchTerm,
   setSearchTerm,
   filterStatus,
@@ -415,9 +432,12 @@ function ProviderTypeListView({
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span className="text-green-800">Listado de Tipos de Proveedores</span>
-            <Badge variant="secondary" className="bg-green-100 text-green-700">
-              {filteredTypes.length} {filteredTypes.length === 1 ? 'tipo' : 'tipos'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {isLoading && <span className="text-xs text-gray-500">Actualizando...</span>}
+              <Badge variant="secondary" className="bg-green-100 text-green-700">
+                {filteredTypes.length} {filteredTypes.length === 1 ? 'tipo' : 'tipos'}
+              </Badge>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -461,13 +481,13 @@ function ProviderTypeListView({
                       <TableCell>
                         {isAdmin && (
                           <Switch
-                            checked={type.estado}
+                            checked={!!type.estado}
                             onCheckedChange={() => onToggleStatus(type.id_tipo)}
                             className="data-[state=checked]:bg-green-600"
                           />
                         )}
                         {!isAdmin && (
-                          <Badge className={getStatusBadge(type.estado)}>
+                          <Badge className={getStatusBadge(!!type.estado)}>
                             {type.estado ? 'Activo' : 'Inactivo'}
                           </Badge>
                         )}

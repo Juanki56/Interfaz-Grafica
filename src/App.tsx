@@ -24,6 +24,109 @@ import { ServicesProvider } from './hooks/useServices';
 import { buildApiUrl, getAuthHeaders, API_CONFIG } from './config/api.config';
 import { decodeJWT, debugToken } from './utils/jwtDecoder';
 
+const ROLE_MAPPING: Record<string, 'admin' | 'advisor' | 'guide' | 'client'> = {
+  administrador: 'admin',
+  admin: 'admin',
+  asesor: 'advisor',
+  advisor: 'advisor',
+  'guía': 'guide',
+  guia: 'guide',
+  guide: 'guide',
+  cliente: 'client',
+  client: 'client'
+};
+
+const FORCED_ADMIN_EMAIL = 'admin@occitours.com';
+
+// Duración de sesión en minutos (extensible para mantener sesión activa más tiempo)
+const SESSION_TIMEOUT_MINUTES = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || 120);
+
+const setSessionExpiry = (minutes: number) => {
+  const expiry = Date.now() + minutes * 60 * 1000;
+  localStorage.setItem('session_expiry', expiry.toString());
+};
+
+const getSessionExpiry = () => {
+  const expiryValue = Number(localStorage.getItem('session_expiry'));
+  return Number.isFinite(expiryValue) && expiryValue > 0 ? expiryValue : null;
+};
+
+const isSessionExpired = () => {
+  const expiry = getSessionExpiry();
+  if (!expiry) return true;
+  return Date.now() > expiry;
+};
+
+const enforceForcedAdminRole = (
+  emailValue: unknown,
+  currentRole: 'admin' | 'advisor' | 'guide' | 'client'
+): 'admin' | 'advisor' | 'guide' | 'client' => {
+  const email = String(emailValue || '').toLowerCase().trim();
+  return email === FORCED_ADMIN_EMAIL ? 'admin' : currentRole;
+};
+
+const normalizeRole = (roleValue?: unknown): 'admin' | 'advisor' | 'guide' | 'client' => {
+  const normalized = String(roleValue || '').toLowerCase().trim();
+  return ROLE_MAPPING[normalized] || 'client';
+};
+
+const resolveRoleFromSources = (...sources: unknown[]): 'admin' | 'advisor' | 'guide' | 'client' => {
+  for (const source of sources) {
+    if (!source) continue;
+    const normalized = normalizeRole(source);
+    if (normalized !== 'client' || ['cliente', 'client'].includes(String(source).toLowerCase().trim())) {
+      return normalized;
+    }
+  }
+  return 'client';
+};
+
+const getRoleNameFromRoleId = async (roleId: unknown): Promise<string | null> => {
+  const roleIdNumber = Number(roleId);
+  if (!Number.isFinite(roleIdNumber) || roleIdNumber <= 0) return null;
+
+  try {
+    const response = await fetch(buildApiUrl(API_CONFIG.ROLES.GET_ALL), {
+      method: 'GET',
+      headers: getAuthHeaders()
+    });
+
+    if (!response.ok) return null;
+    const rolesData = await response.json();
+    const roles = Array.isArray(rolesData) ? rolesData : (rolesData?.data || []);
+    const roleFound = roles.find((role: any) => Number(role?.id_roles) === roleIdNumber);
+    return roleFound?.nombre || null;
+  } catch {
+    return null;
+  }
+};
+
+const resolveRoleFromBackend = async (
+  roleSources: unknown[],
+  roleIdSources: unknown[]
+): Promise<'admin' | 'advisor' | 'guide' | 'client'> => {
+  const resolvedByName = resolveRoleFromSources(...roleSources);
+  const explicitClient = roleSources.some((source) => {
+    const value = String(source || '').toLowerCase().trim();
+    return value === 'cliente' || value === 'client';
+  });
+
+  if (resolvedByName !== 'client' || explicitClient) {
+    return resolvedByName;
+  }
+
+  for (const roleId of roleIdSources) {
+    const roleName = await getRoleNameFromRoleId(roleId);
+    if (!roleName) continue;
+    const resolvedById = normalizeRole(roleName);
+    if (resolvedById !== 'client') {
+      return resolvedById;
+    }
+  }
+
+  return resolvedByName;
+};
+
 // Mock authentication system (deprecated - now using real backend)
 const mockAuth = {
   users: {
@@ -213,6 +316,13 @@ export default function App() {
     checkSession();
   }, []);
 
+  useEffect(() => {
+    if (!user?.email) return;
+    if (user.email.toLowerCase().trim() === FORCED_ADMIN_EMAIL && user.role !== 'admin') {
+      setUser(prev => (prev ? { ...prev, role: 'admin' } : prev));
+    }
+  }, [user]);
+
   const checkSession = async () => {
     try {
       const token = localStorage.getItem('token');
@@ -225,27 +335,43 @@ export default function App() {
 
         if (response.ok) {
           const data = await response.json();
+
+          if (isSessionExpired()) {
+            console.warn('Sesión expiró en el cliente, limpiando token.');
+            localStorage.removeItem('token');
+            localStorage.removeItem('session_expiry');
+            setUser(null);
+            setLoading(false);
+            return;
+          }
+
+          const tokenPayload = decodeJWT(token);
           // El backend retorna { success: true, perfil: {...} }
           if (data.success && data.perfil) {
             const nombreCompleto = data.perfil.apellido 
               ? `${data.perfil.nombre} ${data.perfil.apellido}`
               : data.perfil.nombre || '';
 
-            // Mapear roles del backend (español) al frontend (inglés)
-            const roleMapping: Record<string, string> = {
-              'Administrador': 'admin',
-              'Asesor': 'advisor',
-              'Guía': 'guide',
-              'Cliente': 'client',
-              'administrador': 'admin',
-              'asesor': 'advisor',
-              'guía': 'guide',
-              'guia': 'guide',
-              'cliente': 'client'
-            };
+            const backendRoleSource =
+              data.perfil.rol_nombre ||
+              data.perfil.rol ||
+              data.perfil.role ||
+              tokenPayload?.rol_nombre ||
+              tokenPayload?.rol ||
+              tokenPayload?.role ||
+              data.perfil.tipo_usuario;
 
-            const backendRole = data.perfil.rol_nombre || 'Cliente';
-            const frontendRole = roleMapping[backendRole] || 'client';
+            const backendRoleIdSources = [
+              data.perfil.id_roles,
+              data.perfil.id_rol,
+              data.perfil.rol_id,
+              tokenPayload?.id_roles,
+              tokenPayload?.id_rol,
+              tokenPayload?.rol_id
+            ];
+
+            const frontendRoleResolved = await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources);
+            const frontendRole = enforceForcedAdminRole(data.perfil.correo || tokenPayload?.correo || tokenPayload?.email, frontendRoleResolved);
 
             const mappedUser = {
               id: data.perfil.id_cliente?.toString() || data.perfil.id_empleado?.toString() || data.perfil.id_usuarios?.toString() || '',
@@ -253,11 +379,13 @@ export default function App() {
               email: data.perfil.correo || '',
               role: frontendRole, // Rol mapeado a inglés para el frontend
               phone: data.perfil.telefono || '',
-              status: data.perfil.estado ? 'Activo' : 'Inactivo',
-              tipo_usuario: data.perfil.tipo_usuario || 'cliente'
+              status: data.perfil.estado ? 'Activo' : 'Inactivo'
             };
 
-            console.log('🔄 Sesión restaurada - Rol backend:', backendRole, '→ Rol frontend:', frontendRole);
+            // Extender el timeout de sesión con cada carga de perfil válida
+            setSessionExpiry(SESSION_TIMEOUT_MINUTES);
+
+            console.log('🔄 Sesión restaurada - Rol fuente backend:', backendRoleSource, '→ Rol frontend:', frontendRole);
             setUser(mappedUser);
           }
         } else {
@@ -299,50 +427,118 @@ export default function App() {
 
       if (!response.ok) {
         console.error('❌ Login failed:', data);
+        localStorage.removeItem('token');
+        localStorage.removeItem('session_expiry');
+        setUser(null);
         return false;
       }
 
       // Guardar token
       localStorage.setItem('token', data.token);
+      setSessionExpiry(SESSION_TIMEOUT_MINUTES);
 
       // Debug: Mostrar contenido del token
       console.log('🔐 Token guardado, decodificando...');
       debugToken();
 
-      // Mapear los datos del usuario del backend al formato del frontend
-      const nombreCompleto = data.usuario?.apellido 
-        ? `${data.usuario.nombre} ${data.usuario.apellido}`
-        : data.usuario?.nombre || '';
+      const tokenPayload = decodeJWT(data.token);
 
-      // Mapear roles del backend (español) al frontend (inglés)
-      const roleMapping: Record<string, string> = {
-        'Administrador': 'admin',
-        'Asesor': 'advisor',
-        'Guía': 'guide',
-        'Cliente': 'client',
-        // También aceptar roles en minúsculas
-        'administrador': 'admin',
-        'asesor': 'advisor',
-        'guía': 'guide',
-        'guia': 'guide',
-        'cliente': 'client'
-      };
+      let mappedUser;
+      let frontendRole: 'admin' | 'advisor' | 'guide' | 'client' = 'client';
 
-      const backendRole = data.usuario?.rol || 'Cliente';
-      const frontendRole = roleMapping[backendRole] || 'client';
+      try {
+        const profileResponse = await fetch(buildApiUrl(API_CONFIG.AUTH.PROFILE), {
+          method: 'GET',
+          headers: getAuthHeaders()
+        });
 
-      const mappedUser = {
-        id: data.usuario?.id?.toString() || '',
-        name: nombreCompleto,
-        email: data.usuario?.correo || email,
-        role: frontendRole, // Rol mapeado a inglés para el frontend
-        phone: data.usuario?.telefono || '',
-        status: data.usuario?.estado || 'Activo',
-        tipo_usuario: data.usuario?.tipo_usuario || 'cliente'
-      };
+        if (profileResponse.ok) {
+          const profileData = await profileResponse.json();
+          if (profileData.success && profileData.perfil) {
+            const nombreCompletoPerfil = profileData.perfil.apellido
+              ? `${profileData.perfil.nombre} ${profileData.perfil.apellido}`
+              : profileData.perfil.nombre || '';
+
+            const backendRoleSource =
+              profileData.perfil.rol_nombre ||
+              profileData.perfil.rol ||
+              profileData.perfil.role ||
+              tokenPayload?.rol_nombre ||
+              tokenPayload?.rol ||
+              tokenPayload?.role ||
+              profileData.perfil.tipo_usuario;
+
+            const backendRoleIdSources = [
+              profileData.perfil.id_roles,
+              profileData.perfil.id_rol,
+              profileData.perfil.rol_id,
+              tokenPayload?.id_roles,
+              tokenPayload?.id_rol,
+              tokenPayload?.rol_id
+            ];
+
+            frontendRole = enforceForcedAdminRole(
+              profileData.perfil.correo || tokenPayload?.correo || tokenPayload?.email || email,
+              await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources)
+            );
+
+            mappedUser = {
+              id: profileData.perfil.id_cliente?.toString() || profileData.perfil.id_empleado?.toString() || profileData.perfil.id_usuarios?.toString() || '',
+              name: nombreCompletoPerfil,
+              email: profileData.perfil.correo || email,
+              role: frontendRole,
+              phone: profileData.perfil.telefono || '',
+              status: profileData.perfil.estado ? 'Activo' : 'Inactivo'
+            };
+
+            console.log('🔄 Rol desde /profile (BD):', backendRoleSource, '→', frontendRole);
+          }
+        }
+      } catch (profileError) {
+        console.warn('⚠️ No se pudo hidratar perfil desde /profile, usando fallback de /login', profileError);
+      }
+
+      if (!mappedUser) {
+        const nombreCompleto = data.usuario?.apellido
+          ? `${data.usuario.nombre} ${data.usuario.apellido}`
+          : data.usuario?.nombre || '';
+
+        const backendRoleSource =
+          data.usuario?.rol_nombre ||
+          data.usuario?.rol ||
+          data.usuario?.role ||
+          tokenPayload?.rol_nombre ||
+          tokenPayload?.rol ||
+          tokenPayload?.role ||
+          data.usuario?.tipo_usuario;
+
+        const backendRoleIdSources = [
+          data.usuario?.id_roles,
+          data.usuario?.id_rol,
+          data.usuario?.rol_id,
+          tokenPayload?.id_roles,
+          tokenPayload?.id_rol,
+          tokenPayload?.rol_id
+        ];
+
+        frontendRole = enforceForcedAdminRole(
+          data.usuario?.correo || data.usuario?.email || tokenPayload?.correo || tokenPayload?.email || email,
+          await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources)
+        );
+
+        mappedUser = {
+          id: data.usuario?.id?.toString() || '',
+          name: nombreCompleto,
+          email: data.usuario?.correo || data.usuario?.email || email,
+          role: frontendRole,
+          phone: data.usuario?.telefono || '',
+          status: data.usuario?.estado || 'Activo'
+        };
+
+        console.log('🔄 Rol fallback desde /login:', backendRoleSource, '→', frontendRole);
+      }
 
       console.log('👤 Usuario mapeado:', mappedUser);
-      console.log('🔄 Rol backend:', backendRole, '→ Rol frontend:', frontendRole);
 
       // Guardar usuario
       setUser(mappedUser);
@@ -361,6 +557,8 @@ export default function App() {
 
     } catch (error) {
       console.error('Error login:', error);
+      localStorage.removeItem('token');
+      setUser(null);
       return false;
     }
   };
@@ -398,6 +596,7 @@ export default function App() {
     try {
       // Limpiar token y sesión
       localStorage.removeItem('token');
+      localStorage.removeItem('session_expiry');
       setUser(null);
       setCurrentView('home');
       setShowLogin(false);
@@ -406,6 +605,20 @@ export default function App() {
       console.error('Logout error:', error);
     }
   };
+
+  // Auto logout si expira sesión local
+  useEffect(() => {
+    if (!user) return;
+
+    const intervalId = setInterval(() => {
+      if (isSessionExpired()) {
+        console.warn('Sesión expirada localmente. Cerrando sesión.');
+        logout();
+      }
+    }, 30 * 1000); // cada 30 segundos
+
+    return () => clearInterval(intervalId);
+  }, [user]);
 
   const handleViewChange = (view: string, itemId?: string) => {
     setCurrentView(view);
@@ -513,22 +726,6 @@ export default function App() {
   }
 
   const renderDashboard = () => {
-    // Normalizar rol (español a inglés)
-    const normalizeRole = (role: string): string => {
-      const roleMap: { [key: string]: string } = {
-        'administrador': 'admin',
-        'admin': 'admin',
-        'asesor': 'advisor',
-        'advisor': 'advisor',
-        'guia': 'guide',
-        'guía': 'guide',
-        'guide': 'guide',
-        'cliente': 'client',
-        'client': 'client'
-      };
-      return roleMap[role?.toLowerCase()] || role;
-    };
-
     const normalizedRole = normalizeRole(user?.role || '');
     console.log('🎭 Rol del usuario:', { original: user?.role, normalizado: normalizedRole, usuario: user });
 

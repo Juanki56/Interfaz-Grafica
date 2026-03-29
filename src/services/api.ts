@@ -123,6 +123,13 @@ export interface Rol {
   fecha_creacion?: string;
 }
 
+export interface Permiso {
+  id_permisos: number;
+  nombre: string;
+  descripcion?: string | null;
+  fecha_creacion?: string | null;
+}
+
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================
@@ -507,6 +514,10 @@ export const rolesAPI = {
     return response.data;
   },
 
+  getByIdWithPermisos: async (id: number) => {
+    return fetchAPI<any>(`/api/roles/${id}`);
+  },
+
   create: async (rolData: Partial<Rol>) => {
     return fetchAPI('/api/roles', {
       method: 'POST',
@@ -525,6 +536,26 @@ export const rolesAPI = {
     return fetchAPI(`/api/roles/${id}`, {
       method: 'DELETE',
     });
+  },
+
+  asignarPermiso: async (idRol: number, idPermiso: number) => {
+    return fetchAPI(`/api/roles/${idRol}/permisos`, {
+      method: 'POST',
+      body: JSON.stringify({ id_permiso: idPermiso }),
+    });
+  },
+
+  removerPermiso: async (idRol: number, idPermiso: number) => {
+    return fetchAPI(`/api/roles/${idRol}/permisos/${idPermiso}`, {
+      method: 'DELETE',
+    });
+  },
+};
+
+export const permisosAPI = {
+  getAll: async (): Promise<Permiso[]> => {
+    const response = await fetchAPI<{ data: Permiso[] }>('/api/permisos');
+    return response.data || [];
   },
 };
 

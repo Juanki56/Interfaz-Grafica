@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key, Loader2 } from 'lucide-react';
-import { rolesAPI, type Rol } from '../services/api';
+import { rolesAPI, usersAPI, type Rol } from '../services/api';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -80,6 +80,15 @@ export function RoleManagement() {
     descripcion: '',
     permissions: [] as string[]
   });
+  const [isReassignDialogOpen, setIsReassignDialogOpen] = useState(false);
+  const [rolePendingDelete, setRolePendingDelete] = useState<Role | null>(null);
+  const [reassignRoleId, setReassignRoleId] = useState<number | null>(null);
+
+  const getRoleDescriptionText = (descripcion?: string | null) => {
+    return descripcion && descripcion.trim()
+      ? descripcion
+      : 'Este rol no tiene descripcion';
+  };
 
   // Cargar roles desde la base de datos
   useEffect(() => {
@@ -136,6 +145,11 @@ export function RoleManagement() {
       return;
     }
 
+    if (newRole.permissions.length === 0) {
+      toast.error('Debe asignar al menos un permiso al rol');
+      return;
+    }
+
     try {
       await rolesAPI.create({
         nombre: newRole.nombre,
@@ -155,6 +169,11 @@ export function RoleManagement() {
   const handleEditRole = async () => {
     if (!selectedRole || !newRole.nombre.trim()) {
       toast.error('Datos del rol incompletos');
+      return;
+    }
+
+    if (newRole.permissions.length === 0) {
+      toast.error('Debe asignar al menos un permiso al rol');
       return;
     }
 
@@ -183,7 +202,9 @@ export function RoleManagement() {
     }
 
     if ((role?.userCount ?? 0) > 0) {
-      toast.error('No se puede eliminar un rol que tiene usuarios asignados');
+      setRolePendingDelete(role);
+      setReassignRoleId(null);
+      setIsReassignDialogOpen(true);
       return;
     }
 
@@ -194,6 +215,49 @@ export function RoleManagement() {
     } catch (error) {
       console.error('Error al eliminar rol:', error);
       toast.error('Error al eliminar el rol');
+    }
+  };
+
+  const handleConfirmDeleteRole = async () => {
+    if (!rolePendingDelete) return;
+
+    if (!reassignRoleId) {
+      toast.error('Seleccione un rol para reasignar los usuarios antes de eliminar');
+      return;
+    }
+
+    const roleToKeep = roles.find(r => r.id_roles === reassignRoleId);
+    if (!roleToKeep) {
+      toast.error('Rol de reasignación inválido');
+      return;
+    }
+
+    try {
+      // Reasignar localmente usuarios (si hubiera lista de usuarios cargada)
+      setUsers(prev => prev.map(user =>
+        user.role === (rolePendingDelete?.nombre || '')
+          ? { ...user, role: roleToKeep.nombre }
+          : user
+      ));
+
+      // Intentar backend reasignación por usuario (si endpoint disponible)
+      const usersToReassign = users.filter(user => user.role === (rolePendingDelete?.nombre || ''));
+      await Promise.all(usersToReassign.map(user =>
+        // API real puede tener ruta específica para reasignar
+        roleToKeep && user.email
+          ? usersAPI.updateRole(user.email, roleToKeep.nombre)
+          : Promise.resolve()
+      ));
+
+      await rolesAPI.delete(rolePendingDelete.id_roles);
+      toast.success('Rol eliminado y usuarios reasignados correctamente');
+      setIsReassignDialogOpen(false);
+      setRolePendingDelete(null);
+      setReassignRoleId(null);
+      await cargarRoles();
+    } catch (error: any) {
+      console.error('Error al reasignar y eliminar rol:', error);
+      toast.error(error?.message || 'Error al eliminar y reasignar el rol');
     }
   };
 
@@ -240,6 +304,20 @@ export function RoleManagement() {
       permissions: prev.permissions.includes(permissionId)
         ? prev.permissions.filter(p => p !== permissionId)
         : [...prev.permissions, permissionId]
+    }));
+  };
+
+  const selectAllPermissions = () => {
+    setNewRole(prev => ({
+      ...prev,
+      permissions: permissions.map(permission => permission.id)
+    }));
+  };
+
+  const clearAllPermissions = () => {
+    setNewRole(prev => ({
+      ...prev,
+      permissions: []
     }));
   };
 
@@ -391,7 +469,7 @@ export function RoleManagement() {
                           </div>
                         </TableCell>
                         <TableCell className="text-gray-600 max-w-xs">
-                          <span className="truncate">{role.descripcion}</span>
+                          <span className="truncate">{getRoleDescriptionText(role.descripcion)}</span>
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary">{role.userCount || 0} usuarios</Badge>
@@ -637,6 +715,14 @@ export function RoleManagement() {
 
             <div className="space-y-3">
               <Label>Permisos</Label>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={selectAllPermissions}>
+                  Seleccionar todos
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={clearAllPermissions}>
+                  Deseleccionar todos
+                </Button>
+              </div>
               {Object.entries(groupedPermissions).map(([category, perms]) => (
                 <div key={category} className="space-y-2">
                   <h4 className="font-medium text-sm text-gray-700">{category}</h4>
@@ -716,6 +802,14 @@ export function RoleManagement() {
 
             <div className="space-y-3">
               <Label>Permisos</Label>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={selectAllPermissions}>
+                  Seleccionar todos
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={clearAllPermissions}>
+                  Deseleccionar todos
+                </Button>
+              </div>
               {Object.entries(groupedPermissions).map(([category, perms]) => (
                 <div key={category} className="space-y-2">
                   <h4 className="font-medium text-sm text-gray-700">{category}</h4>
@@ -808,7 +902,7 @@ export function RoleManagement() {
                     >
                       <div className="flex items-center space-x-2">
                         <Badge className={role.color}>{role.nombre}</Badge>
-                        <span className="text-sm text-gray-500">- {role.descripcion || 'Sin descripción'}</span>
+                        <span className="text-sm text-gray-500">- {getRoleDescriptionText(role.descripcion)}</span>
                       </div>
                     </SelectItem>
                   ))}
@@ -824,6 +918,49 @@ export function RoleManagement() {
                 className="flex-1"
               >
                 Cancelar
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Delete Role Reassign Modal */}
+      <Dialog open={isReassignDialogOpen} onOpenChange={setIsReassignDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center space-x-2">
+              <AlertTriangle className="w-5 h-5 text-red-600" />
+              <span>Rol tiene usuarios asignados</span>
+            </DialogTitle>
+            <DialogDescription>
+              El rol "{rolePendingDelete?.nombre}" tiene {rolePendingDelete?.userCount || 0} usuario(s). Selecciona un rol para reasignarlos antes de eliminar.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="reassignRole">Rol para reasignar usuarios</Label>
+              <Select value={reassignRoleId ? reassignRoleId.toString() : ''} onValueChange={(value) => setReassignRoleId(Number(value))}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Elegir rol" />
+                </SelectTrigger>
+                <SelectContent>
+                  {roles
+                    .filter(role => role.id_roles !== rolePendingDelete?.id_roles)
+                    .map((role) => (
+                      <SelectItem key={role.id_roles} value={role.id_roles.toString()}>
+                        {role.nombre}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex space-x-2 pt-4">
+              <Button type="button" variant="outline" onClick={() => { setIsReassignDialogOpen(false); setRolePendingDelete(null); setReassignRoleId(null); }} className="flex-1">
+                Cancelar
+              </Button>
+              <Button type="button" className="flex-1 bg-red-600 hover:bg-red-700" onClick={handleConfirmDeleteRole}>
+                Reasignar y eliminar
               </Button>
             </div>
           </div>
