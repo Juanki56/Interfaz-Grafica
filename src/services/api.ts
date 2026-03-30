@@ -130,6 +130,18 @@ export interface Permiso {
   fecha_creacion?: string | null;
 }
 
+export interface PagoProveedor {
+  id_pago_proveedor: number;
+  id_proveedores: number;
+  observaciones: string;
+  monto: number;
+  fecha_pago: string;
+  metodo_pago?: string | null;
+  numero_transaccion?: string | null;
+  comprobante_pago?: string | null;
+  estado?: string | null;
+}
+
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================
@@ -724,4 +736,33 @@ export const serviciosAPI = {
     const response = await fetchAPI<{ data: Servicio[] }>(`/api/servicios/buscar?q=${termino}`);
     return response.data || [];
   },
+};
+
+
+export const pagosProveedoresAPI = {
+  getAll: async (): Promise<PagoProveedor[]> => {
+    const response = await fetchAPI<{ data: PagoProveedor[] }>('/api/pago-proveedores');
+    return response.data || [];
+  },
+  getById: async (id: number): Promise<PagoProveedor> => {
+    const response = await fetchAPI<{ data: PagoProveedor }>(`/api/pago-proveedores/${id}`);
+    return response.data;
+  },
+  create: async (pago: Omit<PagoProveedor, 'id_pago_proveedor'>) => {
+    return fetchAPI('/api/pago-proveedores', {
+      method: 'POST',
+      body: JSON.stringify(pago),
+    });
+  },
+  update: async (id: number, pago: Partial<PagoProveedor>) => {
+    return fetchAPI(`/api/pago-proveedores/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(pago),
+    });
+  },
+  delete: async (id: number) => {
+    return fetchAPI(`/api/pago-proveedores/${id}`, {
+      method: 'DELETE',
+    });
+  }
 };

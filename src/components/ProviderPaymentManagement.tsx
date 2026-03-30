@@ -1,345 +1,211 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  DollarSign,
-  Search,
-  Plus,
-  Eye,
-  Ban,
-  Calendar,
-  FileText,
-  Download,
-  Filter,
-  X,
-  Upload,
-  AlertCircle,
-  CheckCircle,
-  Building2,
-  ChevronLeft,
-  ChevronRight
+  DollarSign, Search, Plus, Eye, Ban, Calendar, FileText, Download, X, Upload,
+  AlertCircle, CheckCircle, Building2, ChevronLeft, ChevronRight
 } from 'lucide-react';
+
+// UI components
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from './ui/table';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter
 } from './ui/dialog';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner@2.0.3';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
 } from './ui/alert-dialog';
 
-interface ProviderPayment {
-  id: number;
-  proveedor: string;
-  concepto: string;
+// IMPORTA TU API REAL:
+import { pagosProveedoresAPI, proveedoresAPI } from '../services/api';
+
+// INTERFACE DATA SEGÚN TU TABLA
+interface PagoProveedor {
+  id_pago_proveedor: number;
+  id_proveedores: number;
+  observaciones: string;
   monto: number;
-  fechaRegistro: string;
-  estado: 'activo' | 'anulado';
-  metodoPago: string;
-  factura?: string;
-  observaciones?: string;
+  fecha_pago: string;
+  metodo_pago?: string | null;
+  numero_transaccion?: string | null;
+  comprobante_pago?: string | null;
+  estado?: string | null;
 }
 
-// Mock data
-const mockPayments: ProviderPayment[] = [
-  {
-    id: 1,
-    proveedor: 'Transportes Valle Verde S.A.S',
-    concepto: 'Servicio de transporte turístico - Mes de Septiembre',
-    monto: 3500000,
-    fechaRegistro: '2025-10-01',
-    estado: 'activo',
-    metodoPago: 'Transferencia',
-    factura: 'FAC-2025-001',
-    observaciones: 'Pago correspondiente a rutas realizadas en septiembre'
-  },
-  {
-    id: 2,
-    proveedor: 'Hotel Montaña Azul',
-    concepto: 'Hospedaje grupal - Tour Cafetero',
-    monto: 2800000,
-    fechaRegistro: '2025-10-05',
-    estado: 'activo',
-    metodoPago: 'Cheque',
-    factura: 'FAC-2025-045',
-    observaciones: 'Reserva grupo de 15 personas, 3 días'
-  },
-  {
-    id: 3,
-    proveedor: 'Restaurante El Mirador',
-    concepto: 'Servicio de alimentación - Eventos corporativos',
-    monto: 1500000,
-    fechaRegistro: '2025-10-08',
-    estado: 'activo',
-    metodoPago: 'Efectivo',
-    factura: 'FAC-2025-089',
-    observaciones: 'Almuerzos y refrigerios para 40 personas'
-  },
-  {
-    id: 4,
-    proveedor: 'Guías Profesionales del Cauca',
-    concepto: 'Honorarios guías especializados - Octubre',
-    monto: 4200000,
-    fechaRegistro: '2025-10-12',
-    estado: 'activo',
-    metodoPago: 'Transferencia',
-    factura: 'FAC-2025-112',
-    observaciones: 'Pago a 6 guías especializados'
-  },
-  {
-    id: 5,
-    proveedor: 'Equipos y Seguridad Outdoor',
-    concepto: 'Compra de equipos de seguridad',
-    monto: 5600000,
-    fechaRegistro: '2025-09-28',
-    estado: 'anulado',
-    metodoPago: 'Transferencia',
-    factura: 'FAC-2025-098',
-    observaciones: 'Pago anulado por devolución de mercancía defectuosa'
-  },
-  {
-    id: 6,
-    proveedor: 'Finca Eco-Turística El Bosque',
-    concepto: 'Arriendo instalaciones - Evento empresarial',
-    monto: 3200000,
-    fechaRegistro: '2025-10-15',
-    estado: 'activo',
-    metodoPago: 'Transferencia',
-    factura: 'FAC-2025-134',
-    observaciones: 'Alquiler de instalaciones para retiro corporativo'
-  },
-  {
-    id: 7,
-    proveedor: 'Seguros La Protectora',
-    concepto: 'Póliza de seguro turístico - Trimestre Q4',
-    monto: 2100000,
-    fechaRegistro: '2025-10-18',
-    estado: 'activo',
-    metodoPago: 'Transferencia',
-    factura: 'FAC-2025-156',
-    observaciones: 'Cobertura para todos los tours del trimestre'
-  },
-  {
-    id: 8,
-    proveedor: 'Publicidad Digital 360',
-    concepto: 'Campaña de marketing digital - Septiembre',
-    monto: 1800000,
-    fechaRegistro: '2025-09-25',
-    estado: 'anulado',
-    metodoPago: 'Efectivo',
-    factura: 'FAC-2025-087',
-    observaciones: 'Anulado por incumplimiento de métricas acordadas'
-  }
-];
+// INTERFACE PARA PROVEEDOR SELECT
+interface Proveedor {
+  id_proveedores: number;
+  nombre: string;
+  // otros campos si necesitas
+}
 
 export function ProviderPaymentManagement() {
-  const [payments, setPayments] = useState<ProviderPayment[]>(mockPayments);
+  // DATA
+  const [payments, setPayments] = useState<PagoProveedor[]>([]);
+  const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('todos');
-  const [filterMethod, setFilterMethod] = useState('todos');
-  const [showFilters, setShowFilters] = useState(false);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isAnnulDialogOpen, setIsAnnulDialogOpen] = useState(false);
-  const [selectedPayment, setSelectedPayment] = useState<ProviderPayment | null>(null);
+  const [selectedPayment, setSelectedPayment] = useState<PagoProveedor | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 6;
   const [formData, setFormData] = useState({
-    proveedor: '',
-    concepto: '',
+    id_proveedores: '',
+    observaciones: '',
     monto: '',
-    fechaRegistro: new Date().toISOString().split('T')[0],
-    metodoPago: 'transferencia',
-    factura: '',
-    observaciones: ''
+    fecha_pago: new Date().toISOString().split('T')[0],
+    metodo_pago: 'transferencia',
+    numero_transaccion: '',
+    comprobante_pago: '',
+    estado: 'activo'
   });
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-CO', {
-      style: 'currency',
-      currency: 'COP',
-      minimumFractionDigits: 0,
-    }).format(amount);
-  };
+  // CARGAR PAGOS Y PROVEEDORES DESDE EL BACKEND
 
-  const getStatusBadge = (estado: string) => {
-    switch (estado) {
-      case 'activo':
-        return (
-          <Badge className="bg-green-100 text-green-700 border-green-200">
-            <CheckCircle className="w-3 h-3 mr-1" />
-            Activo
-          </Badge>
-        );
-      case 'anulado':
-        return (
-          <Badge className="bg-red-100 text-red-700 border-red-200">
-            <Ban className="w-3 h-3 mr-1" />
-            Anulado
-          </Badge>
-        );
-      default:
-        return <Badge className="bg-gray-100 text-gray-700">Desconocido</Badge>;
+  useEffect(() => {
+    async function fetchAll() {
+      try {
+        const [pagos, provs] = await Promise.all([
+          pagosProveedoresAPI.getAll(),
+          proveedoresAPI.getAll()
+        ]);
+        setPayments(pagos);
+        setProveedores(provs);
+      } catch (err) {
+        toast.error('Error cargando pagos o proveedores');
+      }
     }
-  };
+    fetchAll();
+  }, []);
 
-  const getMethodBadge = (metodo: string) => {
-    const colors = {
-      'Transferencia': 'bg-blue-100 text-blue-700',
-      'Efectivo': 'bg-green-100 text-green-700',
-      'Cheque': 'bg-purple-100 text-purple-700',
-      'Tarjeta': 'bg-orange-100 text-orange-700'
-    };
-    return <Badge className={colors[metodo] || 'bg-gray-100 text-gray-700'}>{metodo}</Badge>;
-  };
-
+  // FILTRAR DATOS (búsqueda/proveedor/estado)
   const filteredPayments = payments.filter(payment => {
-    const matchesSearch = 
-      payment.proveedor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.concepto.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      payment.factura?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesStatus = 
-      filterStatus === 'todos' || 
-      payment.estado === filterStatus;
-
-    const matchesMethod = 
-      filterMethod === 'todos' || 
-      payment.metodoPago === filterMethod;
-
-    return matchesSearch && matchesStatus && matchesMethod;
+    const proveedor = proveedores.find(p => p.id_proveedores === payment.id_proveedores)?.nombre || '';
+    const matchesSearch =
+      proveedor.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (payment.observaciones ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (payment.numero_transaccion ?? '').toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesStatus =
+      filterStatus === 'todos' ||
+      (payment.estado ?? 'activo').toLowerCase() === filterStatus;
+    return matchesSearch && matchesStatus;
   });
 
-  const handleViewDetails = (payment: ProviderPayment) => {
-    setSelectedPayment(payment);
-    setIsViewModalOpen(true);
-  };
-
-  const handleAnnul = (payment: ProviderPayment) => {
-    if (payment.estado === 'anulado') {
-      toast.error('Este pago ya está anulado');
-      return;
-    }
-    
-    setSelectedPayment(payment);
-    setIsAnnulDialogOpen(true);
-  };
-
-  const confirmAnnul = () => {
-    if (selectedPayment) {
-      setPayments(payments.map(p => 
-        p.id === selectedPayment.id 
-          ? { ...p, estado: 'anulado' as const }
-          : p
-      ));
-      toast.success('Pago anulado correctamente. El registro permanece en el historial.');
-      setIsAnnulDialogOpen(false);
-      setSelectedPayment(null);
-    }
-  };
-
-  const handleRegisterPayment = () => {
-    if (!formData.proveedor.trim() || !formData.concepto.trim() || !formData.monto) {
-      toast.error('Por favor complete todos los campos obligatorios');
-      return;
-    }
-
-    const monto = parseFloat(formData.monto);
-    if (isNaN(monto) || monto <= 0) {
-      toast.error('El monto debe ser un número válido mayor a 0');
-      return;
-    }
-
-    const newPayment: ProviderPayment = {
-      id: Math.max(...payments.map(p => p.id), 0) + 1,
-      proveedor: formData.proveedor,
-      concepto: formData.concepto,
-      monto: monto,
-      fechaRegistro: formData.fechaRegistro,
-      estado: 'activo',
-      metodoPago: formData.metodoPago.charAt(0).toUpperCase() + formData.metodoPago.slice(1),
-      factura: formData.factura || undefined,
-      observaciones: formData.observaciones || undefined
-    };
-
-    setPayments([newPayment, ...payments]);
-    toast.success('Pago registrado correctamente');
-    setIsRegisterModalOpen(false);
-    resetForm();
-  };
-
-  const resetForm = () => {
-    setFormData({
-      proveedor: '',
-      concepto: '',
-      monto: '',
-      fechaRegistro: new Date().toISOString().split('T')[0],
-      metodoPago: 'transferencia',
-      factura: '',
-      observaciones: ''
-    });
-  };
-
-  const handleExport = () => {
-    toast.success('Exportando historial de pagos...');
-    // Aquí iría la lógica de exportación real
-  };
-
-  const handleDownloadPDF = () => {
-    toast.success('Descargando PDF de pagos a proveedores...');
-    // Aquí iría la lógica real de generación de PDF
-  };
-
-  const stats = {
-    totalPagos: payments.filter(p => p.estado === 'activo').length,
-    totalAnulados: payments.filter(p => p.estado === 'anulado').length,
-    montoTotal: payments.filter(p => p.estado === 'activo').reduce((sum, p) => sum + p.monto, 0),
-    mesActual: payments.filter(p => {
-      const paymentDate = new Date(p.fechaRegistro);
-      const currentDate = new Date();
-      return paymentDate.getMonth() === currentDate.getMonth() && 
-             paymentDate.getFullYear() === currentDate.getFullYear() &&
-             p.estado === 'activo';
-    }).length
-  };
-
+  // PAGINACIÓN
   const totalPages = Math.ceil(filteredPayments.length / itemsPerPage);
   const currentPayments = filteredPayments.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
 
+  // FORMATTERS
+  const formatCurrency = (amount: number) => new Intl.NumberFormat('es-CO', {
+    style: 'currency', currency: 'COP', minimumFractionDigits: 0,
+  }).format(amount);
+  const getStatusBadge = (estado?: string | null) => {
+    if ((estado ?? '').toLowerCase() === 'anulado')
+      return <Badge className="bg-red-100 text-red-700 border-red-200"><Ban className="w-3 h-3 mr-1" /> Anulado</Badge>;
+    return <Badge className="bg-green-100 text-green-700 border-green-200"><CheckCircle className="w-3 h-3 mr-1" /> Activo</Badge>;
+  };
+  const getMethodBadge = (metodo?: string | null) => {
+    const label = (metodo ?? '').toLowerCase();
+    const color = label === 'transferencia'
+      ? 'bg-blue-100 text-blue-700'
+      : label === 'efectivo'
+        ? 'bg-green-100 text-green-700'
+        : label === 'cheque'
+          ? 'bg-purple-100 text-purple-700'
+          : label === 'tarjeta'
+            ? 'bg-orange-100 text-orange-700'
+            : 'bg-gray-100 text-gray-700';
+    return <Badge className={color}>{metodo}</Badge>;
+  };
+
+  // ACCIONES
+  const handleViewDetails = (payment: PagoProveedor) => {
+    setSelectedPayment(payment);
+    setIsViewModalOpen(true);
+  };
+
+  const handleAnnul = (payment: PagoProveedor) => {
+    if ((payment.estado ?? '').toLowerCase() === 'anulado') {
+      toast.error('Este pago ya está anulado');
+      return;
+    }
+    setSelectedPayment(payment);
+    setIsAnnulDialogOpen(true);
+  };
+
+  const confirmAnnul = async () => {
+    if (selectedPayment) {
+      try {
+        await pagosProveedoresAPI.update(selectedPayment.id_pago_proveedor, { estado: 'anulado' });
+        toast.success('Pago anulado correctamente.');
+        // recargar
+        const pagos = await pagosProveedoresAPI.getAll();
+        setPayments(pagos);
+        setIsAnnulDialogOpen(false);
+        setSelectedPayment(null);
+      } catch (err) {
+        toast.error('Error al anular el pago. Intenta de nuevo.');
+      }
+    }
+  };
+
+  const handleRegisterPayment = async () => {
+    try {
+      if (!formData.id_proveedores || !formData.observaciones.trim() || !formData.monto) {
+        toast.error('Completa todos los campos obligatorios (*)');
+        return;
+      }
+      const pago = {
+        id_proveedores: Number(formData.id_proveedores),
+        observaciones: formData.observaciones,
+        monto: Number(formData.monto),
+        fecha_pago: formData.fecha_pago,
+        metodo_pago: formData.metodo_pago,
+        numero_transaccion: formData.numero_transaccion,
+        comprobante_pago: formData.comprobante_pago,
+        estado: 'activo'
+      };
+      await pagosProveedoresAPI.create(pago);
+      toast.success('Pago registrado exitosamente.');
+      setIsRegisterModalOpen(false);
+      resetForm();
+      const pagos = await pagosProveedoresAPI.getAll();
+      setPayments(pagos);
+    } catch (err) {
+      toast.error('Hubo un error al registrar el pago.');
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({
+      id_proveedores: '',
+      observaciones: '',
+      monto: '',
+      fecha_pago: new Date().toISOString().split('T')[0],
+      metodo_pago: 'transferencia',
+      numero_transaccion: '',
+      comprobante_pago: '',
+      estado: 'activo'
+    });
+  };
+
+  // --------------------------------- UI ---------------------------------
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -356,26 +222,14 @@ export function ProviderPaymentManagement() {
               Administra y registra todos los pagos realizados a proveedores de servicios turísticos
             </p>
           </div>
-          <div className="flex flex-col sm:flex-row gap-3">
-            <Button
-              onClick={handleDownloadPDF}
-              variant="outline"
-              className="border-green-600 text-green-600 hover:bg-green-50"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Descargar PDF
-            </Button>
-            <Button
-              onClick={() => setIsRegisterModalOpen(true)}
-              className="bg-green-600 hover:bg-green-700 text-white"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Registrar Nuevo Pago
-            </Button>
-          </div>
+          <Button
+            onClick={() => setIsRegisterModalOpen(true)}
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Registrar Nuevo Pago
+          </Button>
         </div>
-
-        {/* Search and Download */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -386,7 +240,7 @@ export function ProviderPaymentManagement() {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
             <Input
               type="text"
-              placeholder="Buscar por proveedor, concepto o factura..."
+              placeholder="Buscar por proveedor, observación o número de transacción..."
               className="pl-9 border-green-200 focus:border-green-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -405,7 +259,7 @@ export function ProviderPaymentManagement() {
         </motion.div>
       </motion.div>
 
-      {/* Table */}
+      {/* Payments Table */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -427,9 +281,9 @@ export function ProviderPaymentManagement() {
                 <TableRow className="bg-gray-50">
                   <TableHead className="w-[70px] font-semibold">ID</TableHead>
                   <TableHead className="w-[180px] font-semibold">Proveedor</TableHead>
-                  <TableHead className="w-[200px] font-semibold">Concepto/Servicio</TableHead>
+                  <TableHead className="w-[200px] font-semibold">Observaciones</TableHead>
                   <TableHead className="w-[130px] font-semibold">Monto</TableHead>
-                  <TableHead className="w-[130px] font-semibold">Fecha Registro</TableHead>
+                  <TableHead className="w-[130px] font-semibold">Fecha Pago</TableHead>
                   <TableHead className="w-[150px] font-semibold">Método de Pago</TableHead>
                   <TableHead className="w-[120px] text-right font-semibold">Acciones</TableHead>
                 </TableRow>
@@ -445,34 +299,36 @@ export function ProviderPaymentManagement() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  currentPayments.map((payment, index) => (
+                  currentPayments.map((payment, idx) => (
                     <motion.tr
-                      key={payment.id}
+                      key={payment.id_pago_proveedor}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05, duration: 0.3 }}
+                      transition={{ delay: idx * 0.05, duration: 0.3 }}
                       className={`hover:bg-green-50/50 transition-colors ${
-                        payment.estado === 'anulado' ? 'bg-red-50/30' : ''
+                        (payment.estado ?? '').toLowerCase() === 'anulado' ? 'bg-red-50/30' : ''
                       }`}
                     >
                       <TableCell className="font-mono text-sm text-gray-600">
-                        #{payment.id.toString().padStart(4, '0')}
+                        #{payment.id_pago_proveedor.toString().padStart(4, '0')}
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center space-x-2">
                           <Building2 className="w-4 h-4 text-gray-400" />
-                          <span className="font-medium text-gray-900">{payment.proveedor}</span>
+                          <span className="font-medium text-gray-900">
+                            {proveedores.find(p => p.id_proveedores === payment.id_proveedores)?.nombre ?? payment.id_proveedores}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell>
                         <div className="max-w-md">
-                          <p className="text-gray-900 truncate">{payment.concepto}</p>
-                          {payment.factura && (
+                          <p className="text-gray-900 truncate">{payment.observaciones}</p>
+                          {payment.numero_transaccion ? (
                             <p className="text-xs text-gray-500 mt-1">
                               <FileText className="w-3 h-3 inline mr-1" />
-                              {payment.factura}
+                              {payment.numero_transaccion}
                             </p>
-                          )}
+                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell className="font-semibold text-gray-900">
@@ -482,7 +338,7 @@ export function ProviderPaymentManagement() {
                         <div className="flex items-center space-x-2 text-gray-600">
                           <Calendar className="w-4 h-4" />
                           <span>
-                            {new Date(payment.fechaRegistro).toLocaleDateString('es-CO', {
+                            {new Date(payment.fecha_pago).toLocaleDateString('es-CO', {
                               year: 'numeric',
                               month: 'short',
                               day: 'numeric'
@@ -493,7 +349,7 @@ export function ProviderPaymentManagement() {
                       <TableCell>
                         <div className="flex flex-col gap-1">
                           <span className="cursor-default pointer-events-none">
-                            {getMethodBadge(payment.metodoPago)}
+                            {getMethodBadge(payment.metodo_pago)}
                           </span>
                         </div>
                       </TableCell>
@@ -510,19 +366,8 @@ export function ProviderPaymentManagement() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              setSelectedPayment(payment);
-                              handleDownloadPDF();
-                            }}
-                            title="Descargar PDF"
-                          >
-                            <Download className="w-4 h-4 text-green-600" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
                             onClick={() => handleAnnul(payment)}
-                            disabled={payment.estado === 'anulado'}
+                            disabled={(payment.estado ?? '').toLowerCase() === 'anulado'}
                             title="Anular pago"
                           >
                             <Ban className="w-4 h-4 text-red-600" />
@@ -561,40 +406,46 @@ export function ProviderPaymentManagement() {
         </Button>
       </div>
 
-      {/* Register Payment Modal */}
+      {/* Modal Registrar */}
       <Dialog open={isRegisterModalOpen} onOpenChange={setIsRegisterModalOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center space-x-2 text-green-700">
-              <Plus className="w-5 h-5" />
-              <span>Registrar Nuevo Pago a Proveedor</span>
+              <Plus className="w-5 h-5" /><span>Registrar Nuevo Pago a Proveedor</span>
             </DialogTitle>
             <DialogDescription>
-              Complete los campos para mantener un control financiero preciso. Los campos con * son obligatorios.
+              Complete los campos. Los campos con * son obligatorios.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div>
               <Label htmlFor="proveedor">Proveedor *</Label>
-              <Input
-                id="proveedor"
-                value={formData.proveedor}
-                onChange={(e) => setFormData({ ...formData, proveedor: e.target.value })}
-                placeholder="Nombre del proveedor o entidad"
-              />
+              <Select
+                value={formData.id_proveedores.toString()}
+                onValueChange={v => setFormData({ ...formData, id_proveedores: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Seleccione un proveedor" />
+                </SelectTrigger>
+                <SelectContent>
+                  {proveedores.map((prov) => (
+                    <SelectItem key={prov.id_proveedores} value={prov.id_proveedores.toString()}>
+                      {prov.nombre}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
-
             <div>
-              <Label htmlFor="concepto">Concepto del Pago *</Label>
+              <Label htmlFor="observaciones">Concepto/Observaciones *</Label>
               <Textarea
-                id="concepto"
-                value={formData.concepto}
-                onChange={(e) => setFormData({ ...formData, concepto: e.target.value })}
-                placeholder="Descripción del servicio prestado o producto adquirido"
+                id="observaciones"
+                value={formData.observaciones}
+                onChange={(e) => setFormData({ ...formData, observaciones: e.target.value })}
+                placeholder="Ej: Pago transporte septiembre"
                 rows={3}
               />
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label htmlFor="monto">Monto *</Label>
@@ -609,25 +460,24 @@ export function ProviderPaymentManagement() {
                 />
               </div>
               <div>
-                <Label htmlFor="fechaRegistro">Fecha del Pago *</Label>
+                <Label htmlFor="fecha_pago">Fecha del Pago *</Label>
                 <Input
-                  id="fechaRegistro"
+                  id="fecha_pago"
                   type="date"
-                  value={formData.fechaRegistro}
-                  onChange={(e) => setFormData({ ...formData, fechaRegistro: e.target.value })}
+                  value={formData.fecha_pago}
+                  onChange={(e) => setFormData({ ...formData, fecha_pago: e.target.value })}
                 />
               </div>
             </div>
-
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="metodoPago">Método de Pago *</Label>
+                <Label htmlFor="metodo_pago">Método de Pago *</Label>
                 <Select
-                  value={formData.metodoPago}
-                  onValueChange={(value) => setFormData({ ...formData, metodoPago: value })}
+                  value={formData.metodo_pago}
+                  onValueChange={(v) => setFormData({ ...formData, metodo_pago: v })}
                 >
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Seleccione" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="transferencia">Transferencia</SelectItem>
@@ -638,39 +488,24 @@ export function ProviderPaymentManagement() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="factura">Número de Factura</Label>
+                <Label htmlFor="numero_transaccion">Número de Transacción/Factura</Label>
                 <Input
-                  id="factura"
-                  value={formData.factura}
-                  onChange={(e) => setFormData({ ...formData, factura: e.target.value })}
+                  id="numero_transaccion"
+                  value={formData.numero_transaccion}
+                  onChange={(e) => setFormData({ ...formData, numero_transaccion: e.target.value })}
                   placeholder="Ej: FAC-2025-001"
                 />
               </div>
             </div>
-
-            <div>
-              <Label htmlFor="archivo">Cargar Comprobante/Factura</Label>
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-500 transition-colors cursor-pointer">
-                <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                <p className="text-sm text-gray-600">
-                  Haga clic para cargar o arrastre el archivo aquí
-                </p>
-                <p className="text-xs text-gray-500 mt-1">
-                  PDF, PNG, JPG (máx. 10MB)
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="observaciones">Observaciones</Label>
-              <Textarea
-                id="observaciones"
-                value={formData.observaciones}
-                onChange={(e) => setFormData({ ...formData, observaciones: e.target.value })}
-                placeholder="Notas adicionales sobre este pago..."
-                rows={3}
+            {/* <div>
+              <Label htmlFor="comprobante_pago">Comprobante de Pago</Label>
+              <Input
+                id="comprobante_pago"
+                value={formData.comprobante_pago}
+                onChange={(e) => setFormData({ ...formData, comprobante_pago: e.target.value })}
+                placeholder="URL o info del comprobante"
               />
-            </div>
+            </div> */}
           </div>
           <DialogFooter>
             <Button
@@ -692,7 +527,7 @@ export function ProviderPaymentManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* View Details Modal */}
+      {/* Modal Detalles */}
       <Dialog open={isViewModalOpen} onOpenChange={setIsViewModalOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
@@ -710,7 +545,7 @@ export function ProviderPaymentManagement() {
                 <div>
                   <Label className="text-gray-600">ID de Pago</Label>
                   <p className="font-mono font-semibold text-gray-900">
-                    #{selectedPayment.id.toString().padStart(4, '0')}
+                    #{selectedPayment.id_pago_proveedor.toString().padStart(4, '0')}
                   </p>
                 </div>
                 <div>
@@ -720,17 +555,16 @@ export function ProviderPaymentManagement() {
                   </div>
                 </div>
               </div>
-
               <div>
                 <Label className="text-gray-600">Proveedor</Label>
-                <p className="font-semibold text-gray-900">{selectedPayment.proveedor}</p>
+                <p className="font-semibold text-gray-900">
+                  {proveedores.find(prov => prov.id_proveedores === selectedPayment.id_proveedores)?.nombre ?? selectedPayment.id_proveedores}
+                </p>
               </div>
-
               <div>
-                <Label className="text-gray-600">Concepto/Servicio Prestado</Label>
-                <p className="text-gray-900">{selectedPayment.concepto}</p>
+                <Label className="text-gray-600">Concepto/Observaciones</Label>
+                <p className="text-gray-900">{selectedPayment.observaciones}</p>
               </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label className="text-gray-600">Monto</Label>
@@ -739,16 +573,15 @@ export function ProviderPaymentManagement() {
                 <div>
                   <Label className="text-gray-600">Método de Pago</Label>
                   <div className="mt-1">
-                    {getMethodBadge(selectedPayment.metodoPago)}
+                    {getMethodBadge(selectedPayment.metodo_pago)}
                   </div>
                 </div>
               </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-gray-600">Fecha de Registro</Label>
+                  <Label className="text-gray-600">Fecha de Pago</Label>
                   <p className="text-gray-900">
-                    {new Date(selectedPayment.fechaRegistro).toLocaleDateString('es-CO', {
+                    {new Date(selectedPayment.fecha_pago).toLocaleDateString('es-CO', {
                       year: 'numeric',
                       month: 'long',
                       day: 'numeric'
@@ -756,21 +589,17 @@ export function ProviderPaymentManagement() {
                   </p>
                 </div>
                 <div>
-                  <Label className="text-gray-600">Factura</Label>
-                  <p className="text-gray-900">{selectedPayment.factura || 'No registrada'}</p>
+                  <Label className="text-gray-600">Factura / Transacción</Label>
+                  <p className="text-gray-900">{selectedPayment.numero_transaccion || 'No registrada'}</p>
                 </div>
               </div>
-
-              {selectedPayment.observaciones && (
+              {selectedPayment.comprobante_pago && (
                 <div>
-                  <Label className="text-gray-600">Observaciones</Label>
-                  <p className="text-gray-900 bg-gray-50 p-3 rounded-lg">
-                    {selectedPayment.observaciones}
-                  </p>
+                  <Label className="text-gray-600">Comprobante de Pago</Label>
+                  <p className="text-gray-900">{selectedPayment.comprobante_pago}</p>
                 </div>
               )}
-
-              {selectedPayment.estado === 'anulado' && (
+              {(selectedPayment.estado ?? '').toLowerCase() === 'anulado' && (
                 <div className="bg-red-50 border border-red-200 rounded-lg p-4">
                   <div className="flex items-start space-x-2">
                     <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
@@ -799,24 +628,19 @@ export function ProviderPaymentManagement() {
         </DialogContent>
       </Dialog>
 
-      {/* Annul Confirmation Dialog */}
+      {/* Confirmar Anulación */}
       <AlertDialog open={isAnnulDialogOpen} onOpenChange={setIsAnnulDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle className="flex items-center space-x-2 text-red-700">
-              <Ban className="w-5 h-5" />
-              <span>¿Anular este pago?</span>
+              <Ban className="w-5 h-5" /><span>¿Anular este pago?</span>
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <span className="block">
-                Está a punto de anular el pago a <span className="font-semibold">{selectedPayment?.proveedor}</span>.
-              </span>
-              <span className="block text-red-600">
-                Esta acción es <strong>permanente</strong> y cambiará el estado del pago a "Anulado".
-              </span>
-              <span className="block">
-                El registro NO será eliminado y permanecerá en el historial para mantener la trazabilidad financiera.
-              </span>
+            <AlertDialogDescription>
+              {selectedPayment &&
+                <>Está a punto de anular el pago a <strong>
+                  {proveedores.find(p => p.id_proveedores === selectedPayment.id_proveedores)?.nombre ?? selectedPayment.id_proveedores}
+                </strong>. Esta acción es <strong>permanente</strong> y cambiará el estado a <b>Anulado</b>. El registro no será eliminado y permanecerá para trazabilidad.</>
+              }
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
