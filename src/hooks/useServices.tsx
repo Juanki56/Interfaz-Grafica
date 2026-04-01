@@ -10,7 +10,7 @@ export interface Service {
   price: number;
   duration: string;
   capacity: number;
-  status: 'active' | 'inactive';
+  status: 'Activo' | 'Inactivo';
   includes: string[];
   requirements: string;
   rating: number;
@@ -23,19 +23,30 @@ const DEFAULT_CATEGORY = 'otros';
 
 const mapServicioToService = (servicio: Servicio): Service => {
   const fecha = servicio.fecha_creacion || new Date().toISOString().split('T')[0];
+
+  // Normaliza estado para que coincida con lo que usa el dashboard: "Activo" / "Inactivo"
+  const estadoRaw = servicio.estado;
+  const estadoNormalizado =
+    estadoRaw === false ||
+    estadoRaw === 'inactive' ||
+    estadoRaw === 'Inactivo' ||
+    estadoRaw === 'inactivo'
+      ? 'Inactivo'
+      : 'Activo';
+
   return {
     id: String(servicio.id_servicio),
     name: servicio.nombre,
-    category: DEFAULT_CATEGORY,
+    category: (servicio.categoria as string | undefined) || DEFAULT_CATEGORY,
     description: servicio.descripcion || '',
     price: Number(servicio.precio || 0),
-    duration: 'No definida',
-    capacity: 1,
-    status: servicio.estado === false ? 'inactive' : 'active',
+    duration: servicio.duracion || 'No definida',
+    capacity: Number(servicio.capacidad ?? 1),
+    status: estadoNormalizado,
     includes: [],
     requirements: '',
     rating: 0,
-    contactNumber: '',
+    contactNumber: (servicio.contacto || servicio.telefono || '') as string,
     createdAt: fecha,
     updatedAt: fecha,
   };
@@ -84,7 +95,7 @@ export const ServicesProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         nombre: serviceData.name,
         descripcion: serviceData.description,
         precio: serviceData.price,
-        estado: serviceData.status === 'active',
+        estado: serviceData.status === 'Activo',
       });
       await refreshServices();
     } catch (error: any) {
@@ -100,7 +111,7 @@ export const ServicesProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ...(serviceData.name !== undefined ? { nombre: serviceData.name } : {}),
         ...(serviceData.description !== undefined ? { descripcion: serviceData.description } : {}),
         ...(serviceData.price !== undefined ? { precio: serviceData.price } : {}),
-        ...(serviceData.status !== undefined ? { estado: serviceData.status === 'active' } : {}),
+        ...(serviceData.status !== undefined ? { estado: serviceData.status === 'Activo' } : {}),
       });
       await refreshServices();
     } catch (error: any) {

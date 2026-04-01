@@ -125,6 +125,7 @@ import { RoutesManagement } from './RoutesManagement';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { permisosAPI, rolesAPI, usersAPI } from '../services/api';
 import { useServices } from '../hooks/useServices';
+import { ServiceManagement } from './ServiceManagement';
 
 export function AdminDashboardWithDropdown() {
   const { adminActiveTab, setAdminActiveTab, user } = useAuth();
@@ -3268,6 +3269,11 @@ rol_nombre: payload.rol,
     // If routes tab, render RoutesManagement component
     if (activeTab === 'routes') {
       return <RoutesManagement userRole="admin" />;
+    }
+
+    // If services tab, render dedicated ServiceManagement UI
+    if (activeTab === 'services') {
+      return <ServiceManagement />;
     }
 
     return (

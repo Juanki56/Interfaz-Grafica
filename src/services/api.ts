@@ -187,6 +187,30 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
   }
 }
 
+// Normaliza respuestas del backend para que funciones como `getAll()` devuelvan siempre un array.
+// Soporta: [...], { data: [...] }, { data: { data: [...] } }, { servicios: [...] }, etc.
+function unwrapApiArray<T>(payload: any): T[] {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload as T[];
+
+  const data = payload?.data;
+  if (Array.isArray(data)) return data as T[];
+
+  const nestedData = payload?.data?.data;
+  if (Array.isArray(nestedData)) return nestedData as T[];
+
+  const servicios = payload?.servicios;
+  if (Array.isArray(servicios)) return servicios as T[];
+
+  const proveedores = payload?.proveedores;
+  if (Array.isArray(proveedores)) return proveedores as T[];
+
+  const items = payload?.items;
+  if (Array.isArray(items)) return items as T[];
+
+  return [];
+}
+
 // =====================================================
 // AUTENTICACIÓN
 // =====================================================
@@ -642,8 +666,8 @@ export interface Proveedor {
 
 export const proveedoresAPI = {
   getAll: async (): Promise<Proveedor[]> => {
-    const response = await fetchAPI<{ data: Proveedor[] }>('/api/proveedores');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/proveedores');
+    return unwrapApiArray<Proveedor>(response);
   },
 
   getById: async (id: number): Promise<Proveedor> => {
@@ -686,57 +710,57 @@ export const proveedoresAPI = {
 // SERVICIOS
 // =====================================================
 
-export interface Servicio {
-  id_servicio: number;
-  nombre: string;
-  descripcion?: string | null;
-  precio?: number | null;
-  imagen_url?: string | null;
-  estado?: boolean | null;
-  fecha_creacion?: string | null;
-}
+// export interface Servicio {
+//   id_servicio: number;
+//   nombre: string;
+//   descripcion?: string | null;
+//   precio?: number | null;
+//   imagen_url?: string | null;
+//   estado?: boolean | null;
+//   fecha_creacion?: string | null;
+// }
 
-export const serviciosAPI = {
-  getAll: async (): Promise<Servicio[]> => {
-    const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios');
-    return response.data || [];
-  },
+// export const serviciosAPI = {
+//   getAll: async (): Promise<Servicio[]> => {
+//     const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios');
+//     return response.data || [];
+//   },
 
-  getById: async (id: number): Promise<Servicio> => {
-    const response = await fetchAPI<{ data: Servicio }>(`/api/servicios/${id}`);
-    return response.data;
-  },
+//   getById: async (id: number): Promise<Servicio> => {
+//     const response = await fetchAPI<{ data: Servicio }>(`/api/servicios/${id}`);
+//     return response.data;
+//   },
 
-  getDisponibles: async (): Promise<Servicio[]> => {
-    const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios/disponibles');
-    return response.data || [];
-  },
+//   getDisponibles: async (): Promise<Servicio[]> => {
+//     const response = await fetchAPI<{ data: Servicio[] }>('/api/servicios/disponibles');
+//     return response.data || [];
+//   },
 
-  create: async (servicioData: Partial<Servicio>) => {
-    return fetchAPI('/api/servicios', {
-      method: 'POST',
-      body: JSON.stringify(servicioData),
-    });
-  },
+//   create: async (servicioData: Partial<Servicio>) => {
+//     return fetchAPI('/api/servicios', {
+//       method: 'POST',
+//       body: JSON.stringify(servicioData),
+//     });
+//   },
 
-  update: async (id: number, servicioData: Partial<Servicio>) => {
-    return fetchAPI(`/api/servicios/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(servicioData),
-    });
-  },
+//   update: async (id: number, servicioData: Partial<Servicio>) => {
+//     return fetchAPI(`/api/servicios/${id}`, {
+//       method: 'PUT',
+//       body: JSON.stringify(servicioData),
+//     });
+//   },
 
-  delete: async (id: number) => {
-    return fetchAPI(`/api/servicios/${id}`, {
-      method: 'DELETE',
-    });
-  },
+//   delete: async (id: number) => {
+//     return fetchAPI(`/api/servicios/${id}`, {
+//       method: 'DELETE',
+//     });
+//   },
 
-  buscar: async (termino: string): Promise<Servicio[]> => {
-    const response = await fetchAPI<{ data: Servicio[] }>(`/api/servicios/buscar?q=${termino}`);
-    return response.data || [];
-  },
-};
+//   buscar: async (termino: string): Promise<Servicio[]> => {
+//     const response = await fetchAPI<{ data: Servicio[] }>(`/api/servicios/buscar?q=${termino}`);
+//     return response.data || [];
+//   },
+// };
 
 
 export const pagosProveedoresAPI = {
@@ -765,4 +789,103 @@ export const pagosProveedoresAPI = {
       method: 'DELETE',
     });
   }
+};
+
+
+// =====================================================
+// SERVICIOS API - Incluye servicios con proveedor
+// =====================================================
+
+export interface Servicio {
+  id_servicio: number;
+  nombre: string;
+  descripcion?: string | null;
+  precio?: number | null;
+  categoria?: string | null;
+  imagen_url?: string | null;
+  // Backend puede devolver estado como boolean o string ('Activo'/'Inactivo')
+  estado?: boolean | string | null;
+  // Campos usados en el front para mostrar/crear (aunque tu backend actual no los persista en la tabla `servicio`)
+  duracion?: string | null;
+  capacidad?: number | null;
+  // Relación proveedor
+  id_proveedores?: number | null;
+  proveedor?: string | null;
+  proveedor_nombre?: string | null;
+  // Teléfono / contacto (algunos componentes lo llaman "contacto" y otros "telefono")
+  telefono?: string | null;
+  contacto?: string | null;
+  fecha_creacion?: string | null;
+}
+
+// EXTENSIÓN para incluir proveedor en las filas:
+export interface ServicioConProveedor extends Servicio {
+  id_proveedores?: number | null;
+  proveedor_nombre?: string | null;
+}
+
+export const serviciosAPI = {
+  // Listado normal (sin proveedor)
+  getAll: async (): Promise<Servicio[]> => {
+    const response = await fetchAPI<any>('/api/servicios');
+    return unwrapApiArray<Servicio>(response);
+  },
+
+  // Listar servicios DISPONIBLES solamente
+  getDisponibles: async (): Promise<Servicio[]> => {
+    const response = await fetchAPI<any>('/api/servicios/disponibles');
+    return unwrapApiArray<Servicio>(response);
+  },
+
+  // Buscar servicios
+  buscar: async (termino: string): Promise<Servicio[]> => {
+    const response = await fetchAPI<any>(`/api/servicios/buscar?q=${termino}`);
+    return unwrapApiArray<Servicio>(response);
+  },
+
+  // Traer servicio por id
+  getById: async (id: number): Promise<Servicio> => {
+    const response = await fetchAPI<{ data?: Servicio } | Servicio>(`/api/servicios/${id}`);
+    if ('id_servicio' in (response as any)) {
+      return response as Servicio;
+    }
+    return (response as any).data;
+  },
+
+  // Crear servicio
+  create: async (servicioData: Partial<Servicio>) => {
+    return fetchAPI('/api/servicios', {
+      method: 'POST',
+      body: JSON.stringify(servicioData),
+    });
+  },
+
+  // Actualizar servicio
+  update: async (id: number, servicioData: Partial<Servicio>) => {
+    return fetchAPI(`/api/servicios/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(servicioData),
+    });
+  },
+
+  // Eliminar servicio
+  delete: async (id: number) => {
+    return fetchAPI(`/api/servicios/${id}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // ===========================
+  // 🚩 NUEVO 🚩 obtener servicios + proveedor
+  // ===========================
+  getAllConProveedor: async (): Promise<ServicioConProveedor[]> => {
+    const response = await fetchAPI<any>('/api/servicios/con-proveedor');
+    return unwrapApiArray<ServicioConProveedor>(response);
+  },
+
+  // 🚩 Traer proveedores de un servicio específico (opcional extra)
+  getProveedores: async (id: number) => {
+    const response = await fetchAPI<any>(`/api/servicios/${id}/proveedores`);
+    return unwrapApiArray<any>(response);
+  },
 };
