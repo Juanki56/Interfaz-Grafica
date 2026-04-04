@@ -6,7 +6,7 @@ import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 import { Label } from './ui/label';
 import { Input } from './ui/input';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 
 interface BookingDetailsModalProps {
   isOpen: boolean;
