@@ -455,16 +455,17 @@ export function AdminDashboardWithDropdown() {
     const rolRaw = (usuario?.rol_nombre || usuario?.rol || usuario?.role || usuario?.tipo_usuario || '').toString();
     const rolNormalizado = rolRaw.toLowerCase().trim();
     const mapaRolVista: Record<string, string> = {
-      administrador: 'admin',
-      admin: 'admin',
-      asesor: 'advisor',
-      advisor: 'advisor',
-      guía: 'guide',
-      guia: 'guide',
-      guide: 'guide',
-      cliente: 'client',
-      client: 'client'
-    };
+  administrador: 'Administrador',
+  admin: 'Administrador',
+  asesor: 'Asesor',
+  advisor: 'Asesor',
+  guía: 'Guía Turístico',
+  guia: 'Guía Turístico',
+  guide: 'Guía Turístico',
+  cliente: 'Cliente',
+  client: 'Cliente',
+  sin_perfil: 'Sin perfil',
+};
 
     const estadoRaw = usuario?.estado;
     const estado = typeof estadoRaw === 'boolean'
@@ -647,7 +648,7 @@ export function AdminDashboardWithDropdown() {
   useEffect(() => {
     const cargarDatosTab = async () => {
       if (activeTab === 'users') {
-        await cargarUsuarios();
+        await Promise.all([cargarUsuarios(), cargarRolesConDetalle()]);
       }
 
       if (activeTab === 'roles') {
@@ -678,15 +679,16 @@ export function AdminDashboardWithDropdown() {
   const handleCreate = () => {
     if (activeTab === 'users') {
       setFormData({
-        name: '',
-        email: '',
-        phone: '',
-        role: 'client',
-        status: 'Activo',
-        documentType: '',
-        documentNumber: '',
-        password: ''
-      });
+  nombre: '',
+  apellido: '',
+  email: '',
+  phone: '',
+  role: 'client',
+  status: 'Activo',
+  documentType: '',
+  documentNumber: '',
+  password: ''
+});
       setSelectedItem(null);
       setIsCreateModalOpen(true);
       return;
@@ -722,12 +724,17 @@ export function AdminDashboardWithDropdown() {
         permissionIds: item.permissionIds || [],
       });
     } else if (activeTab === 'users') {
-      setFormData({
-        ...item,
-        documentType: item.tipo_documento,
-        documentNumber: item.numero_documento,
-      });
-    } else {
+  const partes = (item.name || '').trim().split(/\s+/);
+  const nombre = partes[0] || '';
+  const apellido = partes.slice(1).join(' ') || '';
+  setFormData({
+    ...item,
+    nombre: nombre,
+    apellido: apellido,
+    documentType: item.tipo_documento,
+    documentNumber: item.numero_documento,
+  });
+} else {
       setFormData(item);
     }
     setIsEditModalOpen(true);
@@ -749,10 +756,17 @@ export function AdminDashboardWithDropdown() {
   };
 
   const handleDelete = async (item: any) => {
-    if (activeTab === 'users') {
-      toast.error('La eliminación de usuarios aún no está disponible desde el backend.');
-      return;
-    }
+   if (activeTab === 'users') {
+  try {
+    const idUsuario = item.id_usuarios || item.id;
+    await usersAPI.delete(idUsuario);
+    setLocalUsers(prev => prev.filter((u: any) => u.id !== item.id));
+    toast.success('Usuario eliminado correctamente');
+  } catch (error: any) {
+    toast.error(error?.message || 'Error al eliminar el usuario');
+  }
+  return;
+}
 
     if (activeTab === 'roles') {
       // Recalcular userCount en tiempo real
@@ -897,32 +911,31 @@ export function AdminDashboardWithDropdown() {
     try {
       if (activeTab === 'users') {
         const estadoString = formData.status || selectedItem?.status || 'Activo';
-        const nombreCompleto = formData.name ?? selectedItem?.name ?? '';
-        const nombreParts = nombreCompleto.trim().split(/\s+/);
-        const firstName = nombreParts.shift() || '';
-        const lastName = nombreParts.join(' ') || (selectedItem?.apellido || '');
+       
 
         const payload: any = {
-          nombre: firstName || null,
-          apellido: lastName || null,
-          correo: formData.email ?? selectedItem?.email ?? null,
-          telefono: formData.phone ?? selectedItem?.phone ?? null,
-          numero_documento: formData.documentNumber ?? selectedItem?.numero_documento ?? null,
-          tipo_documento: formData.documentType ?? selectedItem?.tipo_documento ?? null,
-          rol: rolFrontendABackend(formData.role ?? selectedItem?.role ?? 'client'),
-          estado: estadoString === 'Activo',
-        };
+  nombre: formData.nombre ?? selectedItem?.nombre ?? null,
+  apellido: formData.apellido ?? selectedItem?.apellido ?? null,
+  correo: formData.email ?? selectedItem?.email ?? null,
+  telefono: formData.phone ?? selectedItem?.phone ?? null,
+  numero_documento: formData.documentNumber ?? selectedItem?.numero_documento ?? null,
+  tipo_documento: formData.documentType ?? selectedItem?.tipo_documento ?? null,
+  id_roles: localRoles.find((r: any) => r.nombre === (formData.role ?? selectedItem?.role))?.id_roles ?? null,
+  rol_nombre: formData.role ?? selectedItem?.role ?? null,
+  perfil: (formData.role ?? selectedItem?.role) === 'Cliente' ? 'cliente' : 'empleado',
+  estado: estadoString === 'Activo',
+};
 
         if (!selectedItem) {
-          if (!formData.password) {
-            toast.error('Debe ingresar una contraseña para el nuevo usuario');
-            return;
-          }
+  if (!formData.password) {
+    toast.error('Debe ingresar una contraseña para el nuevo usuario');
+    return;
+  }
 
-          payload.password = formData.password;
-        } else if (formData.password) {
-          payload.password = formData.password;
-        }
+  payload.contrasena = formData.password;  // ← cambiado
+} else if (formData.password) {
+  payload.contrasena = formData.password;  // ← cambiado
+}
 
         if (selectedItem) {
           const idUsuario = selectedItem.id_usuarios || selectedItem.id;
@@ -976,6 +989,7 @@ rol_nombre: payload.rol,
         setFormData({});
 
         try {
+          console.log('Payload a enviar:', JSON.stringify(payload));
           await usersAPI.create(payload);
           toast.success('Usuario creado correctamente');
           void cargarUsuarios();
@@ -1841,15 +1855,39 @@ rol_nombre: payload.rol,
         <div className="space-y-4">
           <h4 className="font-medium text-gray-900">Información Básica</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Label htmlFor="name">Nombre</Label>
-              <Input 
-                id="name" 
-                value={formData.name || ''} 
-                onChange={(e) => setFormData({...formData, name: e.target.value})}
-                placeholder="Ingrese el nombre"
-              />
-            </div>
+           {activeTab !== 'users' && (
+  <div>
+    <Label htmlFor="name">Nombre</Label>
+    <Input 
+      id="name" 
+      value={formData.name || ''} 
+      onChange={(e) => setFormData({...formData, name: e.target.value})}
+      placeholder="Ingrese el nombre"
+    />
+  </div>
+)}
+{activeTab === 'users' && (
+  <>
+    <div>
+      <Label htmlFor="nombre">Nombre</Label>
+      <Input 
+        id="nombre" 
+        value={formData.nombre || ''} 
+        onChange={(e) => setFormData({...formData, nombre: e.target.value})}
+        placeholder="Ingrese el nombre"
+      />
+    </div>
+    <div>
+      <Label htmlFor="apellido">Apellido</Label>
+      <Input 
+        id="apellido" 
+        value={formData.apellido || ''} 
+        onChange={(e) => setFormData({...formData, apellido: e.target.value})}
+        placeholder="Ingrese el apellido"
+      />
+    </div>
+  </>
+)}
             
             {/* Users Form Fields */}
             {activeTab === 'users' && (
@@ -1880,11 +1918,14 @@ rol_nombre: payload.rol,
                       <SelectValue placeholder="Seleccionar rol" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="Administrador">Administrador</SelectItem>
-                      <SelectItem value="Asesor">Asesor</SelectItem>
-                      <SelectItem value="Guía Turístico">Guía Turístico</SelectItem>
-                      <SelectItem value="Cliente">Cliente</SelectItem>
-                    </SelectContent>
+  {localRoles
+    .filter((rol: any) => rol.estado !== false)
+    .map((rol: any) => (
+      <SelectItem key={rol.id_roles} value={rol.nombre}>
+        {rol.nombre}
+      </SelectItem>
+    ))}
+</SelectContent>
                   </Select>
                 </div>
                 <div>

@@ -70,14 +70,22 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { useState, useEffect } from 'react';
+
 import { Switch } from './ui/switch';
 
+import { empleadosAPI } from '../services/api';
+
+
+// 1. Actualiza la interfaz local Employee para reflejar el backend
 interface Employee {
-  id: string;
+  id: string;              // viene de id_empleado (convertido a string)
   nombre: string;
-  email: string;
-  documento: string;
-  rol: 'advisor' | 'guide';
+  apellido: string;
+  email: string;           // viene de correo
+  documento: string;       // viene de numero_documento
+  tipo_documento?: string;
+  cargo: string;           // el backend usa "cargo", no "rol"
+  rol: 'advisor' | 'guide'; // se mapea desde rol_nombre o cargo
   telefono: string;
   estado: 'Activo' | 'Inactivo' | 'Suspendido';
   disponibilidad: string;
@@ -89,284 +97,33 @@ interface Employee {
   ultima_asignacion?: string;
 }
 
-// Mock data de empleados
-const mockEmployees: Employee[] = [
-  {
-    id: '1',
-    nombre: 'Ana García',
-    email: 'ana.garcia@occitours.com',
-    documento: '1023456789',
-    rol: 'advisor',
-    telefono: '+57 310 987 6543',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Viernes 8:00-17:00',
-    fecha_registro: '2024-02-10',
-    direccion: 'Calle 45 #12-34, Armenia',
-    experiencia: '3 años',
-    asignaciones_activas: 8
-  },
-  {
-    id: '2',
-    nombre: 'Carlos Ruiz',
-    email: 'carlos.ruiz@occitours.com',
-    documento: '1034567890',
-    rol: 'guide',
-    telefono: '+57 301 234 5678',
-    estado: 'Activo',
-    disponibilidad: 'Disponible fines de semana',
-    fecha_registro: '2024-01-15',
-    direccion: 'Carrera 23 #45-67, Salento',
-    especialidad: 'Senderismo y montañismo',
-    experiencia: '5 años',
-    asignaciones_activas: 12,
-    ultima_asignacion: '2024-12-20'
-  },
-  {
-    id: '3',
-    nombre: 'Sofia Herrera',
-    email: 'sofia.herrera@occitours.com',
-    documento: '1045678901',
-    rol: 'advisor',
-    telefono: '+57 300 789 1234',
-    estado: 'Activo',
-    disponibilidad: 'Tiempo completo',
-    fecha_registro: '2024-02-28',
-    direccion: 'Avenida Bolivar #78-90, Circasia',
-    experiencia: '2 años',
-    asignaciones_activas: 5
-  },
-  {
-    id: '4',
-    nombre: 'Pedro Martínez',
-    email: 'pedro.martinez@occitours.com',
-    documento: '1056789012',
-    rol: 'guide',
-    telefono: '+57 315 234 5678',
-    estado: 'Inactivo',
-    disponibilidad: 'No disponible',
-    fecha_registro: '2024-01-20',
-    direccion: 'Calle 12 #34-56, Filandia',
-    especialidad: 'Observación de aves',
-    experiencia: '4 años',
-    asignaciones_activas: 0,
-    ultima_asignacion: '2024-11-15'
-  },
-  {
-    id: '5',
-    nombre: 'Laura Gómez',
-    email: 'laura.gomez@occitours.com',
-    documento: '1067890123',
-    rol: 'guide',
-    telefono: '+57 320 345 6789',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Sábado',
-    fecha_registro: '2024-03-15',
-    direccion: 'Vereda La Florida Km 5',
-    especialidad: 'Ecoturismo y fauna',
-    experiencia: '6 años',
-    asignaciones_activas: 15,
-    ultima_asignacion: '2024-12-22'
-  },
-  {
-    id: '6',
-    nombre: 'Miguel Torres',
-    email: 'miguel.torres@occitours.com',
-    documento: '1078901234',
-    rol: 'advisor',
-    telefono: '+57 318 456 7890',
-    estado: 'Suspendido',
-    disponibilidad: 'Suspendido temporalmente',
-    fecha_registro: '2024-01-05',
-    direccion: 'Calle 67 #89-01, Montenegro',
-    experiencia: '1 año',
-    asignaciones_activas: 0
-  },
-  {
-    id: '7',
-    nombre: 'Diana Rojas',
-    email: 'diana.rojas@occitours.com',
-    documento: '1089012345',
-    rol: 'guide',
-    telefono: '+57 311 567 8901',
-    estado: 'Activo',
-    disponibilidad: 'Tiempo completo',
-    fecha_registro: '2024-03-01',
-    direccion: 'Calle 89 #23-45, Calarcá',
-    especialidad: 'Fotografía de naturaleza',
-    experiencia: '4 años',
-    asignaciones_activas: 9,
-    ultima_asignacion: '2024-12-21'
-  },
-  {
-    id: '8',
-    nombre: 'Roberto Sánchez',
-    email: 'roberto.sanchez@occitours.com',
-    documento: '1090123456',
-    rol: 'advisor',
-    telefono: '+57 312 678 9012',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Viernes 9:00-18:00',
-    fecha_registro: '2024-02-15',
-    direccion: 'Carrera 34 #56-78, Armenia',
-    experiencia: '4 años',
-    asignaciones_activas: 11
-  },
-  {
-    id: '9',
-    nombre: 'Camila Vargas',
-    email: 'camila.vargas@occitours.com',
-    documento: '1101234567',
-    rol: 'guide',
-    telefono: '+57 313 789 0123',
-    estado: 'Activo',
-    disponibilidad: 'Disponible todos los días',
-    fecha_registro: '2024-01-10',
-    direccion: 'Vereda El Caimo Km 3',
-    especialidad: 'Cascadas y ríos',
-    experiencia: '7 años',
-    asignaciones_activas: 14,
-    ultima_asignacion: '2024-12-23'
-  },
-  {
-    id: '10',
-    nombre: 'Fernando López',
-    email: 'fernando.lopez@occitours.com',
-    documento: '1112345678',
-    rol: 'advisor',
-    telefono: '+57 314 890 1234',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Sábado',
-    fecha_registro: '2024-03-10',
-    direccion: 'Calle 56 #12-34, Montenegro',
-    experiencia: '2 años',
-    asignaciones_activas: 7
-  },
-  {
-    id: '11',
-    nombre: 'Valentina Castro',
-    email: 'valentina.castro@occitours.com',
-    documento: '1123456789',
-    rol: 'guide',
-    telefono: '+57 315 901 2345',
-    estado: 'Activo',
-    disponibilidad: 'Fines de semana',
-    fecha_registro: '2024-02-20',
-    direccion: 'Carrera 67 #89-12, Salento',
-    especialidad: 'Café y cultura',
-    experiencia: '3 años',
-    asignaciones_activas: 10,
-    ultima_asignacion: '2024-12-19'
-  },
-  {
-    id: '12',
-    nombre: 'Jorge Morales',
-    email: 'jorge.morales@occitours.com',
-    documento: '1134567890',
-    rol: 'advisor',
-    telefono: '+57 316 012 3456',
-    estado: 'Inactivo',
-    disponibilidad: 'No disponible',
-    fecha_registro: '2024-01-25',
-    direccion: 'Avenida 23 #45-67, Circasia',
-    experiencia: '5 años',
-    asignaciones_activas: 0
-  },
-  {
-    id: '13',
-    nombre: 'Natalia Ortiz',
-    email: 'natalia.ortiz@occitours.com',
-    documento: '1145678901',
-    rol: 'guide',
-    telefono: '+57 317 123 4567',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Viernes',
-    fecha_registro: '2024-03-05',
-    direccion: 'Calle 34 #67-89, Filandia',
-    especialidad: 'Artesanías y tradiciones',
-    experiencia: '6 años',
-    asignaciones_activas: 13,
-    ultima_asignacion: '2024-12-22'
-  },
-  {
-    id: '14',
-    nombre: 'Andrés Ramírez',
-    email: 'andres.ramirez@occitours.com',
-    documento: '1156789012',
-    rol: 'guide',
-    telefono: '+57 318 234 5678',
-    estado: 'Activo',
-    disponibilidad: 'Tiempo completo',
-    fecha_registro: '2024-02-01',
-    direccion: 'Vereda Cocora Km 8',
-    especialidad: 'Palma de cera y bosque andino',
-    experiencia: '8 años',
-    asignaciones_activas: 16,
-    ultima_asignacion: '2024-12-24'
-  },
-  {
-    id: '15',
-    nombre: 'Carolina Muñoz',
-    email: 'carolina.munoz@occitours.com',
-    documento: '1167890123',
-    rol: 'advisor',
-    telefono: '+57 319 345 6789',
-    estado: 'Activo',
-    disponibilidad: 'Lunes a Viernes 8:00-17:00',
-    fecha_registro: '2024-03-12',
-    direccion: 'Carrera 12 #34-56, Armenia',
-    experiencia: '3 años',
-    asignaciones_activas: 9
-  },
-  {
-    id: '16',
-    nombre: 'Ricardo Silva',
-    email: 'ricardo.silva@occitours.com',
-    documento: '1178901234',
-    rol: 'guide',
-    telefono: '+57 320 456 7890',
-    estado: 'Suspendido',
-    disponibilidad: 'Suspendido',
-    fecha_registro: '2024-01-30',
-    direccion: 'Calle 78 #90-12, Calarcá',
-    especialidad: 'Deportes extremos',
-    experiencia: '2 años',
-    asignaciones_activas: 0,
-    ultima_asignacion: '2024-11-10'
-  },
-  {
-    id: '17',
-    nombre: 'Melissa Ríos',
-    email: 'melissa.rios@occitours.com',
-    documento: '1189012345',
-    rol: 'advisor',
-    telefono: '+57 321 567 8901',
-    estado: 'Activo',
-    disponibilidad: 'Medio tiempo',
-    fecha_registro: '2024-02-25',
-    direccion: 'Avenida 45 #67-89, Montenegro',
-    experiencia: '1 año',
-    asignaciones_activas: 4
-  },
-  {
-    id: '18',
-    nombre: 'Javier Medina',
-    email: 'javier.medina@occitours.com',
-    documento: '1190123456',
-    rol: 'guide',
-    telefono: '+57 322 678 9012',
-    estado: 'Activo',
-    disponibilidad: 'Tiempo completo',
-    fecha_registro: '2024-03-08',
-    direccion: 'Vereda Pueblo Tapao Km 6',
-    especialidad: 'Orquídeas y jardines',
-    experiencia: '5 años',
-    asignaciones_activas: 11,
-    ultima_asignacion: '2024-12-20'
-  }
-];
+// 2. Función para mapear empleado del backend al tipo local
+function mapEmpleado(e: any): Employee {
+  return {
+    id: String(e.id_empleado),
+    nombre: e.nombre || '',
+    apellido: e.apellido || '',
+    email: e.correo || '',
+    documento: e.numero_documento || '',
+    tipo_documento: e.tipo_documento || '',
+    cargo: e.cargo || '',
+    rol: e.cargo?.toLowerCase().includes('guía') || e.cargo?.toLowerCase().includes('guia')
+      ? 'guide'
+      : 'advisor',
+    telefono: e.telefono || '',
+    estado: e.estado === true || e.estado === 'activo'
+      ? 'Activo'
+      : e.estado === false || e.estado === 'inactivo'
+      ? 'Inactivo'
+      : 'Suspendido',
+    disponibilidad: '',   // el backend no tiene este campo aún
+    fecha_registro: e.fecha_registro || new Date().toISOString(),
+  };
+}
 
 export function EmployeeManagement() {
-  const [employees, setEmployees] = useState<Employee[]>(mockEmployees);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'advisor' | 'guide'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'Activo' | 'Inactivo' | 'Suspendido'>('all');
@@ -382,17 +139,20 @@ export function EmployeeManagement() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
-  const [formData, setFormData] = useState<Partial<Employee>>({
+ const [formData, setFormData] = useState<Partial<Employee> & { apellido?: string; contrasena?: string; cargo?: string }>({
     nombre: '',
+    apellido: '',
     email: '',
     documento: '',
+    cargo: '',
     rol: 'advisor',
     telefono: '',
     estado: 'Activo',
     disponibilidad: '',
     direccion: '',
     especialidad: '',
-    experiencia: ''
+    experiencia: '',
+    contrasena: ''
   });
 
   // Filtrar empleados
@@ -416,6 +176,22 @@ export function EmployeeManagement() {
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
 
+  useEffect(() => {
+    cargarEmpleados();
+  }, []);
+
+  const cargarEmpleados = async () => {
+    setLoading(true);
+    try {
+      const data = await empleadosAPI.getAll();
+      setEmployees((data as any[]).map(mapEmpleado));
+    } catch (error: any) {
+      toast.error(error.message || 'Error al cargar empleados');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Reset página cuando cambian los filtros
   useEffect(() => {
     setCurrentPage(1);
@@ -425,15 +201,18 @@ export function EmployeeManagement() {
   const handleCreate = () => {
     setFormData({
       nombre: '',
+      apellido: '',
       email: '',
       documento: '',
+      cargo: '',
       rol: 'advisor',
       telefono: '',
       estado: 'Activo',
       disponibilidad: '',
       direccion: '',
       especialidad: '',
-      experiencia: ''
+      experiencia: '',
+      contrasena: ''
     });
     setShowCreateModal(true);
   };
@@ -454,65 +233,74 @@ export function EmployeeManagement() {
     setShowDeleteDialog(true);
   };
 
-  const handleToggleStatus = (employee: Employee) => {
-    const newStatus = employee.estado === 'Activo' ? 'Inactivo' : 'Activo';
-    
-    setEmployees(prev => prev.map(e => 
-      e.id === employee.id 
-        ? { ...e, estado: newStatus }
-        : e
-    ));
-    
-    toast.success(`Estado actualizado a ${newStatus}`);
+ const handleToggleStatus = async (employee: Employee) => {
+    const nuevoEstado = employee.estado === 'Activo' ? false : true;
+    try {
+      await empleadosAPI.update(Number(employee.id), { estado: nuevoEstado } as any);
+      toast.success(`Estado actualizado a ${nuevoEstado ? 'Activo' : 'Inactivo'}`);
+      await cargarEmpleados();
+    } catch (error: any) {
+      toast.error(error.message || 'Error al cambiar estado');
+    }
   };
 
-  const confirmCreate = () => {
-    if (!formData.nombre || !formData.email || !formData.documento || !formData.telefono) {
+  const confirmCreate = async () => {
+    const fd = formData as any;
+    if (!fd.nombre || !fd.apellido || !fd.email || !fd.documento || !fd.telefono || !fd.cargo || !fd.contrasena) {
       toast.error('Por favor completa todos los campos obligatorios');
       return;
     }
-
-    const newEmployee: Employee = {
-      id: (employees.length + 1).toString(),
-      nombre: formData.nombre!,
-      email: formData.email!,
-      documento: formData.documento!,
-      rol: formData.rol as 'advisor' | 'guide',
-      telefono: formData.telefono!,
-      estado: formData.estado as 'Activo' | 'Inactivo' | 'Suspendido',
-      disponibilidad: formData.disponibilidad || 'Por definir',
-      fecha_registro: new Date().toISOString().split('T')[0],
-      direccion: formData.direccion,
-      especialidad: formData.especialidad,
-      experiencia: formData.experiencia,
-      asignaciones_activas: 0
-    };
-
-    setEmployees(prev => [...prev, newEmployee]);
-    setShowCreateModal(false);
-    toast.success('Empleado registrado exitosamente');
+    try {
+      await empleadosAPI.create({
+        nombre: fd.nombre,
+        apellido: fd.apellido,
+        correo: fd.email,
+        contrasena: fd.contrasena,
+        telefono: fd.telefono,
+        cargo: fd.cargo,
+        tipo_documento: fd.tipo_documento || 'CC',
+        numero_documento: fd.documento,
+        estado: fd.estado === 'Activo',
+      } as any);
+      toast.success('Empleado registrado exitosamente');
+      setShowCreateModal(false);
+      await cargarEmpleados();
+    } catch (error: any) {
+      toast.error(error.message || 'Error al crear empleado');
+    }
   };
 
-  const confirmEdit = () => {
-    if (!formData.nombre || !formData.email || !formData.telefono) {
+  const confirmEdit = async () => {
+    const fd = formData as any;
+    if (!fd.nombre || !fd.email || !fd.telefono) {
       toast.error('Por favor completa todos los campos obligatorios');
       return;
     }
-
-    setEmployees(prev => prev.map(e => 
-      e.id === selectedEmployee?.id 
-        ? { ...e, ...formData as Employee }
-        : e
-    ));
-
-    setShowEditModal(false);
-    toast.success('Empleado actualizado exitosamente');
+    try {
+      await empleadosAPI.update(Number(selectedEmployee?.id), {
+        nombre: fd.nombre,
+        apellido: fd.apellido,
+        telefono: fd.telefono,
+        cargo: fd.cargo,
+        estado: fd.estado === 'Activo',
+      } as any);
+      toast.success('Empleado actualizado exitosamente');
+      setShowEditModal(false);
+      await cargarEmpleados();
+    } catch (error: any) {
+      toast.error(error.message || 'Error al actualizar empleado');
+    }
   };
 
-  const confirmDelete = () => {
-    setEmployees(prev => prev.filter(e => e.id !== selectedEmployee?.id));
-    setShowDeleteDialog(false);
-    toast.success('Empleado eliminado del sistema');
+ const confirmDelete = async () => {
+    try {
+      await empleadosAPI.delete(Number(selectedEmployee?.id));
+      toast.success('Empleado eliminado del sistema');
+      setShowDeleteDialog(false);
+      await cargarEmpleados();
+    } catch (error: any) {
+      toast.error(error.message || 'Error al eliminar empleado');
+    }
   };
 
   const getRoleBadgeColor = (rol: string) => {
@@ -625,14 +413,20 @@ export function EmployeeManagement() {
                   <TableHead className="w-[220px]">Nombre completo</TableHead>
                   <TableHead className="w-[220px]">Correo electrónico</TableHead>
                   <TableHead className="w-[140px]">Documento</TableHead>
-                  <TableHead className="w-[140px]">Rol asignado</TableHead>
+                  <TableHead className="w-[140px]">Cargo</TableHead>
                   <TableHead className="w-[100px]">Estado</TableHead>
-                  <TableHead className="w-[130px]">Disponibilidad</TableHead>
                   <TableHead className="w-[140px] text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedEmployees.map((employee, index) => (
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center py-12 text-gray-400">
+                      Cargando empleados...
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedEmployees.map((employee, index) => (
                   <motion.tr
                     key={employee.id}
                     initial={{ opacity: 0, x: -20 }}
@@ -645,7 +439,7 @@ export function EmployeeManagement() {
                         <div className="w-10 h-10 rounded-full bg-green-100 flex items-center justify-center">
                           <User className="w-5 h-5 text-green-700" />
                         </div>
-                        <span>{employee.nombre}</span>
+                        <span>{employee.nombre} {employee.apellido}</span>
                       </div>
                     </TableCell>
                     <TableCell>
@@ -655,22 +449,15 @@ export function EmployeeManagement() {
                       </div>
                     </TableCell>
                     <TableCell className="text-gray-600">{employee.documento}</TableCell>
-                    <TableCell>
-                      <Badge className={getRoleBadgeColor(employee.rol)}>
-                        {employee.rol === 'advisor' ? 'Asesor' : 'Guía Turístico'}
-                      </Badge>
+                    <TableCell className="text-gray-600">
+                      {employee.cargo || '—'}
                     </TableCell>
                     <TableCell>
                       <Switch
                         checked={employee.estado === 'Activo'}
-                        onCheckedChange={(checked) => {
-                          handleToggleStatus(employee);
-                        }}
+                        onCheckedChange={() => handleToggleStatus(employee)}
                         className="data-[state=checked]:bg-green-600"
                       />
-                    </TableCell>
-                    <TableCell className="text-gray-600 text-sm">
-                      {employee.disponibilidad}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end space-x-2">
@@ -701,7 +488,9 @@ export function EmployeeManagement() {
                       </div>
                     </TableCell>
                   </motion.tr>
-                ))}
+                  ))
+                )}
+
               </TableBody>
             </Table>
 
@@ -771,6 +560,16 @@ export function EmployeeManagement() {
               </div>
 
               <div className="space-y-2">
+                <Label>Apellido *</Label>
+                <Input
+                  placeholder="Ej: Pérez"
+                  value={(formData as any).apellido || ''}
+                  onChange={(e) => setFormData({ ...formData, apellido: e.target.value } as any)}
+                  className="border-green-200"
+                />
+              </div>
+
+              <div className="space-y-2">
                 <Label>Documento de identidad *</Label>
                 <Input
                   placeholder="Ej: 1023456789"
@@ -802,20 +601,32 @@ export function EmployeeManagement() {
               </div>
 
               <div className="space-y-2">
-                <Label>Rol *</Label>
-                <Select 
-                  value={formData.rol} 
-                  onValueChange={(value: any) => setFormData({ ...formData, rol: value })}
+                <Label>Cargo *</Label>
+                <Select
+                  value={(formData as any).cargo || ''}
+                  onValueChange={(value: any) => setFormData({ ...formData, cargo: value } as any)}
                 >
                   <SelectTrigger className="border-green-200">
-                    <SelectValue />
+                    <SelectValue placeholder="Selecciona un cargo" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="advisor">Asesor</SelectItem>
-                    <SelectItem value="guide">Guía Turístico</SelectItem>
+                    <SelectItem value="Asesor">Asesor</SelectItem>
+                    <SelectItem value="Guía Turístico">Guía Turístico</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+
+              <div className="space-y-2">
+                <Label>Contraseña inicial *</Label>
+                <Input
+                  type="password"
+                  placeholder="Contraseña de acceso"
+                  value={(formData as any).contrasena || ''}
+                  onChange={(e) => setFormData({ ...formData, contrasena: e.target.value } as any)}
+                  className="border-green-200"
+                />
+              </div>
+
 
               <div className="space-y-2">
                 <Label>Estado inicial *</Label>
@@ -833,15 +644,6 @@ export function EmployeeManagement() {
                 </Select>
               </div>
 
-              <div className="space-y-2 md:col-span-2">
-                <Label>Disponibilidad</Label>
-                <Input
-                  placeholder="Ej: Lunes a Viernes 8:00-17:00"
-                  value={formData.disponibilidad}
-                  onChange={(e) => setFormData({ ...formData, disponibilidad: e.target.value })}
-                  className="border-green-200"
-                />
-              </div>
 
               <div className="space-y-2 md:col-span-2">
                 <Label>Dirección</Label>
@@ -943,18 +745,18 @@ export function EmployeeManagement() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label>Rol</Label>
+             <div className="space-y-2">
+                <Label>Cargo</Label>
                 <Select 
-                  value={formData.rol} 
-                  onValueChange={(value: any) => setFormData({ ...formData, rol: value })}
+                  value={(formData as any).cargo || ''}
+                  onValueChange={(value: any) => setFormData({ ...formData, cargo: value } as any)}
                 >
                   <SelectTrigger className="border-green-200">
-                    <SelectValue />
+                    <SelectValue placeholder="Selecciona un cargo" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="advisor">Asesor</SelectItem>
-                    <SelectItem value="guide">Guía Turístico</SelectItem>
+                    <SelectItem value="Asesor">Asesor</SelectItem>
+                    <SelectItem value="Guía Turístico">Guía Turístico</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1050,7 +852,7 @@ export function EmployeeManagement() {
                   <User className="w-8 h-8 text-white" />
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-green-800">{selectedEmployee.nombre}</h3>
+                  <h3 className="text-green-800">{selectedEmployee.nombre} {selectedEmployee.apellido}</h3>
                   <div className="flex items-center space-x-2 mt-1">
                     <Badge className={getRoleBadgeColor(selectedEmployee.rol)}>
                       {selectedEmployee.rol === 'advisor' ? 'Asesor' : 'Guía Turístico'}
@@ -1101,50 +903,57 @@ export function EmployeeManagement() {
               </div>
 
               {/* Información laboral */}
+              {/* Información laboral */}
               <div className="space-y-3">
                 <h4 className="text-gray-700">Información laboral</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="flex items-start space-x-3">
-                    <Clock className="w-5 h-5 text-green-600 mt-0.5" />
+                    <Briefcase className="w-5 h-5 text-green-600 mt-0.5" />
                     <div>
-                      <p className="text-sm text-gray-600">Disponibilidad</p>
-                      <p className="text-gray-800">{selectedEmployee.disponibilidad}</p>
+                      <p className="text-sm text-gray-600">Cargo</p>
+                      <p className="text-gray-800">{selectedEmployee.cargo || 'No especificado'}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-start space-x-3">
+                    <Phone className="w-5 h-5 text-green-600 mt-0.5" />
+                    <div>
+                      <p className="text-sm text-gray-600">Teléfono</p>
+                      <p className="text-gray-800">{selectedEmployee.telefono || 'No especificado'}</p>
                     </div>
                   </div>
 
                   <div className="flex items-start space-x-3">
                     <Calendar className="w-5 h-5 text-green-600 mt-0.5" />
                     <div>
-                      <p className="text-sm text-gray-600">Fecha de registro</p>
+                      <p className="text-sm text-gray-600">Fecha de contratación</p>
                       <p className="text-gray-800">
-                        {new Date(selectedEmployee.fecha_registro).toLocaleDateString('es-CO', {
-                          year: 'numeric',
-                          month: 'long',
-                          day: 'numeric'
-                        })}
+                        {selectedEmployee.fecha_registro
+                          ? new Date(selectedEmployee.fecha_registro).toLocaleDateString('es-CO', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric'
+                            })
+                          : 'No registrada'}
                       </p>
                     </div>
                   </div>
 
-                  {selectedEmployee.rol === 'guide' && (
-                    <>
-                      <div className="flex items-start space-x-3">
-                        <Briefcase className="w-5 h-5 text-green-600 mt-0.5" />
-                        <div>
-                          <p className="text-sm text-gray-600">Especialidad</p>
-                          <p className="text-gray-800">{selectedEmployee.especialidad || 'No especificada'}</p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-start space-x-3">
-                        <Clock className="w-5 h-5 text-green-600 mt-0.5" />
-                        <div>
-                          <p className="text-sm text-gray-600">Experiencia</p>
-                          <p className="text-gray-800">{selectedEmployee.experiencia || 'No especificada'}</p>
-                        </div>
-                      </div>
-                    </>
-                  )}
+                  <div className="flex items-start space-x-3">
+                    <Clock className="w-5 h-5 text-green-600 mt-0.5" />
+                    <div>
+                      <p className="text-sm text-gray-600">Fecha de registro</p>
+                      <p className="text-gray-800">
+                        {selectedEmployee.fecha_registro
+                          ? new Date(selectedEmployee.fecha_registro).toLocaleDateString('es-CO', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric'
+                            })
+                          : 'No registrada'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
 

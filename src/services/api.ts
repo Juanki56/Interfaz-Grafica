@@ -55,12 +55,20 @@ export interface Cliente {
 
 export interface Empleado {
   id_empleado: number;
+  id_usuarios?: number;
+  id_roles?: number;
   nombre: string;
   apellido: string;
-  correo: string;
-  telefono: string;
+  correo?: string;           // viene del JOIN con usuarios
+  telefono?: string | null;
   cargo: string;
-  estado: boolean;
+  tipo_documento?: string | null;
+  numero_documento?: string | null;
+  fecha_contratacion?: string | null;
+  estado?: boolean | null;
+  rol_nombre?: string | null;
+  ultimo_acceso?: string | null;
+  fecha_registro?: string | null;
 }
 
 export interface Reserva {
@@ -280,7 +288,16 @@ export const usersAPI = {
       body: JSON.stringify({ correo, rol }),
     });
   },
+
+  delete: async (id: number | string) => {
+  return fetchAPI(`/api/usuarios/${id}`, {
+    method: 'DELETE',
+  });
+},
 };
+  
+
+
 
 export const clientesAPI = {
   getAll: async (): Promise<Cliente[]> => {
