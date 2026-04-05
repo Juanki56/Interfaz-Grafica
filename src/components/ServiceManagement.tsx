@@ -49,9 +49,8 @@ export function ServiceManagement() {
   const itemsPerPage = 10;
 
   const emptyForm = {
-    nombre: "", descripcion: "", precio: "",
-    duracion: "", capacidad: "", contacto: "", id_proveedores: "",
-  };
+  nombre: "", descripcion: "", precio: "", imagen_url: "", id_proveedores: "",
+};
 
   const [formData, setFormData] = useState(emptyForm);
 
@@ -100,65 +99,59 @@ export function ServiceManagement() {
   );
 
   const handleCreate = async () => {
-    if (!formData.nombre || !formData.precio) {
-      toast.error("Completa los campos requeridos");
-      return;
-    }
-    try {
-      await serviciosAPI.create({
-        nombre: formData.nombre,
-        descripcion: formData.descripcion,
-        precio: Number(formData.precio),
-        duracion: formData.duracion,
-        capacidad: formData.capacidad ? Number(formData.capacidad) : undefined,
-        contacto: formData.contacto,
-        id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
-      });
-      toast.success("Servicio creado exitosamente");
-      setShowCreateDialog(false);
-      setFormData(emptyForm);
-      await cargarServicios();
-      setCurrentPage(1);
-    } catch (error: any) {
-      toast.error(error?.message || "No se pudo crear el servicio");
-    }
-  };
-
-  const handleEdit = (service: ServicioConProveedor) => {
-    setSelectedService(service);
-    setFormData({
-      nombre: service.nombre || "",
-      descripcion: service.descripcion || "",
-      precio: service.precio?.toString() || "",
-      duracion: (service as any).duracion || "",
-      capacidad: (service as any).capacidad?.toString() || "",
-      contacto: (service as any).contacto || "",
-      id_proveedores: service.id_proveedores?.toString() || "",
+  if (!formData.nombre) {
+    toast.error("El nombre es obligatorio");
+    return;
+  }
+  try {
+    await serviciosAPI.create({
+      nombre: formData.nombre,
+      descripcion: formData.descripcion,
+      precio: formData.precio ? Number(formData.precio) : undefined,
+      imagen_url: formData.imagen_url || undefined,
+      id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
     });
-    setShowEditDialog(true);
-  };
+    toast.success("Servicio creado exitosamente");
+    setShowCreateDialog(false);
+    setFormData(emptyForm);
+    await cargarServicios();
+    setCurrentPage(1);
+  } catch (error: any) {
+    toast.error(error?.message || "No se pudo crear el servicio");
+  }
+};
+
+ const handleEdit = (service: ServicioConProveedor) => {
+  setSelectedService(service);
+  setFormData({
+    nombre: service.nombre || "",
+    descripcion: service.descripcion || "",
+    precio: service.precio?.toString() || "",
+    imagen_url: (service as any).imagen_url || "",
+    id_proveedores: service.id_proveedores?.toString() || "",
+  });
+  setShowEditDialog(true);
+};
 
   const handleUpdate = async () => {
-    if (!selectedService) return;
-    try {
-      await serviciosAPI.update(selectedService.id_servicio, {
-        nombre: formData.nombre,
-        descripcion: formData.descripcion,
-        precio: Number(formData.precio),
-        duracion: formData.duracion,
-        capacidad: formData.capacidad ? Number(formData.capacidad) : undefined,
-        contacto: formData.contacto,
-        id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
-      } as any);
-      toast.success("Servicio actualizado exitosamente");
-      setShowEditDialog(false);
-      setFormData(emptyForm);
-      setSelectedService(null);
-      await cargarServicios();
-    } catch (error: any) {
-      toast.error(error?.message || "No se pudo actualizar el servicio");
-    }
-  };
+  if (!selectedService) return;
+  try {
+    await serviciosAPI.update(selectedService.id_servicio, {
+      nombre: formData.nombre,
+      descripcion: formData.descripcion,
+      precio: formData.precio ? Number(formData.precio) : undefined,
+      imagen_url: formData.imagen_url || undefined,
+      id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
+    } as any);
+    toast.success("Servicio actualizado exitosamente");
+    setShowEditDialog(false);
+    setFormData(emptyForm);
+    setSelectedService(null);
+    await cargarServicios();
+  } catch (error: any) {
+    toast.error(error?.message || "No se pudo actualizar el servicio");
+  }
+};
 
   const handleDelete = async () => {
     if (!selectedService) return;
@@ -186,86 +179,66 @@ export function ServiceManagement() {
   };
 
   const FormFields = () => (
-    <div className="grid gap-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Nombre *</Label>
-          <Input
-            value={formData.nombre}
-            onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
-            placeholder="Nombre del servicio"
-          />
-        </div>
-        <div>
-          <Label>Precio *</Label>
-          <Input
-            type="number"
-            value={formData.precio}
-            onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
-            placeholder="0"
-          />
-        </div>
-      </div>
-
+  <div className="grid gap-3">
+    <div className="grid grid-cols-2 gap-3">
       <div>
-        <Label>Descripción</Label>
-        <Textarea
-          value={formData.descripcion}
-          onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
-          placeholder="Descripción del servicio"
+        <Label>Nombre *</Label>
+        <Input
+          value={formData.nombre}
+          onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
+          placeholder="Nombre del servicio"
         />
       </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Duración</Label>
-          <Input
-            value={formData.duracion}
-            onChange={(e) => setFormData(f => ({ ...f, duracion: e.target.value }))}
-            placeholder="Ej: 2 horas"
-          />
-        </div>
-        <div>
-          <Label>Capacidad</Label>
-          <Input
-            type="number"
-            value={formData.capacidad}
-            onChange={(e) => setFormData(f => ({ ...f, capacidad: e.target.value }))}
-            placeholder="Número de personas"
-          />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <Label>Proveedor</Label>
-          <Select
-            value={formData.id_proveedores}
-            onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Selecciona proveedor" />
-            </SelectTrigger>
-            <SelectContent>
-              {proveedores.map((p) => (
-                <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
-                  {p.nombre}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div>
-          <Label>Contacto</Label>
-          <Input
-            value={formData.contacto}
-            onChange={(e) => setFormData(f => ({ ...f, contacto: e.target.value }))}
-            placeholder="Teléfono o email"
-          />
-        </div>
+      <div>
+        <Label>Precio</Label>
+        <Input
+          type="number"
+          value={formData.precio}
+          onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
+          placeholder="0"
+        />
       </div>
     </div>
-  );
+
+    <div>
+      <Label>Descripción</Label>
+      <Textarea
+        value={formData.descripcion}
+        onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
+        placeholder="Descripción del servicio"
+      />
+    </div>
+
+    <div className="grid grid-cols-2 gap-3">
+      <div>
+        <Label>Imagen URL</Label>
+        <Input
+          value={formData.imagen_url}
+          onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
+          placeholder="https://..."
+        />
+      </div>
+      <div>
+        <Label>Proveedor</Label>
+        <Select
+          value={formData.id_proveedores}
+          onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Selecciona proveedor" />
+          </SelectTrigger>
+          <SelectContent>
+            {proveedores.map((p) => (
+              <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
+                {p.nombre}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+  </div>
+);
 
   return (
     <div className="space-y-6">
@@ -303,58 +276,60 @@ export function ServiceManagement() {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-green-200">
-                  <TableHead>Servicio</TableHead>
-                  <TableHead>Proveedor</TableHead>
-                  <TableHead>Precio</TableHead>
-                  <TableHead>Duración</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead className="text-right">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
+  <TableRow className="border-green-200">
+    <TableHead>Nombre</TableHead>
+    <TableHead>Descripción</TableHead>
+    <TableHead>Precio</TableHead>
+    <TableHead>Proveedor</TableHead>
+    <TableHead>Estado</TableHead>
+    <TableHead className="text-right">Acciones</TableHead>
+  </TableRow>
+</TableHeader>
               <TableBody>
                 {paginatedServices.map((service) => (
                   <TableRow key={service.id_servicio + "-" + (service.id_proveedores ?? "sinprov")} className="border-green-100 hover:bg-green-50">
-                    <TableCell className="font-medium">{service.nombre}</TableCell>
-                    <TableCell>
-                      {service.proveedor_nombre
-                        ? <Badge variant="outline">{service.proveedor_nombre}</Badge>
-                        : <span className="text-gray-400 text-sm">Sin proveedor</span>
-                      }
-                    </TableCell>
-                    <TableCell>
-                      {service.precio != null
-                        ? `$${Number(service.precio).toLocaleString("es-CO")}`
-                        : "—"}
-                    </TableCell>
-                    <TableCell>{(service as any).duracion ?? "—"}</TableCell>
-                    <TableCell>
-                      <Switch
-                        checked={service.estado === true}
-                        onCheckedChange={() => handleToggleEstado(service)}
-                        className="data-[state=checked]:bg-green-600"
-                      />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="ghost"
-                          className="hover:bg-blue-50 hover:text-blue-600"
-                          onClick={() => { setSelectedService(service); setShowViewDialog(true); }}>
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        <Button size="sm" variant="ghost"
-                          className="hover:bg-green-50 hover:text-green-600"
-                          onClick={() => handleEdit(service)}>
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button size="sm" variant="ghost"
-                          className="hover:bg-red-50 hover:text-red-600"
-                          onClick={() => { setSelectedService(service); setShowDeleteDialog(true); }}>
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
+  <TableCell className="font-medium">{service.nombre}</TableCell>
+  <TableCell className="text-gray-600 text-sm max-w-[200px] truncate">
+    {service.descripcion || "—"}
+  </TableCell>
+  <TableCell>
+    {service.precio != null
+      ? `$${Number(service.precio).toLocaleString("es-CO")}`
+      : "—"}
+  </TableCell>
+  <TableCell>
+    {service.proveedor_nombre
+      ? <Badge variant="outline">{service.proveedor_nombre}</Badge>
+      : <span className="text-gray-400 text-sm">Sin proveedor</span>
+    }
+  </TableCell>
+  <TableCell>
+    <Switch
+      checked={service.estado === true}
+      onCheckedChange={() => handleToggleEstado(service)}
+      className="data-[state=checked]:bg-green-600"
+    />
+  </TableCell>
+  <TableCell className="text-right">
+    <div className="flex justify-end gap-1">
+      <Button size="sm" variant="ghost"
+        className="hover:bg-blue-50 hover:text-blue-600"
+        onClick={() => { setSelectedService(service); setShowViewDialog(true); }}>
+        <Eye className="w-4 h-4" />
+      </Button>
+      <Button size="sm" variant="ghost"
+        className="hover:bg-green-50 hover:text-green-600"
+        onClick={() => handleEdit(service)}>
+        <Edit className="w-4 h-4" />
+      </Button>
+      <Button size="sm" variant="ghost"
+        className="hover:bg-red-50 hover:text-red-600"
+        onClick={() => { setSelectedService(service); setShowDeleteDialog(true); }}>
+        <Trash2 className="w-4 h-4" />
+      </Button>
+    </div>
+  </TableCell>
+</TableRow>
                 ))}
                 {paginatedServices.length === 0 && (
                   <TableRow>
@@ -436,24 +411,22 @@ export function ServiceManagement() {
             <DialogTitle className="text-green-800">Detalle del Servicio</DialogTitle>
           </DialogHeader>
           {selectedService && (
-            <div className="space-y-3">
-              {[
-                { label: "Nombre", value: selectedService.nombre },
-                { label: "Descripción", value: selectedService.descripcion || "—" },
-                { label: "Precio", value: selectedService.precio ? `$${Number(selectedService.precio).toLocaleString("es-CO")}` : "—" },
-                { label: "Proveedor", value: selectedService.proveedor_nombre || "Sin proveedor" },
-                { label: "Duración", value: (selectedService as any).duracion || "—" },
-                { label: "Capacidad", value: (selectedService as any).capacidad || "—" },
-                { label: "Contacto", value: (selectedService as any).contacto || "—" },
-                { label: "Estado", value: selectedService.estado ? "Activo" : "Inactivo" },
-              ].map(({ label, value }) => (
-                <div key={label} className="flex justify-between py-2 border-b border-green-100">
-                  <span className="font-medium text-green-800">{label}</span>
-                  <span className="text-gray-600">{String(value)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+  <div className="space-y-3">
+    {[
+      { label: "Nombre", value: selectedService.nombre },
+      { label: "Descripción", value: selectedService.descripcion || "—" },
+      { label: "Precio", value: selectedService.precio ? `$${Number(selectedService.precio).toLocaleString("es-CO")}` : "—" },
+      { label: "Proveedor", value: selectedService.proveedor_nombre || "Sin proveedor" },
+      { label: "Estado", value: selectedService.estado ? "Activo" : "Inactivo" },
+      { label: "Fecha creación", value: selectedService.fecha_creacion ? new Date(selectedService.fecha_creacion).toLocaleDateString('es-CO') : "—" },
+    ].map(({ label, value }) => (
+      <div key={label} className="flex justify-between py-2 border-b border-green-100">
+        <span className="font-medium text-green-800">{label}</span>
+        <span className="text-gray-600">{String(value)}</span>
+      </div>
+    ))}
+  </div>
+)}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowViewDialog(false)}>Cerrar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white"
