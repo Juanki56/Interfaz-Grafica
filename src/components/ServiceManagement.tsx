@@ -43,7 +43,6 @@ export function ServiceManagement() {
     precio: "",
     duracion: "",
     capacidad: "",
-    contacto: "",
     id_proveedores: "",
   });
 
@@ -122,7 +121,6 @@ export function ServiceManagement() {
         precio: Number(formData.precio),
         duracion: formData.duracion,
         capacidad: formData.capacidad ? Number(formData.capacidad) : undefined,
-        contacto: formData.contacto,
         id_proveedores: Number(formData.id_proveedores),
       });
       setShowCreateDialog(false);
@@ -132,7 +130,6 @@ export function ServiceManagement() {
         precio: "",
         duracion: "",
         capacidad: "",
-        contacto: "",
         id_proveedores: "",
       });
       const servRes = await serviciosAPI.getAllConProveedor();
@@ -152,18 +149,12 @@ export function ServiceManagement() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
-        <div>
-          <h2 className="text-2xl font-semibold text-gray-900">Gestión de Servicios</h2>
-        </div>
-         <div style={{color: 'red', fontSize: 24}}>CAMBIO DE PRUEBA - TU ARCHIVO SE USA</div>¿
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <h2 className="text-2xl font-semibold text-gray-900">Gestión de Servicios</h2>
         <Button color="green" onClick={() => setShowCreateDialog(true)}>
           <Plus className="w-4 h-4 mr-2" /> Crear Servicios
         </Button>
       </div>
-
-     
-
 
       {/* Filtros */}
       <Card>
@@ -337,12 +328,6 @@ export function ServiceManagement() {
                 ))}
               </SelectContent>
             </Select>
-
-            <Label>Contacto</Label>
-            <Input
-              value={formData.contacto}
-              onChange={(e) => setFormData(f => ({ ...f, contacto: e.target.value }))}
-            />
           </div>
           <DialogFooter>
             <Button

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { jsPDF } from 'jspdf';
 import { motion } from 'motion/react';
 import {
   DollarSign, Search, Plus, Eye, Ban, Calendar, FileText, Download, X, Upload,
@@ -147,6 +148,67 @@ export function ProviderPaymentManagement() {
     }
     setSelectedPayment(payment);
     setIsAnnulDialogOpen(true);
+  };
+
+  const handleDownloadPDF = (payment: PagoProveedor) => {
+    try {
+      const proveedorNombre =
+        proveedores.find((p) => p.id_proveedores === payment.id_proveedores)?.nombre ??
+        String(payment.id_proveedores);
+      const doc = new jsPDF();
+      const pageW = doc.internal.pageSize.getWidth();
+      const margin = 14;
+      const maxW = pageW - margin * 2;
+      let y = 18;
+
+      doc.setFontSize(16);
+      doc.text('Comprobante de pago a proveedor', margin, y);
+      y += 10;
+      doc.setFontSize(10);
+      doc.setTextColor(80, 80, 80);
+      doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, margin, y);
+      y += 12;
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(11);
+
+      const fechaPago = new Date(payment.fecha_pago).toLocaleDateString('es-CO', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const bloques: string[] = [
+        `ID de pago: #${payment.id_pago_proveedor.toString().padStart(4, '0')}`,
+        `Proveedor: ${proveedorNombre}`,
+        `Monto: ${formatCurrency(payment.monto)}`,
+        `Fecha de pago: ${fechaPago}`,
+        `Método de pago: ${payment.metodo_pago ?? '—'}`,
+        `Nº transacción / factura: ${payment.numero_transaccion ?? '—'}`,
+        `Estado: ${(payment.estado ?? 'activo').toString()}`,
+      ];
+      if (payment.comprobante_pago) {
+        bloques.push(`Comprobante: ${payment.comprobante_pago}`);
+      }
+      bloques.push('Concepto / observaciones:');
+      bloques.push(payment.observaciones || '—');
+
+      for (const block of bloques) {
+        const lines = doc.splitTextToSize(block, maxW);
+        for (const line of lines) {
+          if (y > 280) {
+            doc.addPage();
+            y = 18;
+          }
+          doc.text(line, margin, y);
+          y += 6;
+        }
+        y += 2;
+      }
+
+      doc.save(`pago-proveedor-${payment.id_pago_proveedor}.pdf`);
+      toast.success('PDF descargado');
+    } catch {
+      toast.error('No se pudo generar el PDF');
+    }
   };
 
   const confirmAnnul = async () => {
@@ -362,6 +424,14 @@ export function ProviderPaymentManagement() {
                             title="Ver detalles"
                           >
                             <Eye className="w-4 h-4 text-blue-600" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadPDF(payment)}
+                            title="Descargar PDF"
+                          >
+                            <Download className="w-4 h-4 text-green-600" />
                           </Button>
                           <Button
                             variant="ghost"
