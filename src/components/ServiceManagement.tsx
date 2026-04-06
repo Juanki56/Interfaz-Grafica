@@ -1,39 +1,50 @@
 import { useEffect, useState } from "react";
 import {
-  Plus,
-  Edit,
-  Trash2,
-  Eye,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
+  Plus, Edit, Trash2, Eye, Settings,
+  ChevronLeft, ChevronRight, X
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Switch } from "./ui/switch";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead,
+  TableHeader, TableRow,
 } from "./ui/table";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
+import {
+  Dialog, DialogContent, DialogFooter,
+  DialogHeader, DialogTitle, DialogDescription
+} from "./ui/dialog";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Label } from "./ui/label";
 import { Textarea } from "./ui/textarea";
+import { Badge } from "./ui/badge";
 import { toast } from "sonner";
-import { serviciosAPI, ServicioConProveedor, proveedoresAPI, Proveedor } from "../services/api";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import {
+  serviciosAPI, ServicioConProveedor,
+  proveedoresAPI, Proveedor
+} from "../services/api";
+import {
+  Select, SelectContent, SelectItem,
+  SelectTrigger, SelectValue
+} from "./ui/select";
 
 export function ServiceManagement() {
   const [services, setServices] = useState<ServicioConProveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showViewDialog, setShowViewDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [selectedService, setSelectedService] = useState<ServicioConProveedor | null>(null);
 
   const itemsPerPage = 10;
 
@@ -62,57 +73,26 @@ export function ServiceManagement() {
     }
   };
 
-  // Carga inicial de servicios con proveedor
   useEffect(() => {
     const init = async () => {
-      try {
-        setIsLoading(true);
-        const [servRes, provRes] = await Promise.all([
-          serviciosAPI.getAllConProveedor(),
-          proveedoresAPI.getAll(),
-        ]);
-        // Si el endpoint con JOIN no devuelve resultados, al menos mostramos los servicios base.
-        if (servRes?.length) {
-          setServices(servRes);
-        } else {
-          const base = await serviciosAPI.getAll();
-          setServices(base as ServicioConProveedor[]);
-        }
-        setProveedores(provRes);
-      } catch (error: any) {
-        console.error("Error inicializando servicios:", error);
-        toast.error(error?.message || "Error cargando servicios");
-        setServices([]);
-        setProveedores([]);
-      } finally {
-        setIsLoading(false);
-        setCurrentPage(1);
-      }
+      setIsLoading(true);
+      await cargarServicios();
+      setIsLoading(false);
+      setCurrentPage(1);
     };
-
     init();
   }, []);
 
-  // Filtrado
-  const filteredServices = services.filter((service) => {
-    const matchesSearch =
-      (service.nombre ?? "")
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase()) ||
-      (service.descripcion ?? "")
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase());
-    return matchesSearch;
-  });
+  const filteredServices = services.filter((service) =>
+    (service.nombre ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (service.descripcion ?? "").toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
-  // Evita que la tabla quede vacía si el usuario estaba en una página alta
-  // y después se recarga con menos resultados.
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredServices.length / itemsPerPage));
     setCurrentPage((p) => Math.min(p, maxPage));
   }, [filteredServices.length]);
 
-  // Paginación
   const paginatedServices = filteredServices.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
@@ -262,37 +242,38 @@ export function ServiceManagement() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <h2 className="text-2xl font-semibold text-gray-900">Gestión de Servicios</h2>
-        <Button color="green" onClick={() => setShowCreateDialog(true)}>
-          <Plus className="w-4 h-4 mr-2" /> Crear Servicios
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-900">Gestión de Servicios</h2>
+          <p className="text-gray-500 text-sm">Administra los servicios y sus proveedores</p>
+        </div>
+        <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => {
+          setFormData(emptyForm);
+          setShowCreateDialog(true);
+        }}>
+          <Plus className="w-4 h-4 mr-2" /> Crear Servicio
         </Button>
       </div>
 
-      {/* Filtros */}
       <Card>
         <CardContent className="p-4">
-          <div className="flex gap-2">
-            <Input
-              placeholder="Buscar servicios..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-64"
-            />
-          </div>
+          <Input
+            placeholder="Buscar servicios..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-64 border-green-200"
+          />
         </CardContent>
       </Card>
 
-      {/* Tabla */}
-      <Card>
+      <Card className="border-green-200">
         <CardHeader>
-          <CardTitle>Servicios ({filteredServices.length})</CardTitle>
+          <CardTitle className="text-green-800">Servicios ({filteredServices.length})</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <div className="text-center py-8 text-gray-500">Cargando servicios...</div>
           ) : (
-          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
   <TableRow className="border-green-200">
@@ -352,109 +333,56 @@ export function ServiceManagement() {
                 ))}
                 {paginatedServices.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center py-8">
-                      <div className="text-gray-500">
-                        <Settings className="w-12 h-12 mx-auto mb-2 opacity-50" />
-                        <p>No hay datos disponibles</p>
-                      </div>
+                    <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                      <Settings className="w-12 h-12 mx-auto mb-2 opacity-30" />
+                      <p>No hay servicios disponibles</p>
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
             </Table>
-          </div>
+          )}
+
+          {Math.ceil(filteredServices.length / itemsPerPage) > 1 && (
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-green-100">
+              <p className="text-sm text-gray-600">
+                Mostrando {(currentPage - 1) * itemsPerPage + 1} a {Math.min(currentPage * itemsPerPage, filteredServices.length)} de {filteredServices.length}
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="border-green-200 text-green-700">
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                <span className="text-sm text-gray-600 self-center">
+                  Página {currentPage} de {Math.ceil(filteredServices.length / itemsPerPage)}
+                </span>
+                <Button size="sm" variant="outline"
+                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredServices.length / itemsPerPage), p + 1))}
+                  disabled={currentPage === Math.ceil(filteredServices.length / itemsPerPage)}
+                  className="border-green-200 text-green-700">
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Paginación */}
-      <div className="flex justify-between items-center mt-4">
-        <span>
-          Mostrando {filteredServices.length > 0
-            ? (currentPage - 1) * itemsPerPage + 1
-            : 0} - {(currentPage - 1) * itemsPerPage + paginatedServices.length} de {filteredServices.length} registros
-        </span>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            disabled={currentPage === 1}
-          >
-            <ChevronLeft className="w-4 h-4" /> Anterior
-          </Button>
-          <span className="rounded px-2 py-1 bg-green-100 text-green-700">{currentPage}</span>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              setCurrentPage((p) =>
-                Math.min(Math.ceil(filteredServices.length / itemsPerPage), p + 1)
-              )
-            }
-            disabled={currentPage === Math.ceil(filteredServices.length / itemsPerPage)}
-          >
-            Siguiente <ChevronRight className="w-4 h-4" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Dialog Crear Servicio */}
+      {/* Modal Crear */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Crear Nuevo Servicio</DialogTitle>
+            <DialogTitle className="text-green-800">Crear Nuevo Servicio</DialogTitle>
+            <DialogDescription>Completa los campos para registrar un nuevo servicio.</DialogDescription>
           </DialogHeader>
-          <div className="grid gap-2">
-            <Label>Nombre</Label>
-            <Input
-              value={formData.nombre}
-              onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
-            />
-            <Label>Descripción</Label>
-            <Textarea
-              value={formData.descripcion}
-              onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
-            />
-            <Label>Precio</Label>
-            <Input
-              type="number"
-              value={formData.precio}
-              onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
-            />
-            <Label>Duración</Label>
-            <Input
-              value={formData.duracion}
-              onChange={(e) => setFormData(f => ({ ...f, duracion: e.target.value }))}
-            />
-            <Label>Capacidad</Label>
-            <Input
-              value={formData.capacidad}
-              onChange={(e) => setFormData(f => ({ ...f, capacidad: e.target.value }))}
-            />
-            <Label>Proveedor</Label>
-            <Select
-              value={formData.id_proveedores}
-              onValueChange={(v: string) => setFormData((f) => ({ ...f, id_proveedores: v }))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Selecciona proveedor" />
-              </SelectTrigger>
-              <SelectContent>
-                {proveedores.map((p) => (
-                  <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
-                    {p.nombre}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <FormFields />
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setShowCreateDialog(false)}
-            >Cancelar</Button>
-            <Button onClick={handleCreateService}>Crear Servicio</Button>
+            <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancelar</Button>
+            <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleCreate}>
+              Crear Servicio
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
