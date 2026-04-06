@@ -33,6 +33,10 @@ import {
   SelectTrigger, SelectValue
 } from "./ui/select";
 
+const emptyForm = {
+  nombre: "", descripcion: "", precio: "", imagen_url: "", id_proveedores: "",
+};
+
 export function ServiceManagement() {
   const [services, setServices] = useState<ServicioConProveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -48,9 +52,7 @@ export function ServiceManagement() {
 
   const itemsPerPage = 10;
 
-  const emptyForm = {
-  nombre: "", descripcion: "", precio: "", imagen_url: "", id_proveedores: "",
-};
+  
 
   const [formData, setFormData] = useState(emptyForm);
 
@@ -180,64 +182,62 @@ export function ServiceManagement() {
 
   const FormFields = () => (
   <div className="grid gap-3">
-    <div className="grid grid-cols-2 gap-3">
-      <div>
-        <Label>Nombre *</Label>
-        <Input
-          value={formData.nombre}
-          onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
-          placeholder="Nombre del servicio"
-        />
-      </div>
-      <div>
-        <Label>Precio</Label>
-        <Input
-          type="number"
-          value={formData.precio}
-          onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
-          placeholder="0"
-        />
-      </div>
-    </div>
-
+  <div className="grid grid-cols-2 gap-3">
     <div>
-      <Label>Descripción</Label>
-      <Textarea
-        value={formData.descripcion}
-        onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
-        placeholder="Descripción del servicio"
+      <Label>Nombre *</Label>
+      <Input
+        value={formData.nombre}
+        onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
+        placeholder="Nombre del servicio"
       />
     </div>
-
-    <div className="grid grid-cols-2 gap-3">
-      <div>
-        <Label>Imagen URL</Label>
-        <Input
-          value={formData.imagen_url}
-          onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
-          placeholder="https://..."
-        />
-      </div>
-      <div>
-        <Label>Proveedor</Label>
-        <Select
-          value={formData.id_proveedores}
-          onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Selecciona proveedor" />
-          </SelectTrigger>
-          <SelectContent>
-            {proveedores.map((p) => (
-              <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
-                {p.nombre}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+    <div>
+      <Label>Precio</Label>
+      <Input
+        type="number"
+        value={formData.precio}
+        onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
+        placeholder="0"
+      />
     </div>
   </div>
+  <div>
+    <Label>Descripción</Label>
+    <Textarea
+      value={formData.descripcion}
+      onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
+      placeholder="Descripción del servicio"
+    />
+  </div>
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <Label>Imagen URL</Label>
+      <Input
+        value={formData.imagen_url}
+        onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
+        placeholder="https://..."
+      />
+    </div>
+    <div>
+      <Label>Proveedor</Label>
+      <Select
+        value={formData.id_proveedores}
+        onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="Selecciona proveedor" />
+        </SelectTrigger>
+        <SelectContent>
+          {proveedores.map((p) => (
+            <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
+              {p.nombre}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  </div>
+</div>
 );
 
   return (
@@ -377,7 +377,63 @@ export function ServiceManagement() {
             <DialogTitle className="text-green-800">Crear Nuevo Servicio</DialogTitle>
             <DialogDescription>Completa los campos para registrar un nuevo servicio.</DialogDescription>
           </DialogHeader>
-          <FormFields />
+          <div className="grid gap-3">
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <Label>Nombre *</Label>
+      <Input
+        value={formData.nombre}
+        onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
+        placeholder="Nombre del servicio"
+      />
+    </div>
+    <div>
+      <Label>Precio</Label>
+      <Input
+        type="number"
+        value={formData.precio}
+        onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
+        placeholder="0"
+      />
+    </div>
+  </div>
+  <div>
+    <Label>Descripción</Label>
+    <Textarea
+      value={formData.descripcion}
+      onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
+      placeholder="Descripción del servicio"
+    />
+  </div>
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <Label>Imagen URL</Label>
+      <Input
+        value={formData.imagen_url}
+        onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
+        placeholder="https://..."
+      />
+    </div>
+    <div>
+      <Label>Proveedor</Label>
+      <Select
+        value={formData.id_proveedores}
+        onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="Selecciona proveedor" />
+        </SelectTrigger>
+        <SelectContent>
+          {proveedores.map((p) => (
+            <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
+              {p.nombre}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  </div>
+</div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleCreate}>
@@ -394,8 +450,63 @@ export function ServiceManagement() {
             <DialogTitle className="text-green-800">Editar Servicio</DialogTitle>
             <DialogDescription>Modifica la información del servicio.</DialogDescription>
           </DialogHeader>
-          <FormFields />
-          <DialogFooter>
+<div className="grid gap-3">
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <Label>Nombre *</Label>
+      <Input
+        value={formData.nombre}
+        onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
+        placeholder="Nombre del servicio"
+      />
+    </div>
+    <div>
+      <Label>Precio</Label>
+      <Input
+        type="number"
+        value={formData.precio}
+        onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
+        placeholder="0"
+      />
+    </div>
+  </div>
+  <div>
+    <Label>Descripción</Label>
+    <Textarea
+      value={formData.descripcion}
+      onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
+      placeholder="Descripción del servicio"
+    />
+  </div>
+  <div className="grid grid-cols-2 gap-3">
+    <div>
+      <Label>Imagen URL</Label>
+      <Input
+        value={formData.imagen_url}
+        onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
+        placeholder="https://..."
+      />
+    </div>
+    <div>
+      <Label>Proveedor</Label>
+      <Select
+        value={formData.id_proveedores}
+        onValueChange={(v) => setFormData(f => ({ ...f, id_proveedores: v }))}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder="Selecciona proveedor" />
+        </SelectTrigger>
+        <SelectContent>
+          {proveedores.map((p) => (
+            <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
+              {p.nombre}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  </div>
+</div>          <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleUpdate}>
               Guardar Cambios

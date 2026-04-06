@@ -15,8 +15,11 @@ import {
   ChevronLeft,
   ChevronRight,
   IdCard,
-  User
+  User,
+  Shield
 } from 'lucide-react';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -55,6 +58,9 @@ interface OwnersManagementProps {
 }
 
 export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) {
+  const permisos = usePermissions();
+  const ownerPerms = createModulePermissions(permisos, 'Propietarios');
+  
   const [owners, setOwners] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -134,6 +140,11 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
 
   // Crear propietario
   const handleCreateOwner = async () => {
+    if (!ownerPerms.canCreate()) {
+      toast.error('No tienes permiso para crear propietarios');
+      return;
+    }
+    
     if (!formData.nombre || !formData.telefono) {
       toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
       return;
@@ -180,6 +191,11 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   };
 
   const handleUpdateOwner = async () => {
+    if (!ownerPerms.canEdit()) {
+      toast.error('No tienes permiso para editar propietarios');
+      return;
+    }
+    
     if (!formData.nombre || !formData.telefono) {
       toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
       return;
@@ -217,6 +233,11 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   };
 
   const confirmDeleteOwner = async () => {
+    if (!ownerPerms.canDelete()) {
+      toast.error('No tienes permiso para eliminar propietarios');
+      return;
+    }
+    
     try {
       console.log('🗑️ Eliminando propietario:', selectedOwner.id);
       await propietariosAPI.delete(parseInt(selectedOwner.id));
@@ -250,6 +271,17 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
     });
   };
 
+  // Esperar a que carguen los permisos
+  if (permisos.loadingRoles) {
+    return (
+      <div className="flex items-center justify-center p-8">
+        <div className="text-center">
+          <p className="text-gray-600">Cargando permisos...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -261,13 +293,15 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
         <div>
           <h2 className="text-green-800">Gestión de Propietarios</h2>
           <p className="text-gray-600">
-            {isReadOnly 
-              ? 'Consulta la información de los propietarios registrados'
-              : 'Administra los propietarios de fincas y establecimientos turísticos'
+            {!ownerPerms.canView()
+              ? 'Acceso denegado. No tienes permiso para ver propietarios'
+              : ownerPerms.canCreate() || ownerPerms.canEdit()
+              ? 'Administra los propietarios de fincas y establecimientos turísticos'
+              : 'Consulta la información de los propietarios registrados'
             }
           </p>
         </div>
-        {!isReadOnly && (
+        {ownerPerms.canCreate() && (
           <Button
             onClick={() => setIsCreateModalOpen(true)}
             className="bg-green-600 hover:bg-green-700"
@@ -364,7 +398,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                       {owner.address}
                     </TableCell>
                     <TableCell>
-                      {!isReadOnly && (
+                      {ownerPerms.canEdit() && (
                         <Switch
                           checked={owner.isActive}
                           onCheckedChange={(checked) => {
@@ -376,7 +410,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                           className="data-[state=checked]:bg-green-600"
                         />
                       )}
-                      {isReadOnly && (
+                      {!ownerPerms.canEdit() && (
                         <Badge 
                           variant={owner.isActive ? 'default' : 'secondary'}
                           className={owner.isActive ? 'bg-green-500' : 'bg-gray-400'}
@@ -395,25 +429,25 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        {!isReadOnly && (
-                          <>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEditOwner(owner)}
-                              className="border-blue-600 text-blue-600 hover:bg-blue-50"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDeleteOwner(owner)}
-                              className="border-red-600 text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
-                          </>
+                        {ownerPerms.canEdit() && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleEditOwner(owner)}
+                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {ownerPerms.canDelete() && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDeleteOwner(owner)}
+                            className="border-red-600 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         )}
                       </div>
                     </TableCell>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key, Loader2 } from 'lucide-react';
-import { rolesAPI, usersAPI, type Rol } from '../services/api';
+import { rolesAPI, usersAPI, permisosAPI, type Rol, type Permiso } from '../services/api';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -16,19 +16,19 @@ import { Avatar, AvatarContent, AvatarFallback } from './ui/avatar';
 import { toast } from 'sonner';
 
 interface Permission {
-  id: string;
-  name: string;
-  description: string;
-  category: string;
+  id_permisos: number;
+  nombre: string;
+  descripcion?: string | null;
+  fecha_creacion?: string | null;
 }
 
 interface Role {
   id_roles: number;
   nombre: string;
-  descripcion: string;
+  descripcion?: string;
   estado?: boolean;
   fecha_creacion?: string;
-  permissions?: string[];
+  permisos?: Permission[];
   userCount?: number;
   isSystem?: boolean;
   color?: string;
@@ -47,25 +47,11 @@ interface User {
 export function RoleManagement() {
   const [activeTab, setActiveTab] = useState('roles');
   const [loading, setLoading] = useState(true);
+  const [loadingPermisos, setLoadingPermisos] = useState(false);
   
   const [roles, setRoles] = useState<Role[]>([]);
-  const [users, setUsers] = useState<User[]>([]); // TODO: Cargar desde BD cuando exista tabla de usuarios
-
-  const [permissions] = useState<Permission[]>([
-    { id: 'read_users', name: 'Ver Usuarios', description: 'Puede ver la lista de usuarios', category: 'Usuarios' },
-    { id: 'create_users', name: 'Crear Usuarios', description: 'Puede crear nuevos usuarios', category: 'Usuarios' },
-    { id: 'edit_users', name: 'Editar Usuarios', description: 'Puede modificar usuarios existentes', category: 'Usuarios' },
-    { id: 'delete_users', name: 'Eliminar Usuarios', description: 'Puede eliminar usuarios', category: 'Usuarios' },
-    { id: 'read_tours', name: 'Ver Tours', description: 'Puede ver tours y paquetes', category: 'Tours' },
-    { id: 'create_tours', name: 'Crear Tours', description: 'Puede crear nuevos tours', category: 'Tours' },
-    { id: 'edit_tours', name: 'Editar Tours', description: 'Puede modificar tours existentes', category: 'Tours' },
-    { id: 'delete_tours', name: 'Eliminar Tours', description: 'Puede eliminar tours', category: 'Tours' },
-    { id: 'read_bookings', name: 'Ver Reservas', description: 'Puede ver reservas', category: 'Reservas' },
-    { id: 'create_bookings', name: 'Crear Reservas', description: 'Puede crear reservas', category: 'Reservas' },
-    { id: 'edit_bookings', name: 'Editar Reservas', description: 'Puede modificar reservas', category: 'Reservas' },
-    { id: 'read_routes', name: 'Ver Rutas', description: 'Puede ver rutas turísticas', category: 'Rutas' },
-    { id: 'manage_groups', name: 'Gestionar Grupos', description: 'Puede gestionar grupos de turistas', category: 'Rutas' }
-  ]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [permissions, setPermissions] = useState<Permission[]>([]);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
@@ -78,7 +64,7 @@ export function RoleManagement() {
   const [newRole, setNewRole] = useState({
     nombre: '',
     descripcion: '',
-    permissions: [] as string[]
+    permisos: [] as number[]
   });
   const [isReassignDialogOpen, setIsReassignDialogOpen] = useState(false);
   const [rolePendingDelete, setRolePendingDelete] = useState<Role | null>(null);
@@ -87,29 +73,59 @@ export function RoleManagement() {
   const getRoleDescriptionText = (descripcion?: string | null) => {
     return descripcion && descripcion.trim()
       ? descripcion
-      : 'Este rol no tiene descripcion';
+      : 'Este rol no tiene descripción';
   };
 
-  // Cargar roles desde la base de datos
+  // Cargar permisos desde la base de datos
   useEffect(() => {
+    cargarPermisos();
     cargarRoles();
   }, []);
 
+  const cargarPermisos = async () => {
+    try {
+      setLoadingPermisos(true);
+      const permisosData = await permisosAPI.getAll();
+      setPermissions(permisosData || []);
+    } catch (error) {
+      console.error('Error al cargar permisos:', error);
+      toast.error('Error al cargar permisos del backend');
+    } finally {
+      setLoadingPermisos(false);
+    }
+  };
+
+  // Cargar roles desde la base de datos
   const cargarRoles = async () => {
     try {
       setLoading(true);
       const rolesData = await rolesAPI.getAll();
       
-      // Adaptar los roles de la BD al formato del componente
-      const rolesAdaptados = rolesData.map(rol => ({
-        ...rol,
-        permissions: [],
-        userCount: 0,
-        isSystem: ['Administrador', 'Cliente', 'Asesor', 'Guía'].includes(rol.nombre),
-        color: obtenerColorRol(rol.nombre)
-      }));
+      // Cargar permisos para cada rol
+      const rolesAdaptados = await Promise.all(
+        rolesData.map(async (rol) => {
+          try {
+            const permisos = await rolesAPI.getPermisosDeRol(rol.id_roles);
+            return {
+              ...rol,
+              permisos: permisos || [],
+              userCount: 0,
+              isSystem: ['Administrador', 'Cliente', 'Asesor', 'Guía'].includes(rol.nombre),
+              color: obtenerColorRol(rol.nombre)
+            };
+          } catch {
+            return {
+              ...rol,
+              permisos: [],
+              userCount: 0,
+              isSystem: ['Administrador', 'Cliente', 'Asesor', 'Guía'].includes(rol.nombre),
+              color: obtenerColorRol(rol.nombre)
+            };
+          }
+        })
+      );
       
-      setRoles(rolesAdaptados as any);
+      setRoles(rolesAdaptados as Role[]);
     } catch (error) {
       console.error('Error al cargar roles desde el backend:', error);
       toast.error('Error al conectar con el backend. Verifica que esté corriendo en http://localhost:3000');
@@ -145,24 +161,27 @@ export function RoleManagement() {
       return;
     }
 
-    if (newRole.permissions.length === 0) {
+    if (newRole.permisos.length === 0) {
       toast.error('Debe asignar al menos un permiso al rol');
       return;
     }
 
     try {
+      // Crear el rol en la BD
       await rolesAPI.create({
         nombre: newRole.nombre,
         descripcion: newRole.descripcion
       });
 
-      toast.success('Rol creado exitosamente');
+      // Los permisos se asignarán después (se necesita el ID del rol creado)
+      // Por ahora mostrar éxito
+      toast.success('Rol creado exitosamente. Asigna los permisos en la edición.');
       setShowCreateModal(false);
-      setNewRole({ nombre: '', descripcion: '', permissions: [] });
+      setNewRole({ nombre: '', descripcion: '', permisos: [] });
       await cargarRoles();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al crear rol:', error);
-      toast.error('Error al crear el rol');
+      toast.error(error?.message || 'Error al crear el rol');
     }
   };
 
@@ -172,25 +191,29 @@ export function RoleManagement() {
       return;
     }
 
-    if (newRole.permissions.length === 0) {
+    if (newRole.permisos.length === 0) {
       toast.error('Debe asignar al menos un permiso al rol');
       return;
     }
 
     try {
+      // Actualizar datos básicos del rol
       await rolesAPI.update(selectedRole.id_roles, {
         nombre: newRole.nombre,
         descripcion: newRole.descripcion
       });
 
-      toast.success('Rol actualizado exitosamente');
+      // Actualizar permisos del rol
+      await rolesAPI.actualizarPermisos(selectedRole.id_roles, newRole.permisos);
+
+      toast.success('Rol actualizado exitosamente. Los permisos han sido asignados.');
       setShowEditModal(false);
       setSelectedRole(null);
-      setNewRole({ nombre: '', descripcion: '', permissions: [] });
+      setNewRole({ nombre: '', descripcion: '', permisos: [] });
       await cargarRoles();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error al actualizar rol:', error);
-      toast.error('Error al actualizar el rol');
+      toast.error(error?.message || 'Error al actualizar el rol');
     }
   };
 
@@ -287,8 +310,8 @@ export function RoleManagement() {
     setSelectedRole(role);
     setNewRole({
       nombre: role.nombre,
-      descripcion: role.descripcion,
-      permissions: [...(role.permissions || [])]
+      descripcion: role.descripcion || '',
+      permisos: role.permisos?.map(p => p.id_permisos) || []
     });
     setShowEditModal(true);
   };
@@ -298,34 +321,38 @@ export function RoleManagement() {
     setShowAssignRoleModal(true);
   };
 
-  const togglePermission = (permissionId: string) => {
+  const togglePermission = (permissionId: number) => {
     setNewRole(prev => ({
       ...prev,
-      permissions: prev.permissions.includes(permissionId)
-        ? prev.permissions.filter(p => p !== permissionId)
-        : [...prev.permissions, permissionId]
+      permisos: prev.permisos.includes(permissionId)
+        ? prev.permisos.filter(p => p !== permissionId)
+        : [...prev.permisos, permissionId]
     }));
   };
 
   const selectAllPermissions = () => {
     setNewRole(prev => ({
       ...prev,
-      permissions: permissions.map(permission => permission.id)
+      permisos: permissions.map(p => p.id_permisos)
     }));
   };
 
   const clearAllPermissions = () => {
     setNewRole(prev => ({
       ...prev,
-      permissions: []
+      permisos: []
     }));
   };
 
+  // Agrupar permisos por módulo (extraer el último word del nombre)
   const groupedPermissions = permissions.reduce((acc, permission) => {
-    if (!acc[permission.category]) {
-      acc[permission.category] = [];
+    const parts = permission.nombre?.split(' ') || [];
+    const module = parts[parts.length - 1] || 'Otros';
+
+    if (!acc[module]) {
+      acc[module] = [];
     }
-    acc[permission.category].push(permission);
+    acc[module].push(permission);
     return acc;
   }, {} as Record<string, Permission[]>);
 
@@ -476,7 +503,7 @@ export function RoleManagement() {
                         </TableCell>
                         <TableCell>
                           <span className="text-sm text-gray-500">
-                            {role.permissions?.length || 0} permisos
+                            {role.permisos?.length || 0} permisos
                           </span>
                         </TableCell>
                         <TableCell className="text-right">
@@ -659,21 +686,30 @@ export function RoleManagement() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              {Object.entries(groupedPermissions).map(([category, perms]) => (
+              {loadingPermisos ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-5 h-5 animate-spin text-gray-400 mr-2" />
+                  <span className="text-gray-500">Cargando permisos...</span>
+                </div>
+              ) : permissions.length === 0 ? (
+                <p className="text-gray-500">No hay permisos disponibles</p>
+              ) : (
+                Object.entries(groupedPermissions).map(([category, perms]) => (
                   <div key={category} className="space-y-3">
                     <h3 className="font-semibold text-lg text-gray-900 border-b pb-2">{category}</h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {perms.map((permission) => (
-                        <div key={permission.id} className="border rounded-lg p-4 space-y-2">
+                        <div key={permission.id_permisos} className="border rounded-lg p-4 space-y-2">
                           <div className="flex items-center space-x-2">
-                            <Badge variant="outline">{permission.name}</Badge>
+                            <Badge variant="outline">{permission.nombre}</Badge>
                           </div>
-                          <p className="text-sm text-gray-600">{permission.description}</p>
+                          <p className="text-sm text-gray-600">{permission.descripcion || 'Sin descripción'}</p>
                         </div>
                       ))}
                     </div>
                   </div>
-                ))}
+                ))
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -728,15 +764,15 @@ export function RoleManagement() {
                   <h4 className="font-medium text-sm text-gray-700">{category}</h4>
                   <div className="grid grid-cols-1 gap-2">
                     {perms.map((permission) => (
-                      <div key={permission.id} className="flex items-center space-x-2">
+                      <div key={permission.id_permisos} className="flex items-center space-x-2">
                         <Checkbox
-                          id={`create-${permission.id}`}
-                          checked={newRole.permissions.includes(permission.id)}
-                          onCheckedChange={() => togglePermission(permission.id)}
+                          id={`create-${permission.id_permisos}`}
+                          checked={newRole.permisos.includes(permission.id_permisos)}
+                          onCheckedChange={() => togglePermission(permission.id_permisos)}
                         />
-                        <Label htmlFor={`create-${permission.id}`} className="flex-1 cursor-pointer">
-                          <span className="font-medium">{permission.name}</span>
-                          <span className="text-sm text-gray-500 block">{permission.description}</span>
+                        <Label htmlFor={`create-${permission.id_permisos}`} className="flex-1 cursor-pointer">
+                          <span className="font-medium">{permission.nombre}</span>
+                          <span className="text-sm text-gray-500 block">{permission.descripcion}</span>
                         </Label>
                       </div>
                     ))}
@@ -815,15 +851,15 @@ export function RoleManagement() {
                   <h4 className="font-medium text-sm text-gray-700">{category}</h4>
                   <div className="grid grid-cols-1 gap-2">
                     {perms.map((permission) => (
-                      <div key={permission.id} className="flex items-center space-x-2">
+                      <div key={permission.id_permisos} className="flex items-center space-x-2">
                         <Checkbox
-                          id={`edit-${permission.id}`}
-                          checked={newRole.permissions.includes(permission.id)}
-                          onCheckedChange={() => togglePermission(permission.id)}
+                          id={`edit-${permission.id_permisos}`}
+                          checked={newRole.permisos.includes(permission.id_permisos)}
+                          onCheckedChange={() => togglePermission(permission.id_permisos)}
                         />
-                        <Label htmlFor={`edit-${permission.id}`} className="flex-1 cursor-pointer">
-                          <span className="font-medium">{permission.name}</span>
-                          <span className="text-sm text-gray-500 block">{permission.description}</span>
+                        <Label htmlFor={`edit-${permission.id_permisos}`} className="flex-1 cursor-pointer">
+                          <span className="font-medium">{permission.nombre}</span>
+                          <span className="text-sm text-gray-500 block">{permission.descripcion}</span>
                         </Label>
                       </div>
                     ))}

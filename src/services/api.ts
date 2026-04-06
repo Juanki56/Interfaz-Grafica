@@ -578,6 +578,23 @@ export const rolesAPI = {
     return fetchAPI<any>(`/api/roles/${id}`);
   },
 
+  /**
+   * Obtener todos los permisos asignados a un rol específico
+   */
+  getPermisosDeRol: async (idRol: number): Promise<Permiso[]> => {
+    try {
+      const response = await fetchAPI<{ data: Permiso[] } | Permiso[]>(`/api/roles/${idRol}/permisos`);
+      // Soportar tanto { data: [...] } como [...]
+      if (Array.isArray(response)) {
+        return response;
+      }
+      return (response as any).data || [];
+    } catch (error) {
+      console.warn(`No se pudieron cargar permisos para el rol ${idRol}:`, error);
+      return [];
+    }
+  },
+
   create: async (rolData: Partial<Rol>) => {
     return fetchAPI('/api/roles', {
       method: 'POST',
@@ -609,6 +626,32 @@ export const rolesAPI = {
     return fetchAPI(`/api/roles/${idRol}/permisos/${idPermiso}`, {
       method: 'DELETE',
     });
+  },
+
+  /**
+   * Actualizar todos los permisos de un rol de una vez
+   */
+  actualizarPermisos: async (idRol: number, idPermisos: number[]) => {
+    return fetchAPI(`/api/roles/${idRol}/permisos`, {
+      method: 'PUT',
+      body: JSON.stringify({ id_permisos: idPermisos }),
+    });
+  },
+
+  /**
+   * Obtener permisos del rol del usuario actual (sin requerir Admin)
+   */
+  getPermisosDelUsuarioActual: async (): Promise<Permiso[]> => {
+    try {
+      const response = await fetchAPI<Permiso[] | { data: Permiso[] }>('/api/roles/mi-rol/permisos');
+      if (Array.isArray(response)) {
+        return response;
+      }
+      return (response as any).data || [];
+    } catch (error) {
+      console.warn('No se pudieron cargar permisos del usuario actual:', error);
+      return [];
+    }
   },
 };
 
