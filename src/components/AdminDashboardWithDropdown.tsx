@@ -97,7 +97,7 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible';
 import { DashboardLayout, DashboardSection, DashboardGrid } from './DashboardLayout';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Area, AreaChart } from 'recharts';
 import {
   mockPackages,
@@ -126,6 +126,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { permisosAPI, rolesAPI, usersAPI } from '../services/api';
 import { useServices } from '../hooks/useServices';
 import { ServiceManagement } from './ServiceManagement';
+import { UsersManagement } from './UsersManagement';
+import { RolesManagement } from './RolesManagement';
 
 export function AdminDashboardWithDropdown() {
   const { adminActiveTab, setAdminActiveTab, user } = useAuth();
@@ -3236,6 +3238,16 @@ rol_nombre: payload.rol,
 
   // Render data list view
   const renderDataView = () => {
+    // Use shared UsersManagement template for users
+    if (activeTab === 'users') {
+      return <UsersManagement />;
+    }
+
+    // Use shared RolesManagement template for roles
+    if (activeTab === 'roles') {
+      return <RolesManagement />;
+    }
+
     const filteredData = getFilteredData();
     const columns = getTableColumns();
     

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Calendar,
@@ -62,12 +62,22 @@ import {
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { mockBookings } from '../utils/adminMockData';
 import { reservasAPI, clientesAPI } from '../services/api';
-import { useEffect } from 'react';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 export function BookingsManagement() {
+  const permisos = usePermissions();
+  const reservasPerms = createModulePermissions(permisos, 'Reservas');
+  const clientesPerms = createModulePermissions(permisos, 'Clientes');
+  const canViewReservas = reservasPerms.canView();
+  const canCreateReservas = reservasPerms.canCreate();
+  const canEditReservas = reservasPerms.canEdit();
+  const canDeleteReservas = reservasPerms.canDelete();
+  const canViewClientes = clientesPerms.canView();
+
   const [bookings, setBookings] = useState(mockBookings);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -90,9 +100,19 @@ export function BookingsManagement() {
 
   // Cargar datos del backend al montar el componente
   useEffect(() => {
-    cargarReservas();
-    cargarClientes();
-  }, []);
+    if (permisos.loadingRoles) return;
+
+    if (canViewReservas) {
+      cargarReservas();
+    } else {
+      setBookings([]);
+      setIsLoading(false);
+    }
+
+    if (canViewClientes) {
+      cargarClientes();
+    }
+  }, [permisos.loadingRoles, canViewReservas, canViewClientes]);
 
   const cargarReservas = async () => {
     try {
@@ -271,6 +291,11 @@ export function BookingsManagement() {
 
   // Crear reserva
   const handleCreateBooking = async () => {
+    if (!canCreateReservas) {
+      toast.error('No tienes permiso para crear reservas');
+      return;
+    }
+
     if (!formData.clientId || !formData.bookingDate) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
@@ -318,6 +343,11 @@ export function BookingsManagement() {
 
   // Editar reserva
   const handleEditBooking = async () => {
+    if (!canEditReservas) {
+      toast.error('No tienes permiso para editar reservas');
+      return;
+    }
+
     if (!formData.clientId || !formData.bookingDate) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
@@ -369,6 +399,11 @@ export function BookingsManagement() {
 
   // Cambiar estado  
   const handleChangeStatus = async (bookingId: string, newStatus: string) => {
+    if (!canEditReservas) {
+      toast.error('No tienes permiso para editar reservas');
+      return;
+    }
+
     try {
       const reservaId = bookingId.toString().replace('BK-', '');
       
@@ -399,6 +434,21 @@ export function BookingsManagement() {
     toast.success('PDF generado correctamente');
   };
 
+  if (!permisos.loadingRoles && !canViewReservas) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver reservas.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -411,13 +461,15 @@ export function BookingsManagement() {
           <h2 className="text-green-800">Gestión de Reservas</h2>
           <p className="text-gray-600">Administra todas las reservas del sistema</p>
         </div>
-        <Button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="bg-green-600 hover:bg-green-700"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Nueva Reserva
-        </Button>
+        {canCreateReservas && (
+          <Button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Nueva Reserva
+          </Button>
+        )}
       </motion.div>
 
       {/* Filtros */}
@@ -529,6 +581,10 @@ export function BookingsManagement() {
                         <Switch
                           checked={booking.status === 'Confirmada'}
                           onCheckedChange={(checked) => {
+                            if (!canEditReservas) {
+                              toast.error('No tienes permiso para editar reservas');
+                              return;
+                            }
                             const newStatus = checked ? 'Confirmada' : 'Pendiente';
                             const updatedBookings = bookings.map(b => 
                               b.id === booking.id ? { ...b, status: newStatus } : b
@@ -536,6 +592,7 @@ export function BookingsManagement() {
                             setBookings(updatedBookings);
                             toast.success(`Estado cambiado a: ${newStatus}`);
                           }}
+                          disabled={!canEditReservas}
                           className={booking.status === 'Confirmada' ? 'bg-green-600' : 'bg-gray-300'}
                         />
                         {getStatusBadge(booking.status)}
@@ -563,40 +620,44 @@ export function BookingsManagement() {
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setSelectedBooking(booking);
-                            setFormData({
-                              clientId: booking.clientId || '',
-                              clientName: booking.clientName || '',
-                              bookingDate: booking.date || '',
-                              routeId: '',
-                              farmId: '',
-                              services: [],
-                              participants: booking.participants || 1,
-                              adults: booking.adults || 1,
-                              children: booking.children || 0,
-                              specialRequests: booking.specialRequests || ''
-                            });
-                            setIsEditModalOpen(true);
-                          }}
-                          className="border-blue-600 text-blue-600 hover:bg-blue-50"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            setSelectedBooking(booking);
-                            setIsDeleteDialogOpen(true);
-                          }}
-                          className="border-red-600 text-red-600 hover:bg-red-50"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {canEditReservas && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedBooking(booking);
+                              setFormData({
+                                clientId: booking.clientId || '',
+                                clientName: booking.clientName || '',
+                                bookingDate: booking.date || '',
+                                routeId: '',
+                                farmId: '',
+                                services: [],
+                                participants: booking.participants || 1,
+                                adults: booking.adults || 1,
+                                children: booking.children || 0,
+                                specialRequests: booking.specialRequests || ''
+                              });
+                              setIsEditModalOpen(true);
+                            }}
+                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {canDeleteReservas && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setSelectedBooking(booking);
+                              setIsDeleteDialogOpen(true);
+                            }}
+                            className="border-red-600 text-red-600 hover:bg-red-50"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="outline"
@@ -1010,6 +1071,7 @@ export function BookingsManagement() {
                     </Button>
                     <Button
                       onClick={handleCreateBooking}
+                      disabled={!canCreateReservas}
                       className="bg-green-600 hover:bg-green-700"
                     >
                       <Plus className="w-4 h-4 mr-2" />
@@ -1407,6 +1469,7 @@ export function BookingsManagement() {
                     </Button>
                     <Button
                       onClick={handleEditBooking}
+                      disabled={!canEditReservas}
                       className="bg-green-600 hover:bg-green-700"
                     >
                       <CheckCircle className="w-4 h-4 mr-2" />
@@ -1603,10 +1666,15 @@ export function BookingsManagement() {
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
+                if (!canDeleteReservas) {
+                  toast.error('No tienes permiso para eliminar reservas');
+                  return;
+                }
                 setBookings(bookings.filter(b => b.id !== selectedBooking?.id));
                 setIsDeleteDialogOpen(false);
                 toast.success('Reserva eliminada correctamente');
               }}
+              disabled={!canDeleteReservas}
               className="bg-red-600 hover:bg-red-700"
             >
               Eliminar

@@ -58,6 +58,8 @@ import { Separator } from './ui/separator';
 import { toast } from 'sonner';
 import { rutasAPI, Ruta } from '../services/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 interface Route {
   id_ruta: number;
@@ -76,6 +78,13 @@ interface RoutesManagementProps {
 }
 
 export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) {
+  const permisos = usePermissions();
+  const routePerms = createModulePermissions(permisos, 'Rutas');
+  const canViewRoutes = routePerms.canView();
+  const canCreateRoute = routePerms.canCreate();
+  const canEditRoute = routePerms.canEdit();
+  const canDeleteRoute = routePerms.canDelete();
+
   const [routes, setRoutes] = useState<Route[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,8 +109,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   // Cargar rutas desde la API al montar el componente
   useEffect(() => {
     console.log('🎬 RoutesManagement montado, iniciando carga de rutas...');
+    if (permisos.loadingRoles) return;
+    if (!canViewRoutes) {
+      setRoutes([]);
+      setIsLoading(false);
+      return;
+    }
     loadRoutes();
-  }, []);
+  }, [permisos.loadingRoles, canViewRoutes]);
 
   const loadRoutes = async () => {
     try {
@@ -185,6 +200,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleEdit = (route: Route) => {
+    if (!canEditRoute) {
+      toast.error('No tienes permiso para editar rutas');
+      return;
+    }
+
     console.log('📝 Editando ruta:', route);
     setSelectedRoute(route);
     
@@ -203,11 +223,21 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleDelete = (route: Route) => {
+    if (!canDeleteRoute) {
+      toast.error('No tienes permiso para eliminar rutas');
+      return;
+    }
+
     setSelectedRoute(route);
     setIsDeleteDialogOpen(true);
   };
 
   const confirmDelete = async () => {
+    if (!canDeleteRoute) {
+      toast.error('No tienes permiso para eliminar rutas');
+      return;
+    }
+
     if (selectedRoute) {
       try {
         const routeId = selectedRoute.id_ruta;
@@ -229,6 +259,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleCreateRoute = async () => {
+    if (!canCreateRoute) {
+      toast.error('No tienes permiso para crear rutas');
+      return;
+    }
+
     // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
     if (!formData.nombre.trim()) {
       toast.error('El nombre de la ruta es obligatorio');
@@ -295,6 +330,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const handleUpdateRoute = async () => {
+    if (!canEditRoute) {
+      toast.error('No tienes permiso para editar rutas');
+      return;
+    }
+
     if (!selectedRoute) return;
 
     // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
@@ -373,6 +413,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
   // Toggle route status (Admin only)
   const handleToggleStatus = async (route: Route) => {
+    if (!canEditRoute) {
+      toast.error('No tienes permiso para editar rutas');
+      return;
+    }
+
     try {
       const routeId = route.id_ruta;
       const newStatus = route.estado;
@@ -391,6 +436,21 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       toast.error('Error al cambiar el estado');
     }
   };
+
+  if (!permisos.loadingRoles && !canViewRoutes) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver rutas.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -411,7 +471,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               }
             </p>
           </div>
-          {userRole === 'admin' && (
+          {canCreateRoute && (
             <Button
               onClick={() => setIsCreateModalOpen(true)}
               className="bg-green-600 hover:bg-green-700 text-white"
@@ -484,7 +544,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     <TableHead className="font-semibold">Duración (días)</TableHead>
                     <TableHead className="font-semibold">Precio Base</TableHead>
                     <TableHead className="font-semibold">Dificultad</TableHead>
-                    {userRole === 'admin' && (
+                    {canEditRoute && (
                       <TableHead className="text-center font-semibold">Estado</TableHead>
                     )}
                     <TableHead className="font-semibold">Fecha Creación</TableHead>
@@ -494,7 +554,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={userRole === 'admin' ? 9 : 8} className="text-center py-12">
+                      <TableCell colSpan={canEditRoute ? 9 : 8} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
                           <p className="text-gray-500">Cargando rutas desde la base de datos...</p>
@@ -503,7 +563,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     </TableRow>
                   ) : currentRoutes.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={userRole === 'admin' ? 9 : 8} className="text-center py-12">
+                      <TableCell colSpan={canEditRoute ? 9 : 8} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <RouteIcon className="w-12 h-12 text-gray-400" />
                           <p className="text-gray-500">
@@ -558,12 +618,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                         <TableCell>
                           {route.dificultad ? getDifficultyBadge(route.dificultad) : 'N/A'}
                         </TableCell>
-                        {userRole === 'admin' && (
+                        {canEditRoute && (
                           <TableCell className="text-center">
                             <div className="flex items-center justify-center gap-2">
                               <Switch
                                 checked={route.estado === true}
                                 onCheckedChange={() => handleToggleStatus(route)}
+                                disabled={!canEditRoute}
                                 className="data-[state=checked]:bg-green-600"
                               />
                               <span className="text-sm text-gray-700">
@@ -590,25 +651,25 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                             >
                               <Eye className="w-4 h-4 text-blue-600" />
                             </Button>
-                            {userRole === 'admin' && (
-                              <>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleEdit(route)}
-                                  title="Editar ruta"
-                                >
-                                  <Edit className="w-4 h-4 text-green-600" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleDelete(route)}
-                                  title="Eliminar ruta"
-                                >
-                                  <Trash2 className="w-4 h-4 text-red-600" />
-                                </Button>
-                              </>
+                            {canEditRoute && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleEdit(route)}
+                                title="Editar ruta"
+                              >
+                                <Edit className="w-4 h-4 text-green-600" />
+                              </Button>
+                            )}
+                            {canDeleteRoute && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDelete(route)}
+                                title="Eliminar ruta"
+                              >
+                                <Trash2 className="w-4 h-4 text-red-600" />
+                              </Button>
                             )}
                           </div>
                         </TableCell>
@@ -658,8 +719,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         </Button>
       </motion.div>
 
-      {/* Create Route Modal - Solo para Admin */}
-      {userRole === 'admin' && (
+      {/* Create Route Modal */}
+      {canCreateRoute && (
         <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -767,8 +828,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         </Dialog>
       )}
 
-      {/* Edit Route Modal - Solo para Admin */}
-      {userRole === 'admin' && (
+      {/* Edit Route Modal */}
+      {canEditRoute && (
         <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
@@ -1000,7 +1061,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
             >
               Cerrar
             </Button>
-            {userRole === 'admin' && selectedRoute && (
+            {canEditRoute && selectedRoute && (
               <Button
                 onClick={() => {
                   setIsViewModalOpen(false);
@@ -1016,8 +1077,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog - Solo para Admin */}
-      {userRole === 'admin' && (
+      {/* Delete Confirmation Dialog */}
+      {canDeleteRoute && (
         <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>

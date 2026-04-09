@@ -48,6 +48,7 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
 import { Switch } from './ui/switch';
+import { usePermissions } from '../hooks/usePermissions';
 
 // ===========================
 // INTERFACES Y TIPOS
@@ -73,6 +74,7 @@ interface ProviderTypeManagementProps {
 }
 
 export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManagementProps) {
+  const { hasPermission, loadingRoles } = usePermissions();
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedType, setSelectedType] = useState<ProviderType | null>(null);
   const [providerTypes, setProviderTypes] = useState<ProviderType[]>([]);
@@ -91,6 +93,18 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
   const [typeToDelete, setTypeToDelete] = useState<number | null>(null);
 
   const isAdmin = userRole === 'admin';
+  const canRead = isAdmin || hasPermission('tipos_proveedor.leer');
+
+  if (!loadingRoles && !canRead) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-700 font-medium">Acceso denegado</p>
+          <p className="text-gray-600 mt-1">No tienes permisos para ver tipos de proveedor.</p>
+        </div>
+      </div>
+    );
+  }
 
   // Cargar datos del backend
   useEffect(() => {
@@ -232,6 +246,7 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
             onDelete={handleInitiateDelete}
             onToggleStatus={handleToggleStatus}
             isAdmin={isAdmin}
+            hasPermission={hasPermission}
           />
         )}
         
@@ -261,6 +276,7 @@ export function ProviderTypeManagement({ userRole = 'admin' }: ProviderTypeManag
             onDelete={handleInitiateDelete}
             onToggleStatus={handleToggleStatus}
             isAdmin={isAdmin}
+            hasPermission={hasPermission}
           />
         )}
       </AnimatePresence>
@@ -326,6 +342,7 @@ interface ProviderTypeListViewProps {
   onDelete: (typeId: number) => void;
   onToggleStatus: (typeId: number) => void;
   isAdmin: boolean;
+  hasPermission?: (perm: string) => boolean;
 }
 
 function ProviderTypeListView({
@@ -343,7 +360,8 @@ function ProviderTypeListView({
   onEdit,
   onDelete,
   onToggleStatus,
-  isAdmin
+  isAdmin,
+  hasPermission
 }: ProviderTypeListViewProps) {
   
   const getStatusBadge = (estado: boolean) => {
@@ -386,7 +404,7 @@ function ProviderTypeListView({
             {isAdmin ? 'Administra los tipos de proveedores del sistema' : 'Visualiza los tipos de proveedores'}
           </p>
         </div>
-        {isAdmin && (
+        {(isAdmin || hasPermission?.('tipos_proveedor.crear')) && (
           <Button 
             onClick={onCreateNew}
             className="bg-green-600 hover:bg-green-700 text-white"
@@ -479,14 +497,14 @@ function ProviderTypeListView({
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        {isAdmin && (
+                        {(isAdmin || hasPermission?.('tipos_proveedor.editar')) && (
                           <Switch
                             checked={!!type.estado}
                             onCheckedChange={() => onToggleStatus(type.id_tipo)}
                             className="data-[state=checked]:bg-green-600"
                           />
                         )}
-                        {!isAdmin && (
+                        {!(isAdmin || hasPermission?.('tipos_proveedor.editar')) && (
                           <Badge className={getStatusBadge(!!type.estado)}>
                             {type.estado ? 'Activo' : 'Inactivo'}
                           </Badge>
@@ -502,25 +520,25 @@ function ProviderTypeListView({
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
-                          {isAdmin && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => onEdit(type)}
-                                className="hover:bg-blue-100 hover:text-blue-700"
-                              >
-                                <Edit className="w-4 h-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => onDelete(type.id_tipo)}
-                                className="hover:bg-red-100 hover:text-red-700"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </Button>
-                            </>
+                          {(isAdmin || hasPermission?.('tipos_proveedor.editar')) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => onEdit(type)}
+                              className="hover:bg-blue-100 hover:text-blue-700"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {(isAdmin || hasPermission?.('tipos_proveedor.eliminar')) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => onDelete(type.id_tipo)}
+                              className="hover:bg-red-100 hover:text-red-700"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
                           )}
                         </div>
                       </TableCell>
@@ -739,6 +757,7 @@ interface ProviderTypeDetailViewProps {
   onDelete: (typeId: number) => void;
   onToggleStatus: (typeId: number) => void;
   isAdmin: boolean;
+  hasPermission?: (perm: string) => boolean;
 }
 
 function ProviderTypeDetailView({
@@ -747,7 +766,8 @@ function ProviderTypeDetailView({
   onEdit,
   onDelete,
   onToggleStatus,
-  isAdmin
+  isAdmin,
+  hasPermission
 }: ProviderTypeDetailViewProps) {
   return (
     <motion.div
@@ -833,31 +853,37 @@ function ProviderTypeDetailView({
             </div>
 
             {/* Acciones */}
-            {isAdmin && (
+            {(isAdmin || hasPermission?.('tipos_proveedor.editar') || hasPermission?.('tipos_proveedor.eliminar')) && (
               <div className="flex flex-wrap gap-3 pt-6 border-t border-green-100">
-                <Button
-                  onClick={() => onEdit(providerType)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  <Edit className="w-4 h-4 mr-2" />
-                  Editar
-                </Button>
-                <Button
-                  onClick={() => onToggleStatus(providerType.id_tipo)}
-                  variant="outline"
-                  className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
-                >
-                  <Power className="w-4 h-4 mr-2" />
-                  {providerType.estado ? 'Desactivar' : 'Activar'}
-                </Button>
-                <Button
-                  onClick={()=> onDelete(providerType.id_tipo)}
-                  variant="outline"
-                  className="border-red-300 text-red-700 hover:bg-red-50"
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Eliminar
-                </Button>
+                {(isAdmin || hasPermission?.('tipos_proveedor.editar')) && (
+                  <Button
+                    onClick={() => onEdit(providerType)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Editar
+                  </Button>
+                )}
+                {(isAdmin || hasPermission?.('tipos_proveedor.editar')) && (
+                  <Button
+                    onClick={() => onToggleStatus(providerType.id_tipo)}
+                    variant="outline"
+                    className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
+                  >
+                    <Power className="w-4 h-4 mr-2" />
+                    {providerType.estado ? 'Desactivar' : 'Activar'}
+                  </Button>
+                )}
+                {(isAdmin || hasPermission?.('tipos_proveedor.eliminar')) && (
+                  <Button
+                    onClick={()=> onDelete(providerType.id_tipo)}
+                    variant="outline"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Eliminar
+                  </Button>
+                )}
               </div>
             )}
           </div>

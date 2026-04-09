@@ -29,6 +29,11 @@ const ROLE_MAPPING: Record<string, 'admin' | 'advisor' | 'guide' | 'client'> = {
   admin: 'admin',
   asesor: 'advisor',
   advisor: 'advisor',
+  'guía turístico': 'guide',
+  'guia turistico': 'guide',
+  'guía turistico': 'guide',
+  'guía turística': 'guide',
+  'guia turistica': 'guide',
   'guía': 'guide',
   guia: 'guide',
   guide: 'guide',
@@ -282,6 +287,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<boolean>;
   register: (name: string, email: string, password: string, role: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
+  refreshProfile: () => Promise<void>;
   currentView: string;
   setCurrentView: (view: string) => void;
   loading: boolean;
@@ -606,6 +612,74 @@ export default function App() {
     }
   };
 
+  const refreshProfile = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    try {
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.PROFILE), {
+        method: 'GET',
+        headers: getAuthHeaders()
+      });
+
+      if (response.status === 401) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('session_expiry');
+        setUser(null);
+        return;
+      }
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      if (!data?.success || !data?.perfil) return;
+
+      const tokenPayload = decodeJWT(token);
+      const nombreCompleto = data.perfil.apellido
+        ? `${data.perfil.nombre} ${data.perfil.apellido}`
+        : data.perfil.nombre || '';
+
+      const backendRoleSource =
+        data.perfil.rol_nombre ||
+        data.perfil.rol ||
+        data.perfil.role ||
+        tokenPayload?.rol_nombre ||
+        tokenPayload?.rol ||
+        tokenPayload?.role ||
+        data.perfil.tipo_usuario;
+
+      const backendRoleIdSources = [
+        data.perfil.id_roles,
+        data.perfil.id_rol,
+        data.perfil.rol_id,
+        tokenPayload?.id_roles,
+        tokenPayload?.id_rol,
+        tokenPayload?.rol_id
+      ];
+
+      const frontendRoleResolved = await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources);
+      const frontendRole = enforceForcedAdminRole(
+        data.perfil.correo || tokenPayload?.correo || tokenPayload?.email,
+        frontendRoleResolved
+      );
+
+      setSessionExpiry(SESSION_TIMEOUT_MINUTES);
+
+      setUser({
+        id: data.perfil.id_cliente?.toString() || data.perfil.id_empleado?.toString() || data.perfil.id_usuarios?.toString() || '',
+        name: nombreCompleto,
+        email: data.perfil.correo || '',
+        role: frontendRole,
+        phone: data.perfil.telefono || '',
+        status: data.perfil.estado ? 'Activo' : 'Inactivo'
+      });
+    } catch (error) {
+      console.error('refreshProfile error:', error);
+    }
+  };
+
   // Auto logout si expira sesión local
   useEffect(() => {
     if (!user) return;
@@ -669,6 +743,7 @@ export default function App() {
     login,
     register,
     logout,
+    refreshProfile,
     currentView,
     setCurrentView: handleViewChange,
     loading,

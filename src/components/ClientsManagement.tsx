@@ -52,10 +52,19 @@ import {
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { Switch } from './ui/switch';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 export function ClientsManagement() {
+  const permisos = usePermissions();
+  const clientPerms = createModulePermissions(permisos, 'Clientes');
+  const canViewClients = clientPerms.canView();
+  const canCreateClient = clientPerms.canCreate();
+  const canEditClient = clientPerms.canEdit();
+  const canDeleteClient = clientPerms.canDelete();
+
   const [clients, setClients] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [experienceFilter, setExperienceFilter] = useState('all');
@@ -72,8 +81,14 @@ export function ClientsManagement() {
 
   // Cargar clientes del backend al montar el componente
   useEffect(() => {
+    if (permisos.loadingRoles) return;
+    if (!canViewClients) {
+      setClients([]);
+      setIsLoading(false);
+      return;
+    }
     cargarClientes();
-  }, []);
+  }, [permisos.loadingRoles, canViewClients]);
 
   const cargarClientes = async () => {
     try {
@@ -158,6 +173,11 @@ export function ClientsManagement() {
 
   // Crear cliente
   const handleCreateClient = () => {
+    if (!canCreateClient) {
+      toast.error('No tienes permiso para crear clientes');
+      return;
+    }
+
     if (formData.password !== formData.confirmPassword) {
       toast.error('Las contraseñas no coinciden');
       return;
@@ -195,6 +215,11 @@ export function ClientsManagement() {
 
   // Editar cliente
   const handleEditClient = (client: any) => {
+    if (!canEditClient) {
+      toast.error('No tienes permiso para editar clientes');
+      return;
+    }
+
     setSelectedClient(client);
     setFormData({
       name: client.name,
@@ -202,12 +227,19 @@ export function ClientsManagement() {
       phone: client.phone,
       preferences: client.preferences,
       location: client.location,
-      notes: client.notes
+      notes: client.notes,
+      password: '',
+      confirmPassword: ''
     });
     setIsEditModalOpen(true);
   };
 
   const handleUpdateClient = async () => {
+    if (!canEditClient) {
+      toast.error('No tienes permiso para editar clientes');
+      return;
+    }
+
     if (!formData.name || !formData.email || !formData.phone) {
       toast.error('Por favor complete todos los campos requeridos');
       return;
@@ -238,7 +270,7 @@ export function ClientsManagement() {
       toast.success('Cliente actualizado correctamente');
       setIsEditModalOpen(false);
       setSelectedClient(null);
-      setFormData({ name: '', email: '', phone: '', preferences: '', location: '', notes: '' });
+      setFormData({ name: '', email: '', phone: '', preferences: '', location: '', notes: '', password: '', confirmPassword: '' });
       
       // Recargar clientes del servidor
       await cargarClientes();
@@ -253,11 +285,21 @@ export function ClientsManagement() {
 
   // Eliminar cliente
   const handleDeleteClient = (client: any) => {
+    if (!canDeleteClient) {
+      toast.error('No tienes permiso para eliminar clientes');
+      return;
+    }
+
     setSelectedClient(client);
     setIsDeleteModalOpen(true);
   };
 
   const confirmDeleteClient = async () => {
+    if (!canDeleteClient) {
+      toast.error('No tienes permiso para eliminar clientes');
+      return;
+    }
+
     try {
       setIsLoading(true);
       await clientesAPI.delete(parseInt(selectedClient.id));
@@ -286,6 +328,21 @@ export function ClientsManagement() {
     setIsHistoryModalOpen(true);
   };
 
+  if (!permisos.loadingRoles && !canViewClients) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver clientes.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -298,13 +355,15 @@ export function ClientsManagement() {
           <h2 className="text-green-800">Gestión de Clientes</h2>
           <p className="text-gray-600">Administra tu base de clientes</p>
         </div>
-        <Button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="bg-green-600 hover:bg-green-700"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Nuevo Cliente
-        </Button>
+        {canCreateClient && (
+          <Button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Nuevo Cliente
+          </Button>
+        )}
       </motion.div>
 
       {/* Filtros y Búsqueda */}
@@ -378,6 +437,7 @@ export function ClientsManagement() {
                               ));
                               toast.success(checked ? 'Cliente activado' : 'Cliente desactivado');
                             }}
+                            disabled={!canEditClient}
                             className="data-[state=checked]:bg-green-600"
                           />
                         </TableCell>
@@ -391,22 +451,26 @@ export function ClientsManagement() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleEditClient(client)}
-                              className="border-blue-600 text-blue-600 hover:bg-blue-50"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleDeleteClient(client)}
-                              className="border-red-600 text-red-600 hover:bg-red-50"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {canEditClient && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleEditClient(client)}
+                                className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {canDeleteClient && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleDeleteClient(client)}
+                                className="border-red-600 text-red-600 hover:bg-red-50"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>

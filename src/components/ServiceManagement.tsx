@@ -28,6 +28,8 @@ import {
   serviciosAPI, ServicioConProveedor,
   proveedoresAPI, Proveedor
 } from "../services/api";
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 import {
   Select, SelectContent, SelectItem,
   SelectTrigger, SelectValue
@@ -38,6 +40,15 @@ const emptyForm = {
 };
 
 export function ServiceManagement() {
+  const permisos = usePermissions();
+  const servicePerms = createModulePermissions(permisos, 'Servicios');
+  const providerPerms = createModulePermissions(permisos, 'Proveedores');
+  const canViewServices = servicePerms.canView();
+  const canCreateService = servicePerms.canCreate();
+  const canEditService = servicePerms.canEdit();
+  const canDeleteService = servicePerms.canDelete();
+  const canViewProviders = providerPerms.canView();
+
   const [services, setServices] = useState<ServicioConProveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -60,7 +71,7 @@ export function ServiceManagement() {
     try {
       const [servRes, provRes] = await Promise.all([
         serviciosAPI.getAllConProveedor(),
-        proveedoresAPI.getAll(),
+        canViewProviders ? proveedoresAPI.getAll() : Promise.resolve([] as Proveedor[]),
       ]);
       if (servRes?.length) {
         setServices(servRes);
@@ -68,7 +79,7 @@ export function ServiceManagement() {
         const base = await serviciosAPI.getAll();
         setServices(base as ServicioConProveedor[]);
       }
-      setProveedores(provRes);
+      setProveedores(provRes as Proveedor[]);
     } catch (error: any) {
       toast.error(error?.message || "Error cargando servicios");
       setServices([]);
@@ -78,12 +89,18 @@ export function ServiceManagement() {
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
+      if (permisos.loadingRoles) return;
+      if (!canViewServices) {
+        setServices([]);
+        setIsLoading(false);
+        return;
+      }
       await cargarServicios();
       setIsLoading(false);
       setCurrentPage(1);
     };
     init();
-  }, []);
+  }, [permisos.loadingRoles, canViewServices]);
 
   const filteredServices = services.filter((service) =>
     (service.nombre ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -101,6 +118,11 @@ export function ServiceManagement() {
   );
 
   const handleCreate = async () => {
+  if (!canCreateService) {
+    toast.error('No tienes permiso para crear servicios');
+    return;
+  }
+
   if (!formData.nombre) {
     toast.error("El nombre es obligatorio");
     return;
@@ -124,6 +146,11 @@ export function ServiceManagement() {
 };
 
  const handleEdit = (service: ServicioConProveedor) => {
+  if (!canEditService) {
+    toast.error('No tienes permiso para editar servicios');
+    return;
+  }
+
   setSelectedService(service);
   setFormData({
     nombre: service.nombre || "",
@@ -136,6 +163,11 @@ export function ServiceManagement() {
 };
 
   const handleUpdate = async () => {
+  if (!canEditService) {
+    toast.error('No tienes permiso para editar servicios');
+    return;
+  }
+
   if (!selectedService) return;
   try {
     await serviciosAPI.update(selectedService.id_servicio, {
@@ -156,6 +188,11 @@ export function ServiceManagement() {
 };
 
   const handleDelete = async () => {
+    if (!canDeleteService) {
+      toast.error('No tienes permiso para eliminar servicios');
+      return;
+    }
+
     if (!selectedService) return;
     try {
       await serviciosAPI.delete(selectedService.id_servicio);
@@ -169,6 +206,11 @@ export function ServiceManagement() {
   };
 
   const handleToggleEstado = async (service: ServicioConProveedor) => {
+    if (!canEditService) {
+      toast.error('No tienes permiso para editar servicios');
+      return;
+    }
+
     try {
       await serviciosAPI.update(service.id_servicio, {
         estado: !service.estado,
@@ -240,6 +282,21 @@ export function ServiceManagement() {
 </div>
 );
 
+  if (!permisos.loadingRoles && !canViewServices) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver servicios.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
@@ -247,12 +304,14 @@ export function ServiceManagement() {
           <h2 className="text-2xl font-semibold text-gray-900">Gestión de Servicios</h2>
           <p className="text-gray-500 text-sm">Administra los servicios y sus proveedores</p>
         </div>
-        <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => {
-          setFormData(emptyForm);
-          setShowCreateDialog(true);
-        }}>
-          <Plus className="w-4 h-4 mr-2" /> Crear Servicio
-        </Button>
+        {canCreateService && (
+          <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => {
+            setFormData(emptyForm);
+            setShowCreateDialog(true);
+          }}>
+            <Plus className="w-4 h-4 mr-2" /> Crear Servicio
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -307,6 +366,7 @@ export function ServiceManagement() {
     <Switch
       checked={service.estado === true}
       onCheckedChange={() => handleToggleEstado(service)}
+      disabled={!canEditService}
       className="data-[state=checked]:bg-green-600"
     />
   </TableCell>
@@ -317,16 +377,20 @@ export function ServiceManagement() {
         onClick={() => { setSelectedService(service); setShowViewDialog(true); }}>
         <Eye className="w-4 h-4" />
       </Button>
-      <Button size="sm" variant="ghost"
-        className="hover:bg-green-50 hover:text-green-600"
-        onClick={() => handleEdit(service)}>
-        <Edit className="w-4 h-4" />
-      </Button>
-      <Button size="sm" variant="ghost"
-        className="hover:bg-red-50 hover:text-red-600"
-        onClick={() => { setSelectedService(service); setShowDeleteDialog(true); }}>
-        <Trash2 className="w-4 h-4" />
-      </Button>
+      {canEditService && (
+        <Button size="sm" variant="ghost"
+          className="hover:bg-green-50 hover:text-green-600"
+          onClick={() => handleEdit(service)}>
+          <Edit className="w-4 h-4" />
+        </Button>
+      )}
+      {canDeleteService && (
+        <Button size="sm" variant="ghost"
+          className="hover:bg-red-50 hover:text-red-600"
+          onClick={() => { setSelectedService(service); setShowDeleteDialog(true); }}>
+          <Trash2 className="w-4 h-4" />
+        </Button>
+      )}
     </div>
   </TableCell>
 </TableRow>

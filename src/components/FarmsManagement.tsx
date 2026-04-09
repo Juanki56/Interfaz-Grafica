@@ -46,12 +46,23 @@ import {
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { fincasAPI, propietariosAPI, Finca, Propietario } from '../services/api';
 import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 interface FarmsManagementProps {
   canDelete?: boolean; // Admin puede eliminar, Asesor no
 }
 
 export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
+  const permisos = usePermissions();
+  const farmPerms = createModulePermissions(permisos, 'Fincas');
+  const ownerPerms = createModulePermissions(permisos, 'Propietarios');
+  const canViewFarms = farmPerms.canView();
+  const canCreateFarm = farmPerms.canCreate();
+  const canEditFarm = farmPerms.canEdit();
+  const canDeleteFarm = farmPerms.canDelete();
+  const canViewOwners = ownerPerms.canView();
+
   const [farms, setFarms] = useState<any[]>([]);
   const [propietarios, setPropietarios] = useState<Propietario[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,9 +80,18 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
 
   // Cargar fincas y propietarios desde la API
   useEffect(() => {
+    if (permisos.loadingRoles) return;
+    if (!canViewFarms) {
+      setFarms([]);
+      setIsLoading(false);
+      return;
+    }
+
     loadFarms();
-    loadPropietarios();
-  }, []);
+    if (canViewOwners) {
+      loadPropietarios();
+    }
+  }, [permisos.loadingRoles, canViewFarms, canViewOwners]);
 
   const loadFarms = async () => {
     try {
@@ -141,6 +161,10 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
 
   // Cambiar estado de finca
   const handleStatusChange = (farmId: string, newStatus: string) => {
+    if (!canEditFarm) {
+      toast.error('No tienes permiso para editar fincas');
+      return;
+    }
     setFarms(farms.map(farm => 
       farm.id === farmId ? { ...farm, status: newStatus } : farm
     ));
@@ -154,15 +178,27 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
   };
 
   const handleEdit = (farm: any) => {
+    if (!canEditFarm) {
+      toast.error('No tienes permiso para editar fincas');
+      return;
+    }
     setSelectedFarm(farm);
     setIsEditModalOpen(true);
   };
 
   const handleDelete = (farm: any) => {
+    if (!canDeleteFarm) {
+      toast.error('No tienes permiso para eliminar fincas');
+      return;
+    }
     setFarms(farms.filter(f => f.id !== farm.id));
   };
 
   const handleCreate = () => {
+    if (!canCreateFarm) {
+      toast.error('No tienes permiso para crear fincas');
+      return;
+    }
     setIsCreateModalOpen(true);
   };
 
@@ -206,6 +242,18 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
 
     const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
+
+      if (isEdit) {
+        if (!canEditFarm) {
+          toast.error('No tienes permiso para editar fincas');
+          return;
+        }
+      } else {
+        if (!canCreateFarm) {
+          toast.error('No tienes permiso para crear fincas');
+          return;
+        }
+      }
       
       if (isSubmitting) return;
       
@@ -391,6 +439,21 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
     );
   };
 
+  if (!permisos.loadingRoles && !canViewFarms) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver fincas.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header con filtros y búsqueda */}
@@ -441,23 +504,25 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
         </div>
 
         {/* Botón de crear */}
-        <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={handleCreate} className="bg-green-700 hover:bg-green-800">
-              <Plus className="w-4 h-4 mr-2" />
-              Crear Finca
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Crear Nueva Finca</DialogTitle>
-              <DialogDescription>
-                Complete los campos para registrar una nueva finca en el sistema.
-              </DialogDescription>
-            </DialogHeader>
-            <FarmForm onClose={() => setIsCreateModalOpen(false)} propietarios={propietarios} />
-          </DialogContent>
-        </Dialog>
+        {canCreateFarm && (
+          <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={handleCreate} className="bg-green-700 hover:bg-green-800">
+                <Plus className="w-4 h-4 mr-2" />
+                Crear Finca
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Crear Nueva Finca</DialogTitle>
+                <DialogDescription>
+                  Complete los campos para registrar una nueva finca en el sistema.
+                </DialogDescription>
+              </DialogHeader>
+              <FarmForm onClose={() => setIsCreateModalOpen(false)} propietarios={propietarios} />
+            </DialogContent>
+          </Dialog>
+        )}
       </motion.div>
 
       {/* Lista de Fincas */}
@@ -549,6 +614,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                             onCheckedChange={(checked: boolean) => 
                               handleStatusChange(farm.id, checked ? 'active' : 'inactive')
                             }
+                            disabled={!canEditFarm}
                             className="data-[state=checked]:bg-green-600"
                           />
                           {getStatusBadge(farm.status)}
@@ -566,15 +632,17 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                           >
                             <Eye className="w-3 h-3" />
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleEdit(farm)}
-                            className="border-blue-300 hover:bg-blue-50"
-                          >
-                            <Edit className="w-3 h-3" />
-                          </Button>
-                          {canDelete && (
+                          {canEditFarm && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleEdit(farm)}
+                              className="border-blue-300 hover:bg-blue-50"
+                            >
+                              <Edit className="w-3 h-3" />
+                            </Button>
+                          )}
+                          {canDelete && canDeleteFarm && (
                             <AlertDialog>
                               <AlertDialogTrigger asChild>
                                 <Button size="sm" variant="outline" className="text-red-600 hover:bg-red-50 border-red-300">

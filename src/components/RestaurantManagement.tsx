@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   UtensilsCrossed,
   Coffee,
@@ -63,6 +63,8 @@ import {
 } from './ui/dropdown-menu';
 import { DashboardGrid } from './DashboardLayout';
 import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 interface Restaurant {
   id: number;
@@ -175,6 +177,13 @@ const mockRestaurants: Restaurant[] = [
 ];
 
 export function RestaurantManagement() {
+  const permisos = usePermissions();
+  const restaurantesPerms = createModulePermissions(permisos, 'Restaurantes');
+  const canViewRestaurantes = restaurantesPerms.canView();
+  const canCreateRestaurante = restaurantesPerms.canCreate();
+  const canEditRestaurante = restaurantesPerms.canEdit();
+  const canDeleteRestaurante = restaurantesPerms.canDelete();
+
   const [restaurants, setRestaurants] = useState<Restaurant[]>(mockRestaurants);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMealType, setFilterMealType] = useState<string>('all');
@@ -233,6 +242,11 @@ export function RestaurantManagement() {
 
   // Handlers
   const handleCreate = () => {
+    if (!canCreateRestaurante) {
+      toast.error('No tienes permiso para crear restaurantes');
+      return;
+    }
+
     const newRestaurant: Restaurant = {
       id: Date.now(),
       ...formData as Restaurant,
@@ -244,6 +258,11 @@ export function RestaurantManagement() {
   };
 
   const handleEdit = () => {
+    if (!canEditRestaurante) {
+      toast.error('No tienes permiso para editar restaurantes');
+      return;
+    }
+
     if (selectedRestaurant) {
       setRestaurants(restaurants.map(r => 
         r.id === selectedRestaurant.id ? { ...r, ...formData } : r
@@ -256,6 +275,11 @@ export function RestaurantManagement() {
   };
 
   const handleDelete = () => {
+    if (!canDeleteRestaurante) {
+      toast.error('No tienes permiso para eliminar restaurantes');
+      return;
+    }
+
     if (selectedRestaurant) {
       setRestaurants(restaurants.filter(r => r.id !== selectedRestaurant.id));
       setShowDeleteModal(false);
@@ -282,6 +306,11 @@ export function RestaurantManagement() {
   };
 
   const openEditModal = (restaurant: Restaurant) => {
+    if (!canEditRestaurante) {
+      toast.error('No tienes permiso para editar restaurantes');
+      return;
+    }
+
     setSelectedRestaurant(restaurant);
     setFormData(restaurant);
     setShowEditModal(true);
@@ -293,6 +322,11 @@ export function RestaurantManagement() {
   };
 
   const openDeleteModal = (restaurant: Restaurant) => {
+    if (!canDeleteRestaurante) {
+      toast.error('No tienes permiso para eliminar restaurantes');
+      return;
+    }
+
     setSelectedRestaurant(restaurant);
     setShowDeleteModal(true);
   };
@@ -369,6 +403,21 @@ export function RestaurantManagement() {
     }
   ];
 
+  if (!permisos.loadingRoles && !canViewRestaurantes) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver restaurantes.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -377,13 +426,15 @@ export function RestaurantManagement() {
           <h2 className="text-gray-900">Gestión de Restaurantes</h2>
           <p className="text-gray-600 mt-1">Administra los restaurantes asociados a rutas y paquetes turísticos</p>
         </div>
-        <Button 
-          onClick={() => setShowCreateModal(true)}
-          className="bg-emerald-600 hover:bg-emerald-700"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Nuevo Restaurante
-        </Button>
+        {canCreateRestaurante && (
+          <Button 
+            onClick={() => setShowCreateModal(true)}
+            className="bg-emerald-600 hover:bg-emerald-700"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Nuevo Restaurante
+          </Button>
+        )}
       </div>
 
       {/* KPI Cards */}
@@ -647,22 +698,26 @@ export function RestaurantManagement() {
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openEditModal(restaurant)}
-                              className="hover:bg-emerald-50 hover:text-emerald-600"
-                            >
-                              <Edit className="w-4 h-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => openDeleteModal(restaurant)}
-                              className="hover:bg-red-50 hover:text-red-600"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </Button>
+                            {canEditRestaurante && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openEditModal(restaurant)}
+                                className="hover:bg-emerald-50 hover:text-emerald-600"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {canDeleteRestaurante && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => openDeleteModal(restaurant)}
+                                className="hover:bg-red-50 hover:text-red-600"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -896,7 +951,12 @@ export function RestaurantManagement() {
             <Button
               onClick={showCreateModal ? handleCreate : handleEdit}
               className="bg-emerald-600 hover:bg-emerald-700"
-              disabled={!formData.name || !formData.location || !formData.associatedItem}
+              disabled={
+                !formData.name ||
+                !formData.location ||
+                !formData.associatedItem ||
+                (showCreateModal ? !canCreateRestaurante : !canEditRestaurante)
+              }
             >
               {showCreateModal ? 'Crear Restaurante' : 'Guardar Cambios'}
             </Button>
@@ -1043,6 +1103,7 @@ export function RestaurantManagement() {
             <Button
               onClick={handleDelete}
               className="bg-red-600 hover:bg-red-700"
+              disabled={!canDeleteRestaurante}
             >
               Eliminar Restaurante
             </Button>

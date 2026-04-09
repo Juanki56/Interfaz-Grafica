@@ -62,7 +62,7 @@ import {
   SelectValue,
 } from './ui/select';
 import { Label } from './ui/label';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -74,6 +74,8 @@ import { useState, useEffect } from 'react';
 import { Switch } from './ui/switch';
 
 import { empleadosAPI } from '../services/api';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 
 // 1. Actualiza la interfaz local Employee para reflejar el backend
@@ -122,6 +124,13 @@ function mapEmpleado(e: any): Employee {
 }
 
 export function EmployeeManagement() {
+  const permisos = usePermissions();
+  const employeePerms = createModulePermissions(permisos, 'Empleados');
+  const canViewEmployees = employeePerms.canView();
+  const canCreateEmployee = employeePerms.canCreate();
+  const canEditEmployee = employeePerms.canEdit();
+  const canDeleteEmployee = employeePerms.canDelete();
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -177,8 +186,14 @@ export function EmployeeManagement() {
   const startIndex = (currentPage - 1) * itemsPerPage;
 
   useEffect(() => {
+    if (permisos.loadingRoles) return;
+    if (!canViewEmployees) {
+      setEmployees([]);
+      setLoading(false);
+      return;
+    }
     cargarEmpleados();
-  }, []);
+  }, [permisos.loadingRoles, canViewEmployees]);
 
   const cargarEmpleados = async () => {
     setLoading(true);
@@ -199,6 +214,11 @@ export function EmployeeManagement() {
 
   // Handlers
   const handleCreate = () => {
+    if (!canCreateEmployee) {
+      toast.error('No tienes permiso para crear empleados');
+      return;
+    }
+
     setFormData({
       nombre: '',
       apellido: '',
@@ -218,6 +238,11 @@ export function EmployeeManagement() {
   };
 
   const handleEdit = (employee: Employee) => {
+    if (!canEditEmployee) {
+      toast.error('No tienes permiso para editar empleados');
+      return;
+    }
+
     setSelectedEmployee(employee);
     setFormData(employee);
     setShowEditModal(true);
@@ -229,11 +254,21 @@ export function EmployeeManagement() {
   };
 
   const handleDelete = (employee: Employee) => {
+    if (!canDeleteEmployee) {
+      toast.error('No tienes permiso para eliminar empleados');
+      return;
+    }
+
     setSelectedEmployee(employee);
     setShowDeleteDialog(true);
   };
 
  const handleToggleStatus = async (employee: Employee) => {
+    if (!canEditEmployee) {
+      toast.error('No tienes permiso para editar empleados');
+      return;
+    }
+
     const nuevoEstado = employee.estado === 'Activo' ? false : true;
     try {
       await empleadosAPI.update(Number(employee.id), { estado: nuevoEstado } as any);
@@ -245,6 +280,11 @@ export function EmployeeManagement() {
   };
 
   const confirmCreate = async () => {
+    if (!canCreateEmployee) {
+      toast.error('No tienes permiso para crear empleados');
+      return;
+    }
+
     const fd = formData as any;
     if (!fd.nombre || !fd.apellido || !fd.email || !fd.documento || !fd.telefono || !fd.cargo || !fd.contrasena) {
       toast.error('Por favor completa todos los campos obligatorios');
@@ -271,6 +311,11 @@ export function EmployeeManagement() {
   };
 
   const confirmEdit = async () => {
+    if (!canEditEmployee) {
+      toast.error('No tienes permiso para editar empleados');
+      return;
+    }
+
     const fd = formData as any;
     if (!fd.nombre || !fd.email || !fd.telefono) {
       toast.error('Por favor completa todos los campos obligatorios');
@@ -293,6 +338,11 @@ export function EmployeeManagement() {
   };
 
  const confirmDelete = async () => {
+    if (!canDeleteEmployee) {
+      toast.error('No tienes permiso para eliminar empleados');
+      return;
+    }
+
     try {
       await empleadosAPI.delete(Number(selectedEmployee?.id));
       toast.success('Empleado eliminado del sistema');
@@ -319,6 +369,21 @@ export function EmployeeManagement() {
         return 'bg-gray-100 text-gray-700';
     }
   };
+
+  if (!permisos.loadingRoles && !canViewEmployees) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver empleados.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -382,13 +447,15 @@ export function EmployeeManagement() {
               </Select>
 
               {/* Botón crear */}
-              <Button 
-                onClick={handleCreate}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Registrar empleado
-              </Button>
+              {canCreateEmployee && (
+                <Button 
+                  onClick={handleCreate}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <Plus className="w-4 h-4 mr-2" />
+                  Registrar empleado
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -456,6 +523,7 @@ export function EmployeeManagement() {
                       <Switch
                         checked={employee.estado === 'Activo'}
                         onCheckedChange={() => handleToggleStatus(employee)}
+                        disabled={!canEditEmployee}
                         className="data-[state=checked]:bg-green-600"
                       />
                     </TableCell>
@@ -469,22 +537,26 @@ export function EmployeeManagement() {
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleEdit(employee)}
-                          className="hover:bg-green-50 hover:text-green-600"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(employee)}
-                          className="hover:bg-red-50 hover:text-red-600"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
+                        {canEditEmployee && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEdit(employee)}
+                            className="hover:bg-green-50 hover:text-green-600"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                        )}
+                        {canDeleteEmployee && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDelete(employee)}
+                            className="hover:bg-red-50 hover:text-red-600"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </motion.tr>

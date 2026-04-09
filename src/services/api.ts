@@ -250,6 +250,13 @@ export const authAPI = {
     return fetchAPI('/api/auth/profile');
   },
 
+  updateProfile: async (profileUpdates: Record<string, any>) => {
+    return fetchAPI('/api/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(profileUpdates),
+    });
+  },
+
   cambiarContrasena: async (contrasenaActual: string, contrasenaNueva: string) => {
     return fetchAPI('/api/auth/cambiar-contrasena', {
       method: 'PUT',
@@ -657,8 +664,18 @@ export const rolesAPI = {
 
 export const permisosAPI = {
   getAll: async (): Promise<Permiso[]> => {
-    const response = await fetchAPI<{ data: Permiso[] }>('/api/permisos');
-    return response.data || [];
+    try {
+      const response = await fetchAPI<{ data: Permiso[] }>('/api/permisos');
+      return response.data || [];
+    } catch (error) {
+      // Fallback: el backend expone el catálogo también bajo /api/roles/permisos
+      // protegido por permiso `roles.leer` (útil para roles no-admin con permisos).
+      const response = await fetchAPI<Permiso[] | { data: Permiso[] }>('/api/roles/permisos');
+      if (Array.isArray(response)) {
+        return response;
+      }
+      return (response as any).data || [];
+    }
   },
 };
 

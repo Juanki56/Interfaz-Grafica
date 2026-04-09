@@ -52,6 +52,7 @@ import { toast } from 'sonner';
 import { Switch } from './ui/switch';
 import { proveedoresAPI, tiposProveedorAPI, Proveedor, TipoProveedor } from '../services/api';
 import { useEffect } from 'react';
+import { usePermissions } from '../hooks/usePermissions';
 
 // ===========================
 // INTERFACES Y TIPOS  
@@ -83,6 +84,13 @@ interface ProviderManagementProps {
 }
 
 export function ProviderManagement({ userRole = 'admin' }: ProviderManagementProps) {
+  // Permisos
+  const { hasPermission, userPermissions, currentUserRole } = usePermissions();
+
+  useEffect(() => {
+    console.log('[ProviderManagement] currentUserRole:', currentUserRole);
+    console.log('[ProviderManagement] userPermissions:', userPermissions);
+  }, [currentUserRole, userPermissions]);
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -291,6 +299,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
             onToggleStatus={handleToggleStatus}
             providerTypes={Array.isArray(providerTypes) ? providerTypes : []}
             isAdmin={isAdmin}
+            hasPermission={hasPermission}
           />
         )}
         
@@ -322,6 +331,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
             onDelete={handleInitiateDelete}
             onToggleStatus={handleToggleStatus}
             isAdmin={isAdmin}
+            hasPermission={hasPermission}
           />
         )}
       </AnimatePresence>
@@ -389,6 +399,7 @@ interface ProviderListViewProps {
   onToggleStatus: (providerId: number) => void;
   providerTypes: ProviderType[];
   isAdmin: boolean;
+  hasPermission?: (perm: string) => boolean;
 }
 
 function ProviderListView({
@@ -408,7 +419,8 @@ function ProviderListView({
   onDelete,
   onToggleStatus,
   providerTypes,
-  isAdmin
+  isAdmin,
+  hasPermission
 }: ProviderListViewProps) {
   
   // Validar que los arrays sean válidos - RETORNO TEMPRANO si hay problema
@@ -469,7 +481,7 @@ function ProviderListView({
             {isAdmin ? 'Administra los proveedores del sistema' : 'Visualiza la información de los proveedores'}
           </p>
         </div>
-        {isAdmin && (
+        {(isAdmin || hasPermission?.('proveedores.crear')) && (
           <Button 
             onClick={onCreateNew}
             className="bg-green-600 hover:bg-green-700 text-white"
@@ -588,14 +600,14 @@ function ProviderListView({
                           </div>
                         </TableCell>
                         <TableCell>
-                          {isAdmin && (
+                          {(isAdmin || hasPermission?.('proveedores.editar')) && (
                             <Switch
                               checked={provider.estado}
                               onCheckedChange={() => onToggleStatus(provider.id_proveedores)}
                               className="data-[state=checked]:bg-green-600"
                             />
                           )}
-                          {!isAdmin && (
+                          {!(isAdmin || hasPermission?.('proveedores.editar')) && (
                             <Badge className={getStatusBadge(provider.estado ?? false)}>
                               {provider.estado ? 'Activo' : 'Inactivo'}
                             </Badge>
@@ -611,26 +623,26 @@ function ProviderListView({
                             >
                               <Eye className="w-4 h-4" />
                             </Button>
-                            {isAdmin && (
-                              <>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => onEdit(provider)}
-                                  className="hover:bg-blue-100 hover:text-blue-700"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => onDelete(provider.id_proveedores)}
-                                  className="hover:bg-red-100 hover:text-red-700"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </Button>
-                            </>
-                          )}
+                            {(isAdmin || hasPermission?.('proveedores.editar')) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => onEdit(provider)}
+                                className="hover:bg-blue-100 hover:text-blue-700"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </Button>
+                            )}
+                            {(isAdmin || hasPermission?.('proveedores.eliminar')) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => onDelete(provider.id_proveedores)}
+                                className="hover:bg-red-100 hover:text-red-700"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </Button>
+                            )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -919,6 +931,7 @@ interface ProviderDetailViewProps {
   onDelete: (providerId: number) => void;
   onToggleStatus: (providerId: number) => void;
   isAdmin: boolean;
+  hasPermission?: (perm: string) => boolean;
 }
 
 function ProviderDetailView({
@@ -928,7 +941,8 @@ function ProviderDetailView({
   onEdit,
   onDelete,
   onToggleStatus,
-  isAdmin
+  isAdmin,
+  hasPermission
 }: ProviderDetailViewProps) {
   const safeProviderTypes = Array.isArray(providerTypes) ? providerTypes : [];
   const tipoProveedor = safeProviderTypes.find(t => t.id_tipo === provider.id_tipo);
@@ -1031,31 +1045,37 @@ function ProviderDetailView({
             </div>
 
             {/* Acciones */}
-            {isAdmin && (
+            {(hasPermission?.('proveedores.editar') || isAdmin || hasPermission?.('proveedores.eliminar')) && (
               <div className="flex flex-wrap gap-3 pt-6 border-t border-green-100">
-                <Button
-                  onClick={() => onEdit(provider)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white"
-                >
-                  <Edit className="w-4 h-4 mr-2" />
-                  Editar
-                </Button>
-                <Button
-                  onClick={() => onToggleStatus(provider.id_proveedores)}
-                  variant="outline"
-                  className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
-                >
-                  <Power className="w-4 h-4 mr-2" />
-                  {provider.estado ? 'Desactivar' : 'Activar'}
-                </Button>
-                <Button
-                  onClick={() => onDelete(provider.id_proveedores)}
-                  variant="outline"
-                  className="border-red-300 text-red-700 hover:bg-red-50"
-                >
-                  <Trash2 className="w-4 h-4 mr-2" />
-                  Eliminar
-                </Button>
+                {(hasPermission?.('proveedores.editar') || isAdmin) && (
+                  <Button
+                    onClick={() => onEdit(provider)}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Edit className="w-4 h-4 mr-2" />
+                    Editar
+                  </Button>
+                )}
+                {(hasPermission?.('proveedores.editar') || isAdmin) && (
+                  <Button
+                    onClick={() => onToggleStatus(provider.id_proveedores)}
+                    variant="outline"
+                    className="border-yellow-300 text-yellow-700 hover:bg-yellow-50"
+                  >
+                    <Power className="w-4 h-4 mr-2" />
+                    {provider.estado ? 'Desactivar' : 'Activar'}
+                  </Button>
+                )}
+                {(hasPermission?.('proveedores.eliminar') || isAdmin) && (
+                  <Button
+                    onClick={() => onDelete(provider.id_proveedores)}
+                    variant="outline"
+                    className="border-red-300 text-red-700 hover:bg-red-50"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Eliminar
+                  </Button>
+                )}
               </div>
             )}
           </div>

@@ -46,7 +46,9 @@ import {
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -182,6 +184,13 @@ const mockPayments: Payment[] = [
 ];
 
 export function PaymentManagement() {
+  const permisos = usePermissions();
+  const abonosPerms = createModulePermissions(permisos, 'Abonos');
+  const canViewAbonos = abonosPerms.canView();
+  const canCreateAbono = abonosPerms.canCreate();
+  const canEditAbono = abonosPerms.canEdit();
+  const canDeleteAbono = abonosPerms.canDelete();
+
   const [payments, setPayments] = useState<Payment[]>(mockPayments);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('todos');
@@ -266,6 +275,11 @@ export function PaymentManagement() {
   };
 
   const handleEdit = (payment: Payment) => {
+    if (!canEditAbono) {
+      toast.error('No tienes permiso para editar abonos');
+      return;
+    }
+
     setSelectedPayment(payment);
     setFormData({
       cliente: payment.cliente,
@@ -281,11 +295,21 @@ export function PaymentManagement() {
   };
 
   const handleDelete = (payment: Payment) => {
+    if (!canDeleteAbono) {
+      toast.error('No tienes permiso para eliminar abonos');
+      return;
+    }
+
     setSelectedPayment(payment);
     setIsDeleteDialogOpen(true);
   };
 
   const confirmDelete = () => {
+    if (!canDeleteAbono) {
+      toast.error('No tienes permiso para eliminar abonos');
+      return;
+    }
+
     if (selectedPayment) {
       setPayments(payments.filter(p => p.id !== selectedPayment.id));
       toast.success('Abono eliminado correctamente');
@@ -295,6 +319,11 @@ export function PaymentManagement() {
   };
 
   const handleAddPayment = () => {
+    if (!canCreateAbono) {
+      toast.error('No tienes permiso para crear abonos');
+      return;
+    }
+
     const montoTotal = parseFloat(formData.montoTotal);
     const montoAbono = parseFloat(formData.montoAbono);
 
@@ -335,6 +364,11 @@ export function PaymentManagement() {
   };
 
   const handleUpdatePayment = () => {
+    if (!canEditAbono) {
+      toast.error('No tienes permiso para editar abonos');
+      return;
+    }
+
     if (selectedPayment) {
       const montoTotal = parseFloat(formData.montoTotal);
       const montoAbono = parseFloat(formData.montoAbono);
@@ -372,6 +406,11 @@ export function PaymentManagement() {
   };
 
   const handleAddNewPaymentToSale = () => {
+    if (!canCreateAbono) {
+      toast.error('No tienes permiso para crear abonos');
+      return;
+    }
+
     if (selectedPayment) {
       const newPaymentAmount = parseFloat(prompt('Ingrese el monto del nuevo abono:') || '0');
       
@@ -432,6 +471,21 @@ export function PaymentManagement() {
     return (payment.totalAbonado / payment.ventaAsociada.montoTotal) * 100;
   };
 
+  if (!permisos.loadingRoles && !canViewAbonos) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver abonos.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -441,10 +495,12 @@ export function PaymentManagement() {
             <h1 className="text-2xl font-semibold text-gray-900">Gestión de Abonos</h1>
             <p className="text-gray-600">Ventas / Abonos de clientes</p>
           </div>
-          <Button onClick={() => setIsAddModalOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Agregar Abono
-          </Button>
+          {canCreateAbono && (
+            <Button onClick={() => setIsAddModalOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" />
+              Agregar Abono
+            </Button>
+          )}
         </div>
 
         {/* Search and Filters */}
@@ -549,20 +605,24 @@ export function PaymentManagement() {
                           >
                             <Eye className="w-4 h-4" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEdit(payment)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDelete(payment)}
-                          >
-                            <Trash2 className="w-4 h-4 text-red-600" />
-                          </Button>
+                          {canEditAbono && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEdit(payment)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {canDeleteAbono && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(payment)}
+                            >
+                              <Trash2 className="w-4 h-4 text-red-600" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -682,7 +742,7 @@ export function PaymentManagement() {
               <Button variant="outline" onClick={() => setIsAddModalOpen(false)}>
                 Cancelar
               </Button>
-              <Button onClick={handleAddPayment}>
+              <Button onClick={handleAddPayment} disabled={!canCreateAbono}>
                 Agregar Abono
               </Button>
             </div>
@@ -798,7 +858,7 @@ export function PaymentManagement() {
               <Button variant="outline" onClick={() => setIsEditModalOpen(false)}>
                 Cancelar
               </Button>
-              <Button onClick={handleUpdatePayment}>
+              <Button onClick={handleUpdatePayment} disabled={!canEditAbono}>
                 Actualizar Abono
               </Button>
             </div>
@@ -893,14 +953,16 @@ export function PaymentManagement() {
               <div>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-medium text-gray-900">Historial de Abonos</h3>
-                  <Button
-                    size="sm"
-                    onClick={handleAddNewPaymentToSale}
-                    disabled={selectedPayment.saldoRestante === 0}
-                  >
-                    <Plus className="w-4 h-4 mr-2" />
-                    Agregar Nuevo Abono
-                  </Button>
+                  {canCreateAbono && (
+                    <Button
+                      size="sm"
+                      onClick={handleAddNewPaymentToSale}
+                      disabled={selectedPayment.saldoRestante === 0}
+                    >
+                      <Plus className="w-4 h-4 mr-2" />
+                      Agregar Nuevo Abono
+                    </Button>
+                  )}
                 </div>
                 
                 <div className="border rounded-lg overflow-hidden">

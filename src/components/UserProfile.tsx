@@ -13,9 +13,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Separator } from './ui/separator';
 import { useAuth } from '../App';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { ClientSalesTab, ClientPaymentsTab } from './ClientSalesAndPayments';
-import { clientesAPI, authAPI } from '../services/api';
+import { clientesAPI, empleadosAPI, authAPI } from '../services/api';
 
 interface Booking {
   id: string;
@@ -34,8 +34,9 @@ interface UserProfileProps {
 }
 
 export function UserProfile({ onClose }: UserProfileProps) {
-  const { user, logout, setCurrentView } = useAuth();
+  const { user, logout, setCurrentView, refreshProfile } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [backendProfile, setBackendProfile] = useState<any>(null);
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     email: user?.email || '',
@@ -79,21 +80,50 @@ export function UserProfile({ onClose }: UserProfileProps) {
   const [selectedPaymentDetail, setSelectedPaymentDetail] = useState<any>(null);
   const [showPaymentDetailDialog, setShowPaymentDetailDialog] = useState(false);
 
+  const splitFullName = (fullName: string) => {
+    const cleaned = String(fullName || '').trim().replace(/\s+/g, ' ');
+    if (!cleaned) return { nombre: '', apellido: '' };
+    const parts = cleaned.split(' ');
+    if (parts.length === 1) return { nombre: parts[0], apellido: '' };
+    return { nombre: parts[0], apellido: parts.slice(1).join(' ') };
+  };
+
+  const loadBackendProfile = async () => {
+    try {
+      const response = await authAPI.getProfile();
+      if (!response?.success || !response?.perfil) return;
+
+      const perfil = response.perfil;
+      setBackendProfile(perfil);
+
+      const nombreCompleto = perfil.apellido ? `${perfil.nombre} ${perfil.apellido}` : (perfil.nombre || '');
+      setProfileData(prev => ({
+        ...prev,
+        name: nombreCompleto || user?.name || prev.name,
+        email: perfil.correo || user?.email || prev.email,
+        phone: perfil.telefono || user?.phone || prev.phone,
+      }));
+    } catch (error: any) {
+      console.error('Error cargando perfil:', error);
+    }
+  };
+
   useEffect(() => {
     // Load bookings from localStorage
     const savedBookings = JSON.parse(localStorage.getItem('userBookings') || '[]');
     setBookings(savedBookings);
 
-    // Load user profile data from localStorage
+    // Load ONLY preferences from localStorage (backend owns name/email/phone)
     const savedProfile = localStorage.getItem('userProfile');
     if (savedProfile) {
-      const parsedProfile = JSON.parse(savedProfile);
-      setProfileData(prev => ({
-        ...prev,
-        ...parsedProfile,
-        name: user?.name || prev.name,
-        email: user?.email || prev.email
-      }));
+      try {
+        const parsedProfile = JSON.parse(savedProfile);
+        if (typeof parsedProfile?.preferences === 'string') {
+          setProfileData(prev => ({ ...prev, preferences: parsedProfile.preferences }));
+        }
+      } catch {
+        // ignore
+      }
     }
 
     // Load settings from localStorage
@@ -105,6 +135,10 @@ export function UserProfile({ onClose }: UserProfileProps) {
     const savedPrivacy = localStorage.getItem('privacySettings');
     if (savedPrivacy) {
       setPrivacySettings(JSON.parse(savedPrivacy));
+    }
+
+    if (localStorage.getItem('token')) {
+      loadBackendProfile();
     }
   }, [user]);
 
@@ -134,7 +168,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
     }
   };
 
-  const handleProfileUpdate = () => {
+  const handleProfileUpdate = async () => {
     // Validate required fields
     if (!profileData.name.trim()) {
       toast.error('El nombre es requerido');
@@ -146,12 +180,61 @@ export function UserProfile({ onClose }: UserProfileProps) {
       return;
     }
     
-    // Save to localStorage
-    localStorage.setItem('userProfile', JSON.stringify(profileData));
-    
-    // Mock profile update
-    console.log('Profile updated:', profileData);
-    toast.success('Perfil actualizado exitosamente');
+    if (!profileData.email.trim()) {
+      toast.error('El email es requerido');
+      return;
+    }
+
+    // Persistir preferencias localmente (no hay campo claro en backend actualmente)
+    localStorage.setItem('userProfile', JSON.stringify({ preferences: profileData.preferences }));
+
+    const { nombre, apellido } = splitFullName(profileData.name);
+
+    try {
+      // 1) Intento principal: endpoint dedicado del auth
+      await authAPI.updateProfile({
+        nombre,
+        apellido: apellido || null,
+        correo: profileData.email,
+        telefono: profileData.phone,
+        preferencias: profileData.preferences
+      });
+
+      await refreshProfile();
+      await loadBackendProfile();
+      toast.success('Perfil actualizado exitosamente');
+      return;
+    } catch (error: any) {
+      const message = String(error?.message || '');
+      const looksLikeMissingEndpoint = /404|not found|cannot put/i.test(message);
+
+      // 2) Fallback: actualizar según tipo de usuario
+      try {
+        if (looksLikeMissingEndpoint && backendProfile?.tipo_usuario === 'cliente' && backendProfile?.id_cliente) {
+          await clientesAPI.update(Number(backendProfile.id_cliente), {
+            nombre,
+            apellido: apellido || null,
+            correo: profileData.email,
+            telefono: profileData.phone
+          });
+        } else if (looksLikeMissingEndpoint && backendProfile?.tipo_usuario === 'empleado' && backendProfile?.id_empleado) {
+          await empleadosAPI.update(Number(backendProfile.id_empleado), {
+            nombre,
+            apellido: apellido || null,
+            telefono: profileData.phone
+          });
+        } else {
+          throw error;
+        }
+
+        await refreshProfile();
+        await loadBackendProfile();
+        toast.success('Perfil actualizado exitosamente');
+      } catch (fallbackError: any) {
+        console.error('Error al actualizar perfil:', fallbackError);
+        toast.error(fallbackError?.message || error?.message || 'Error al actualizar el perfil');
+      }
+    }
   };
 
   const handlePasswordChange = async () => {
@@ -286,9 +369,10 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     <label className="text-sm font-medium text-gray-700">Email</label>
                     <Input
                       value={profileData.email}
-                      onChange={(e) => setProfileData(prev => ({ ...prev, email: e.target.value }))}
                       placeholder="tu@email.com"
                       type="email"
+                      disabled
+                      className="bg-gray-50"
                     />
                   </div>
                   

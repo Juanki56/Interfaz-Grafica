@@ -43,6 +43,7 @@ export function Navigation() {
 
   // Management modules for advisor role
   const advisorManagementModules = [
+    { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
     { id: 'users', label: 'Usuarios', icon: Users },
     { id: 'bookings', label: 'Reservas', icon: Calendar },
     { id: 'farms', label: 'Fincas', icon: TreePine },
@@ -53,7 +54,8 @@ export function Navigation() {
     { id: 'installments', label: 'Abonos', icon: DollarSign },
     { id: 'providers', label: 'Proveedores', icon: Building2 },
     { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
-    { id: 'employees', label: 'Empleados', icon: Shield }
+    { id: 'employees', label: 'Empleados', icon: Shield },
+    { id: 'roles', label: 'Roles', icon: Shield }
   ];
 
   // Management modules for client role

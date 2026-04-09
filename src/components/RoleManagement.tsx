@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key, Loader2 } from 'lucide-react';
+import { Shield, Users, Plus, Edit, Trash2, Eye, UserCheck, Search, Filter, MoreVertical, Settings, Key, Loader2, AlertTriangle } from 'lucide-react';
 import { rolesAPI, usersAPI, permisosAPI, type Rol, type Permiso } from '../services/api';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -12,8 +12,10 @@ import { Checkbox } from './ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
-import { Avatar, AvatarContent, AvatarFallback } from './ui/avatar';
+import { Avatar, AvatarFallback } from './ui/avatar';
 import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 interface Permission {
   id_permisos: number;
@@ -45,6 +47,13 @@ interface User {
 }
 
 export function RoleManagement() {
+  const permisos = usePermissions();
+  const rolePerms = createModulePermissions(permisos, 'Roles');
+  const canViewRoles = rolePerms.canView();
+  const canCreateRole = rolePerms.canCreate();
+  const canEditRole = rolePerms.canEdit();
+  const canDeleteRole = rolePerms.canDelete();
+
   const [activeTab, setActiveTab] = useState('roles');
   const [loading, setLoading] = useState(true);
   const [loadingPermisos, setLoadingPermisos] = useState(false);
@@ -78,9 +87,16 @@ export function RoleManagement() {
 
   // Cargar permisos desde la base de datos
   useEffect(() => {
+    if (permisos.loadingRoles) return;
+    if (!canViewRoles) {
+      setRoles([]);
+      setPermissions([]);
+      setLoading(false);
+      return;
+    }
     cargarPermisos();
     cargarRoles();
-  }, []);
+  }, [permisos.loadingRoles, canViewRoles]);
 
   const cargarPermisos = async () => {
     try {
@@ -156,6 +172,11 @@ export function RoleManagement() {
   });
 
   const handleCreateRole = async () => {
+    if (!canCreateRole) {
+      toast.error('No tienes permiso para crear roles');
+      return;
+    }
+
     if (!newRole.nombre.trim()) {
       toast.error('El nombre del rol es obligatorio');
       return;
@@ -186,6 +207,11 @@ export function RoleManagement() {
   };
 
   const handleEditRole = async () => {
+    if (!canEditRole) {
+      toast.error('No tienes permiso para editar roles');
+      return;
+    }
+
     if (!selectedRole || !newRole.nombre.trim()) {
       toast.error('Datos del rol incompletos');
       return;
@@ -218,6 +244,11 @@ export function RoleManagement() {
   };
 
   const handleDeleteRole = async (roleId: number) => {
+    if (!canDeleteRole) {
+      toast.error('No tienes permiso para eliminar roles');
+      return;
+    }
+
     const role = roles.find(r => r.id_roles === roleId);
     if (role?.isSystem) {
       toast.error('No se pueden eliminar roles del sistema');
@@ -242,6 +273,11 @@ export function RoleManagement() {
   };
 
   const handleConfirmDeleteRole = async () => {
+    if (!canDeleteRole) {
+      toast.error('No tienes permiso para eliminar roles');
+      return;
+    }
+
     if (!rolePendingDelete) return;
 
     if (!reassignRoleId) {
@@ -302,6 +338,11 @@ export function RoleManagement() {
   };
 
   const openEditModal = (role: Role) => {
+    if (!canEditRole) {
+      toast.error('No tienes permiso para editar roles');
+      return;
+    }
+
     if (role.isSystem) {
       toast.error('Los roles del sistema no se pueden editar');
       return;
@@ -367,6 +408,21 @@ export function RoleManagement() {
 
   const stats = getRoleStats();
 
+  if (!permisos.loadingRoles && !canViewRoles) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver roles.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -376,13 +432,15 @@ export function RoleManagement() {
           <p className="text-gray-600">Administra roles, permisos y asignaciones de usuarios</p>
         </div>
         <div className="flex space-x-2">
-          <Button 
-            onClick={() => setShowCreateModal(true)}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Crear Rol
-          </Button>
+          {canCreateRole && (
+            <Button 
+              onClick={() => setShowCreateModal(true)}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Crear Rol
+            </Button>
+          )}
         </div>
       </div>
 
@@ -518,21 +576,25 @@ export function RoleManagement() {
                                 <Eye className="w-4 h-4 mr-2" />
                                 Ver Detalles
                               </DropdownMenuItem>
-                              <DropdownMenuItem 
-                                onClick={() => openEditModal(role)}
-                                disabled={role.isSystem}
-                              >
-                                <Edit className="w-4 h-4 mr-2" />
-                                Editar
-                              </DropdownMenuItem>
-                              <DropdownMenuItem 
-                                onClick={() => handleDeleteRole(role.id_roles)}
-                                disabled={role.isSystem || (role.userCount ?? 0) > 0}
-                                className="text-red-600"
-                              >
-                                <Trash2 className="w-4 h-4 mr-2" />
-                                Eliminar
-                              </DropdownMenuItem>
+                              {canEditRole && (
+                                <DropdownMenuItem 
+                                  onClick={() => openEditModal(role)}
+                                  disabled={role.isSystem}
+                                >
+                                  <Edit className="w-4 h-4 mr-2" />
+                                  Editar
+                                </DropdownMenuItem>
+                              )}
+                              {canDeleteRole && (
+                                <DropdownMenuItem 
+                                  onClick={() => handleDeleteRole(role.id_roles)}
+                                  disabled={role.isSystem || (role.userCount ?? 0) > 0}
+                                  className="text-red-600"
+                                >
+                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  Eliminar
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>

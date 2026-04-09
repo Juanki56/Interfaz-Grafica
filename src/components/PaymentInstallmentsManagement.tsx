@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { usePermissions } from '../hooks/usePermissions';
 import { 
   Plus,
   Search,
@@ -372,6 +373,8 @@ interface PaymentInstallmentsManagementProps {
 }
 
 export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentInstallmentsManagementProps) {
+  // Permisos
+  const { hasPermission } = usePermissions();
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedInstallment, setSelectedInstallment] = useState<PaymentInstallment | null>(null);
   const [installments, setInstallments] = useState<PaymentInstallment[]>(mockInstallments);
@@ -459,6 +462,7 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
             onViewDetail={handleViewDetail}
             onCancelInstallment={handleInitiateCancellation}
             userRole={userRole}
+            hasPermission={hasPermission}
           />
         )}
         
@@ -479,6 +483,7 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
             onBack={() => setViewMode('list')}
             onCancel={handleInitiateCancellation}
             userRole={userRole}
+            hasPermission={hasPermission}
           />
         )}
       </AnimatePresence>
@@ -566,6 +571,7 @@ interface InstallmentsListViewProps {
   onViewDetail: (installment: PaymentInstallment) => void;
   onCancelInstallment: (installmentId: string) => void;
   userRole?: 'admin' | 'advisor';
+  hasPermission?: (perm: string) => boolean;
 }
 
 function InstallmentsListView({
@@ -582,7 +588,8 @@ function InstallmentsListView({
   onCreateNew,
   onViewDetail,
   onCancelInstallment,
-  userRole = 'admin'
+  userRole = 'admin',
+  hasPermission
 }: InstallmentsListViewProps) {
   
   const formatCurrency = (amount: number) => {
@@ -634,14 +641,16 @@ function InstallmentsListView({
           <h1 className="text-green-800">Gestión de Abonos</h1>
           <p className="text-gray-600 mt-1">Administra todos los abonos y pagos parciales</p>
         </div>
-        <Button 
-          onClick={onCreateNew}
-          size="lg"
-          className="bg-green-600 hover:bg-green-700 text-white px-6"
-        >
-          <Plus className="w-5 h-5 mr-2" />
-          Registrar Abono
-        </Button>
+        {(hasPermission?.('abonos.crear') || userRole === 'admin') && (
+          <Button 
+            onClick={onCreateNew}
+            size="lg"
+            className="bg-green-600 hover:bg-green-700 text-white px-6"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            Registrar Abono
+          </Button>
+        )}
       </div>
 
       {/* Barra de búsqueda y filtros */}
@@ -762,8 +771,8 @@ function InstallmentsListView({
                           <FileText className="w-4 h-4" />
                         </Button>
 
-                        {/* Anular Abono (solo Administrador) */}
-                        {userRole === 'admin' && (
+                        {/* Anular Abono (según permiso) */}
+                        {(hasPermission?.('abonos.eliminar') || userRole === 'admin') && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1257,9 +1266,10 @@ interface InstallmentDetailViewProps {
   onBack: () => void;
   onCancel: (installmentId: string) => void;
   userRole?: 'admin' | 'advisor';
+  hasPermission?: (perm: string) => boolean;
 }
 
-function InstallmentDetailView({ installment, onBack, onCancel, userRole = 'admin' }: InstallmentDetailViewProps) {
+function InstallmentDetailView({ installment, onBack, onCancel, userRole = 'admin', hasPermission }: InstallmentDetailViewProps) {
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -1309,7 +1319,7 @@ function InstallmentDetailView({ installment, onBack, onCancel, userRole = 'admi
             <Printer className="w-4 h-4 mr-2" />
             Generar PDF
           </Button>
-          {userRole === 'admin' && (
+          {(hasPermission?.('abonos.eliminar') || userRole === 'admin') && (
             <Button 
               onClick={() => onCancel(installment.id)}
               variant="outline"
@@ -1515,7 +1525,7 @@ function InstallmentDetailView({ installment, onBack, onCancel, userRole = 'admi
                   Generar PDF
                 </Button>
                 
-                {userRole === 'admin' && (
+                {(hasPermission?.('abonos.eliminar') || userRole === 'admin') && (
                   <Button 
                     onClick={() => onCancel(installment.id)}
                     variant="outline"

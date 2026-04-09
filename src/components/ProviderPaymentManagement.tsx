@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { jsPDF } from 'jspdf';
 import { motion } from 'motion/react';
 import {
-  DollarSign, Search, Plus, Eye, Ban, Calendar, FileText, Download, X, Upload,
+  Search, Plus, Eye, Ban, Calendar, FileText, Download, X,
   AlertCircle, CheckCircle, Building2, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
@@ -22,7 +22,9 @@ import {
 } from './ui/select';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle
@@ -52,11 +54,19 @@ interface Proveedor {
 }
 
 export function ProviderPaymentManagement() {
+  const permisos = usePermissions();
+  const pagosPerms = createModulePermissions(permisos, 'Pagos');
+  const proveedoresPerms = createModulePermissions(permisos, 'Proveedores');
+  const canViewPagos = pagosPerms.canView();
+  const canCreatePago = pagosPerms.canCreate();
+  const canEditPago = pagosPerms.canEdit();
+  const canViewProveedores = proveedoresPerms.canView();
+
   // DATA
   const [payments, setPayments] = useState<PagoProveedor[]>([]);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('todos');
+  const [filterStatus] = useState('todos');
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isAnnulDialogOpen, setIsAnnulDialogOpen] = useState(false);
@@ -79,18 +89,25 @@ export function ProviderPaymentManagement() {
   useEffect(() => {
     async function fetchAll() {
       try {
-        const [pagos, provs] = await Promise.all([
-          pagosProveedoresAPI.getAll(),
-          proveedoresAPI.getAll()
-        ]);
+        if (!canViewPagos) return;
+
+        const pagos = await pagosProveedoresAPI.getAll();
         setPayments(pagos);
-        setProveedores(provs);
+
+        if (canViewProveedores) {
+          const provs = await proveedoresAPI.getAll();
+          setProveedores(provs);
+        } else {
+          setProveedores([]);
+        }
       } catch (err) {
         toast.error('Error cargando pagos o proveedores');
       }
     }
-    fetchAll();
-  }, []);
+    if (!permisos.loadingRoles) {
+      fetchAll();
+    }
+  }, [permisos.loadingRoles, canViewPagos, canViewProveedores]);
 
   // FILTRAR DATOS (búsqueda/proveedor/estado)
   const filteredPayments = payments.filter(payment => {
@@ -142,6 +159,11 @@ export function ProviderPaymentManagement() {
   };
 
   const handleAnnul = (payment: PagoProveedor) => {
+    if (!canEditPago) {
+      toast.error('No tienes permiso para anular pagos');
+      return;
+    }
+
     if ((payment.estado ?? '').toLowerCase() === 'anulado') {
       toast.error('Este pago ya está anulado');
       return;
@@ -212,6 +234,11 @@ export function ProviderPaymentManagement() {
   };
 
   const confirmAnnul = async () => {
+    if (!canEditPago) {
+      toast.error('No tienes permiso para anular pagos');
+      return;
+    }
+
     if (selectedPayment) {
       try {
         await pagosProveedoresAPI.update(selectedPayment.id_pago_proveedor, { estado: 'anulado' });
@@ -228,6 +255,11 @@ export function ProviderPaymentManagement() {
   };
 
   const handleRegisterPayment = async () => {
+    if (!canCreatePago) {
+      toast.error('No tienes permiso para registrar pagos');
+      return;
+    }
+
     try {
       if (!formData.id_proveedores || !formData.observaciones.trim() || !formData.monto) {
         toast.error('Completa todos los campos obligatorios (*)');
@@ -268,6 +300,21 @@ export function ProviderPaymentManagement() {
   };
 
   // --------------------------------- UI ---------------------------------
+  if (!permisos.loadingRoles && !canViewPagos) {
+    return (
+      <div className="space-y-6">
+        <Card className="border-red-200">
+          <CardHeader>
+            <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-700">No tienes permiso para ver pagos.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -284,13 +331,15 @@ export function ProviderPaymentManagement() {
               Administra y registra todos los pagos realizados a proveedores de servicios turísticos
             </p>
           </div>
-          <Button
-            onClick={() => setIsRegisterModalOpen(true)}
-            className="bg-green-600 hover:bg-green-700 text-white"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Registrar Nuevo Pago
-          </Button>
+          {canCreatePago && (
+            <Button
+              onClick={() => setIsRegisterModalOpen(true)}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Registrar Nuevo Pago
+            </Button>
+          )}
         </div>
         <motion.div
           initial={{ opacity: 0 }}
@@ -433,15 +482,17 @@ export function ProviderPaymentManagement() {
                           >
                             <Download className="w-4 h-4 text-green-600" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleAnnul(payment)}
-                            disabled={(payment.estado ?? '').toLowerCase() === 'anulado'}
-                            title="Anular pago"
-                          >
-                            <Ban className="w-4 h-4 text-red-600" />
-                          </Button>
+                          {canEditPago && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleAnnul(payment)}
+                              disabled={(payment.estado ?? '').toLowerCase() === 'anulado'}
+                              title="Anular pago"
+                            >
+                              <Ban className="w-4 h-4 text-red-600" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </motion.tr>
@@ -492,7 +543,7 @@ export function ProviderPaymentManagement() {
               <Label htmlFor="proveedor">Proveedor *</Label>
               <Select
                 value={formData.id_proveedores.toString()}
-                onValueChange={v => setFormData({ ...formData, id_proveedores: v })}
+                onValueChange={(v: string) => setFormData({ ...formData, id_proveedores: v })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccione un proveedor" />
@@ -544,7 +595,7 @@ export function ProviderPaymentManagement() {
                 <Label htmlFor="metodo_pago">Método de Pago *</Label>
                 <Select
                   value={formData.metodo_pago}
-                  onValueChange={(v) => setFormData({ ...formData, metodo_pago: v })}
+                  onValueChange={(v: string) => setFormData({ ...formData, metodo_pago: v })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Seleccione" />
@@ -717,6 +768,7 @@ export function ProviderPaymentManagement() {
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmAnnul}
+              disabled={!canEditPago}
               className="bg-red-600 hover:bg-red-700"
             >
               Sí, Anular Pago

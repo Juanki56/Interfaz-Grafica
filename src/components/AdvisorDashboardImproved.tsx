@@ -84,8 +84,10 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Switch } from './ui/switch';
 import { DashboardLayout, DashboardSection, DashboardGrid } from './DashboardLayout';
-import { toast } from 'sonner@2.0.3';
+import { toast } from 'sonner';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Area, AreaChart } from 'recharts';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions, type Module } from '../utils/permissionHelper';
 import {
   mockUsers,
   mockPackages,
@@ -106,9 +108,14 @@ import { RoutesManagement } from './RoutesManagement';
 import { OwnersManagement } from './OwnersManagement';
 import { SalesManagement } from './SalesManagementNew';
 import { PaymentInstallmentsManagement } from './PaymentInstallmentsManagement';
+import { UsersManagement } from './UsersManagement';
+import { EmployeeManagement } from './EmployeeManagement';
+import { RolesManagement } from './RolesManagement';
+import { DashboardAnalytics } from './DashboardAnalytics';
 
 export function AdvisorDashboardImproved() {
   const { user, adminActiveTab, setAdminActiveTab } = useAuth();
+  const permisos = usePermissions();
   const [activeTab, setActiveTab] = useState('routes');
   const [searchTerm, setSearchTerm] = useState('');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -118,6 +125,22 @@ export function AdvisorDashboardImproved() {
   const [formData, setFormData] = useState<any>({});
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 4;
+
+  const tabModuleMap: Partial<Record<string, Module>> = {
+    users: 'Usuarios',
+    bookings: 'Reservas',
+    services: 'Servicios',
+    packages: 'Tours',
+    sales: 'Ventas',
+    roles: 'Roles',
+  };
+
+  const activeModule = tabModuleMap[activeTab];
+  const activeModulePerms = activeModule ? createModulePermissions(permisos, activeModule) : null;
+  const canViewActiveTab = activeModulePerms?.canView() ?? true;
+  const canCreateActiveTab = activeModulePerms?.canCreate() ?? true;
+  const canEditActiveTab = activeModulePerms?.canEdit() ?? true;
+  const canDeleteActiveTab = activeModulePerms?.canDelete() ?? true;
 
   // Sync activeTab with adminActiveTab from context
   useEffect(() => {
@@ -256,26 +279,59 @@ export function AdvisorDashboardImproved() {
 
   // Handle CRUD operations
   const handleCreate = () => {
+    if (activeModulePerms && !canCreateActiveTab) {
+      toast.error(activeModulePerms.getErrorMessage('crear'));
+      return;
+    }
+
+    setSelectedItem(null);
     setFormData({});
     setIsCreateModalOpen(true);
   };
 
   const handleEdit = (item: any) => {
+    if (activeModulePerms && !canEditActiveTab) {
+      toast.error(activeModulePerms.getErrorMessage('editar'));
+      return;
+    }
+
     setSelectedItem(item);
     setFormData(item);
     setIsEditModalOpen(true);
   };
 
   const handleView = (item: any) => {
+    if (activeModulePerms && !canViewActiveTab) {
+      toast.error(activeModulePerms.getErrorMessage('ver'));
+      return;
+    }
+
     setSelectedItem(item);
     setIsViewModalOpen(true);
   };
 
   const handleDelete = (item: any) => {
+    if (activeModulePerms && !canDeleteActiveTab) {
+      toast.error(activeModulePerms.getErrorMessage('eliminar'));
+      return;
+    }
+
     toast.success(`${currentMenuItem.label} eliminado correctamente`);
   };
 
   const handleSave = () => {
+    if (activeModulePerms) {
+      const isEditAction = Boolean(selectedItem);
+      if (!isEditAction && !canCreateActiveTab) {
+        toast.error(activeModulePerms.getErrorMessage('crear'));
+        return;
+      }
+      if (isEditAction && !canEditActiveTab) {
+        toast.error(activeModulePerms.getErrorMessage('editar'));
+        return;
+      }
+    }
+
     const action = selectedItem ? 'actualizado' : 'creado';
     toast.success(`${currentMenuItem.label} ${action} correctamente`);
     setIsCreateModalOpen(false);
@@ -409,19 +465,26 @@ export function AdvisorDashboardImproved() {
       return <Badge variant={variants[status] || 'secondary'}>{status}</Badge>;
     };
 
-    const renderActions = (canEdit: boolean = true) => (
-      <div className="flex space-x-2">
-        <Button size="sm" variant="outline" onClick={() => handleView(item)}>
-          <Eye className="w-4 h-4" />
-        </Button>
-        {canEdit && (
-          <Button size="sm" variant="outline" onClick={() => handleEdit(item)}>
-            <Edit className="w-4 h-4" />
-          </Button>
-        )}
-        {/* Advisors cannot delete - only view and edit */}
-      </div>
-    );
+    const renderActions = (options?: { canView?: boolean; canEdit?: boolean }) => {
+      const canView = options?.canView ?? true;
+      const canEdit = options?.canEdit ?? true;
+
+      return (
+        <div className="flex space-x-2">
+          {canView && (
+            <Button size="sm" variant="outline" onClick={() => handleView(item)}>
+              <Eye className="w-4 h-4" />
+            </Button>
+          )}
+          {canEdit && (
+            <Button size="sm" variant="outline" onClick={() => handleEdit(item)}>
+              <Edit className="w-4 h-4" />
+            </Button>
+          )}
+          {/* Advisors cannot delete - only view and edit */}
+        </div>
+      );
+    };
 
     switch (activeTab) {
       case 'users':
@@ -432,7 +495,7 @@ export function AdvisorDashboardImproved() {
             <TableCell>{item.phone || 'No registrado'}</TableCell>
             <TableCell>{getStatusBadge(item.status)}</TableCell>
             <TableCell>{item.joinDate}</TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -450,7 +513,7 @@ export function AdvisorDashboardImproved() {
                 <span className="ml-1 text-sm">{item.rating || '5.0'}</span>
               </div>
             </TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -467,7 +530,7 @@ export function AdvisorDashboardImproved() {
                 {getStatusBadge(item.status)}
               </span>
             </TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -487,7 +550,12 @@ export function AdvisorDashboardImproved() {
               >
                 <Switch
                   checked={item.status === 'Activo'}
+                  disabled={!canEditActiveTab}
                   onCheckedChange={(checked) => {
+                    if (!canEditActiveTab) {
+                      toast.error(activeModulePerms?.getErrorMessage('editar') ?? 'No tienes permiso para editar');
+                      return;
+                    }
                     const newStatus = checked ? 'Activo' : 'Inactivo';
                     toast.success(`Estado cambiado a ${newStatus}`);
                   }}
@@ -498,7 +566,7 @@ export function AdvisorDashboardImproved() {
                 </span>
               </motion.div>
             </TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -512,7 +580,7 @@ export function AdvisorDashboardImproved() {
             </TableCell>
             <TableCell>${item.price?.toLocaleString() || 'Consultar'}</TableCell>
             <TableCell>{getStatusBadge(item.status)}</TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -531,7 +599,12 @@ export function AdvisorDashboardImproved() {
               >
                 <Switch
                   checked={item.status === 'Activo'}
+                  disabled={!canEditActiveTab}
                   onCheckedChange={(checked) => {
+                    if (!canEditActiveTab) {
+                      toast.error(activeModulePerms?.getErrorMessage('editar') ?? 'No tienes permiso para editar');
+                      return;
+                    }
                     const newStatus = checked ? 'Activo' : 'Inactivo';
                     toast.success(`Estado cambiado a ${newStatus}`);
                   }}
@@ -542,7 +615,7 @@ export function AdvisorDashboardImproved() {
                 </span>
               </motion.div>
             </TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -562,7 +635,7 @@ export function AdvisorDashboardImproved() {
             <TableCell className="text-green-600">${item.commission?.toLocaleString() || '0'}</TableCell>
             <TableCell>{getStatusBadge(item.status)}</TableCell>
             <TableCell className="text-sm text-gray-600">{item.saleDate}</TableCell>
-            <TableCell>{renderActions(true)}</TableCell>
+            <TableCell>{renderActions({ canView: canViewActiveTab, canEdit: canEditActiveTab })}</TableCell>
           </TableRow>
         );
 
@@ -572,7 +645,7 @@ export function AdvisorDashboardImproved() {
             <TableCell className="font-medium">-</TableCell>
             <TableCell>-</TableCell>
             <TableCell>-</TableCell>
-            <TableCell>{renderActions(false)}</TableCell>
+            <TableCell>{renderActions({ canView: false, canEdit: false })}</TableCell>
           </TableRow>
         );
     }
@@ -707,6 +780,21 @@ export function AdvisorDashboardImproved() {
 
   // Render packages grid view
   const renderPackagesGrid = () => {
+    if (!permisos.loadingRoles && !canViewActiveTab) {
+      return (
+        <div className="space-y-6">
+          <Card className="border-red-200">
+            <CardHeader>
+              <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-gray-700">No tienes permiso para ver tours.</p>
+            </CardContent>
+          </Card>
+        </div>
+      );
+    }
+
     const filteredData = getFilteredData();
 
     return (
@@ -734,10 +822,12 @@ export function AdvisorDashboardImproved() {
               <Download className="w-4 h-4 mr-2" />
               Exportar
             </Button>
-            <Button onClick={handleCreate} className="bg-green-600 hover:bg-green-700">
-              <Plus className="w-4 h-4 mr-2" />
-              Crear Paquete
-            </Button>
+            {canCreateActiveTab && (
+              <Button onClick={handleCreate} className="bg-green-600 hover:bg-green-700">
+                <Plus className="w-4 h-4 mr-2" />
+                Crear Paquete
+              </Button>
+            )}
           </div>
         </div>
 
@@ -796,15 +886,17 @@ export function AdvisorDashboardImproved() {
                         <Eye className="w-4 h-4 mr-1" />
                         Ver
                       </Button>
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        onClick={() => handleEdit(pkg)}
-                        className="border-green-600 text-green-600 hover:bg-green-50"
-                      >
-                        <Edit className="w-4 h-4 mr-1" />
-                        Editar
-                      </Button>
+                      {canEditActiveTab && (
+                        <Button 
+                          size="sm" 
+                          variant="outline" 
+                          onClick={() => handleEdit(pkg)}
+                          className="border-green-600 text-green-600 hover:bg-green-50"
+                        >
+                          <Edit className="w-4 h-4 mr-1" />
+                          Editar
+                        </Button>
+                      )}
                     </div>
                   </CardContent>
                 </Card>
@@ -823,6 +915,26 @@ export function AdvisorDashboardImproved() {
 
   // Render data list view
   const renderDataView = () => {
+    // Dashboard (same advanced dashboard as Admin)
+    if (activeTab === 'dashboard') {
+      return <DashboardAnalytics />;
+    }
+
+    // Use the same Users template as Admin
+    if (activeTab === 'users') {
+      return <UsersManagement />;
+    }
+
+    // Use the same Employees template as Admin
+    if (activeTab === 'employees') {
+      return <EmployeeManagement />;
+    }
+
+    // Roles management
+    if (activeTab === 'roles') {
+      return <RolesManagement />;
+    }
+
     // Special case for packages with grid
     if (activeTab === 'packages') {
       return renderPackagesGrid();
@@ -840,7 +952,7 @@ export function AdvisorDashboardImproved() {
 
     // Special case for sales - Use dedicated SalesManagement component for advisors (no annul option)
     if (activeTab === 'sales') {
-      return <SalesManagement userRole="advisor" />;
+      return <SalesManagement />;
     }
 
     // Special case for installments/abonos - Use dedicated PaymentInstallmentsManagement component for advisors (no annul option)
@@ -861,6 +973,21 @@ export function AdvisorDashboardImproved() {
     // Special case for owners (read-only for advisors)
     if (activeTab === 'owners') {
       return <OwnersManagement isReadOnly={true} />;
+    }
+
+    if (activeModule && !permisos.loadingRoles && !canViewActiveTab) {
+      return (
+        <div className="space-y-6">
+          <Card className="border-red-200">
+            <CardHeader>
+              <CardTitle className="text-red-700">Acceso denegado</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-gray-700">No tienes permiso para ver {currentMenuItem.label.toLowerCase()}.</p>
+            </CardContent>
+          </Card>
+        </div>
+      );
     }
 
     const filteredData = getFilteredData();
@@ -894,7 +1021,7 @@ export function AdvisorDashboardImproved() {
           </div>
 
           <div className="flex items-center space-x-2">
-            {(activeTab === 'users' || activeTab === 'packages' || activeTab === 'bookings' || activeTab === 'services' || activeTab === 'sales') && (
+            {(activeTab === 'users' || activeTab === 'packages' || activeTab === 'bookings' || activeTab === 'services' || activeTab === 'sales') && canCreateActiveTab && (
               <Button onClick={handleCreate}>
                 <Plus className="w-4 h-4 mr-2" />
                 Crear {currentMenuItem.label}

@@ -48,6 +48,9 @@ import {
 import { Checkbox } from './ui/checkbox';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
+import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 
 // ===========================
 // INTERFACES Y TIPOS
@@ -176,6 +179,14 @@ const mockSales: Sale[] = [
 // ===========================
 
 export function SalesManagement() {
+  const permisos = usePermissions();
+  const ventasPerms = createModulePermissions(permisos, 'Ventas');
+  const clientesPerms = createModulePermissions(permisos, 'Clientes');
+  const canViewVentas = ventasPerms.canView();
+  const canCreateVenta = ventasPerms.canCreate();
+  const canEditVenta = ventasPerms.canEdit();
+  const canCreateCliente = clientesPerms.canCreate();
+
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
   const [sales, setSales] = useState<Sale[]>(mockSales);
@@ -197,6 +208,11 @@ export function SalesManagement() {
   const [cancellationReason, setCancellationReason] = useState('');
 
   const handleCreateSale = (newSale: Sale) => {
+    if (!canCreateVenta) {
+      toast.error('No tienes permiso para crear ventas');
+      return;
+    }
+
     setSales([newSale, ...sales]);
     setViewMode('list');
   };
@@ -207,11 +223,21 @@ export function SalesManagement() {
   };
 
   const handleInitiateCancellation = (saleId: string) => {
+    if (!canEditVenta) {
+      toast.error('No tienes permiso para anular ventas');
+      return;
+    }
+
     setSaleToCancel(saleId);
     setShowCancelDialog(true);
   };
 
   const handleConfirmCancellation = () => {
+    if (!canEditVenta) {
+      toast.error('No tienes permiso para anular ventas');
+      return;
+    }
+
     if (saleToCancel) {
       const saleToUpdate = sales.find(s => s.id === saleToCancel);
       if (saleToUpdate) {
@@ -252,6 +278,19 @@ export function SalesManagement() {
     setCancellationReason('');
   };
 
+  if (!permisos.loadingRoles && !canViewVentas) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <Card className="border-red-200">
+          <CardContent className="p-6">
+            <h2 className="text-lg font-semibold text-red-700">Acceso denegado</h2>
+            <p className="text-gray-700 mt-2">No tienes permiso para ver ventas.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <AnimatePresence mode="wait">
@@ -270,7 +309,15 @@ export function SalesManagement() {
             currentPage={currentPage}
             setCurrentPage={setCurrentPage}
             itemsPerPage={itemsPerPage}
-            onCreateNew={() => setViewMode('create')}
+            canCreateVenta={canCreateVenta}
+            canEditVenta={canEditVenta}
+            onCreateNew={() => {
+              if (!canCreateVenta) {
+                toast.error('No tienes permiso para crear ventas');
+                return;
+              }
+              setViewMode('create');
+            }}
             onViewDetail={handleViewDetail}
             onCancelSale={handleInitiateCancellation}
           />
@@ -285,6 +332,8 @@ export function SalesManagement() {
             routes={mockRoutes}
             farms={mockFarms}
             services={mockServices}
+            canCreateVenta={canCreateVenta}
+            canCreateCliente={canCreateCliente}
           />
         )}
         
@@ -294,6 +343,7 @@ export function SalesManagement() {
             sale={selectedSale}
             onBack={() => setViewMode('list')}
             onCancel={handleInitiateCancellation}
+            canEditVenta={canEditVenta}
           />
         )}
       </AnimatePresence>
@@ -350,6 +400,7 @@ export function SalesManagement() {
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmCancellation}
+              disabled={!canEditVenta}
               className="bg-red-600 hover:bg-red-700 text-white"
             >
               Sí, Anular Venta
@@ -378,6 +429,8 @@ interface SalesListViewProps {
   currentPage: number;
   setCurrentPage: (page: number) => void;
   itemsPerPage: number;
+  canCreateVenta: boolean;
+  canEditVenta: boolean;
   onCreateNew: () => void;
   onViewDetail: (sale: Sale) => void;
   onCancelSale: (saleId: string) => void;
@@ -396,6 +449,8 @@ function SalesListView({
   currentPage,
   setCurrentPage,
   itemsPerPage,
+  canCreateVenta,
+  canEditVenta,
   onCreateNew,
   onViewDetail,
   onCancelSale
@@ -448,13 +503,15 @@ function SalesListView({
           <h1 className="text-green-800">Gestión de Ventas</h1>
           <p className="text-gray-600 mt-1">Administra todas las ventas de rutas, fincas y servicios</p>
         </div>
-        <Button 
-          onClick={onCreateNew}
-          className="bg-green-600 hover:bg-green-700 text-white"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Registrar Venta
-        </Button>
+        {canCreateVenta && (
+          <Button 
+            onClick={onCreateNew}
+            className="bg-green-600 hover:bg-green-700 text-white"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Registrar Venta
+          </Button>
+        )}
       </div>
 
       {/* Filtros */}
@@ -569,7 +626,7 @@ function SalesListView({
                         >
                           <Eye className="w-4 h-4" />
                         </Button>
-                        {sale.status !== 'Anulado' && (
+                        {sale.status !== 'Anulado' && canEditVenta && (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -634,9 +691,11 @@ interface CreateSaleViewProps {
   routes: Route[];
   farms: Farm[];
   services: Service[];
+  canCreateVenta: boolean;
+  canCreateCliente: boolean;
 }
 
-function CreateSaleView({ onBack, onCreate, clients, routes, farms, services }: CreateSaleViewProps) {
+function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, canCreateVenta, canCreateCliente }: CreateSaleViewProps) {
   const [selectedClient, setSelectedClient] = useState<string>('');
   const [saleType, setSaleType] = useState<'route' | 'farm' | null>(null);
   const [selectedRoute, setSelectedRoute] = useState<string>('');
@@ -679,6 +738,11 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services }: 
   const { mainServicePrice, servicesPrice, total } = calculateTotal();
 
   const handleSubmit = () => {
+    if (!canCreateVenta) {
+      toast.error('No tienes permiso para crear ventas');
+      return;
+    }
+
     if (!selectedClient) {
       alert('Debes seleccionar un cliente');
       return;
@@ -779,10 +843,12 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services }: 
                     </SelectContent>
                   </Select>
                 </div>
-                <Button variant="outline" className="w-full border-green-200 text-green-700 hover:bg-green-50">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Registrar Nuevo Cliente
-                </Button>
+                {canCreateCliente && (
+                  <Button variant="outline" className="w-full border-green-200 text-green-700 hover:bg-green-50">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Registrar Nuevo Cliente
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1055,6 +1121,7 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services }: 
                 <div className="pt-4 space-y-2">
                   <Button 
                     onClick={handleSubmit}
+                    disabled={!canCreateVenta}
                     className="w-full bg-green-600 hover:bg-green-700 text-white"
                   >
                     Registrar Venta
@@ -1084,9 +1151,10 @@ interface SaleDetailViewProps {
   sale: Sale;
   onBack: () => void;
   onCancel: (saleId: string) => void;
+  canEditVenta: boolean;
 }
 
-function SaleDetailView({ sale, onBack, onCancel }: SaleDetailViewProps) {
+function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailViewProps) {
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -1319,7 +1387,7 @@ function SaleDetailView({ sale, onBack, onCancel }: SaleDetailViewProps) {
                   Generar PDF
                 </Button>
                 
-                {sale.status !== 'Anulado' && (
+                {sale.status !== 'Anulado' && canEditVenta && (
                   <Button 
                     onClick={() => onCancel(sale.id)}
                     variant="outline"
