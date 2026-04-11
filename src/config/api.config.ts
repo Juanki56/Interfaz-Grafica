@@ -12,6 +12,11 @@ export const API_CONFIG = {
   AUTH: {
     LOGIN: '/api/auth/login',
     REGISTER: '/api/auth/register',
+    REGISTER_PENDING: '/api/auth/register-pending',
+    VERIFY_EMAIL: '/api/auth/verificar-email',
+    RESEND_VERIFICATION: '/api/auth/reenviar-verificacion',
+    REQUEST_PASSWORD_RECOVERY: '/api/auth/solicitar-recuperacion',
+    RESET_PASSWORD: '/api/auth/resetear-contrasena',
     VERIFY: '/api/auth/profile', // Usar profile en lugar de verify
     LOGOUT: '/api/auth/logout',
     PROFILE: '/api/auth/profile'

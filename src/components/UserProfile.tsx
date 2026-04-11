@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { User, Calendar, MapPin, Clock, CreditCard, Package, ChevronRight, AlertCircle, Settings, Lock, Bell, Trash2, Shield, Mail, Phone, Eye, EyeOff, Save, DollarSign, FileText, ShoppingCart, Wallet, Search, X } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { User, Calendar, Clock, CreditCard, Package, ChevronRight, AlertCircle, Settings, Lock, Bell, Trash2, Shield, Mail, Phone, Eye, EyeOff, Save } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -9,13 +9,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Switch } from './ui/switch';
 import { Label } from './ui/label';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from './ui/alert-dialog';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
 import { Separator } from './ui/separator';
 import { useAuth } from '../App';
-import { ImageWithFallback } from './figma/ImageWithFallback';
 import { toast } from 'sonner';
 import { ClientSalesTab, ClientPaymentsTab } from './ClientSalesAndPayments';
-import { clientesAPI, empleadosAPI, authAPI } from '../services/api';
+import { clientesAPI, empleadosAPI, usersAPI, authAPI } from '../services/api';
+import { decodeJWT } from '../utils/jwtDecoder';
 
 interface Booking {
   id: string;
@@ -34,7 +33,7 @@ interface UserProfileProps {
 }
 
 export function UserProfile({ onClose }: UserProfileProps) {
-  const { user, logout, setCurrentView, refreshProfile } = useAuth();
+  const { user, logout, setCurrentView, refreshProfile, updateCurrentUser } = useAuth();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [backendProfile, setBackendProfile] = useState<any>(null);
   const [profileData, setProfileData] = useState({
@@ -73,12 +72,6 @@ export function UserProfile({ onClose }: UserProfileProps) {
   
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
-  
-  // Search states for Sales and Payments
-  const [salesSearchTerm, setSalesSearchTerm] = useState('');
-  const [paymentsSearchTerm, setPaymentsSearchTerm] = useState('');
-  const [selectedPaymentDetail, setSelectedPaymentDetail] = useState<any>(null);
-  const [showPaymentDetailDialog, setShowPaymentDetailDialog] = useState(false);
 
   const splitFullName = (fullName: string) => {
     const cleaned = String(fullName || '').trim().replace(/\s+/g, ' ');
@@ -86,6 +79,84 @@ export function UserProfile({ onClose }: UserProfileProps) {
     const parts = cleaned.split(' ');
     if (parts.length === 1) return { nombre: parts[0], apellido: '' };
     return { nombre: parts[0], apellido: parts.slice(1).join(' ') };
+  };
+
+  const resolveSelfBackendIds = async () => {
+    const ids: { idUsuarios?: number; idEmpleado?: number; idCliente?: number } = {};
+
+    // 1) Try JWT payload (best-effort)
+    try {
+      const token = localStorage.getItem('token');
+      if (token) {
+        const payload = decodeJWT(token);
+        const idUsuarios = Number(payload?.id_usuarios ?? payload?.id_usuario ?? payload?.usuario_id ?? payload?.id);
+        if (Number.isFinite(idUsuarios) && idUsuarios > 0) ids.idUsuarios = idUsuarios;
+
+        const idEmpleado = Number(payload?.id_empleado);
+        if (Number.isFinite(idEmpleado) && idEmpleado > 0) ids.idEmpleado = idEmpleado;
+
+        const idCliente = Number(payload?.id_cliente);
+        if (Number.isFinite(idCliente) && idCliente > 0) ids.idCliente = idCliente;
+      }
+    } catch {
+      // ignore
+    }
+
+    const email = String(user?.email || '').trim().toLowerCase();
+
+    // 2) Try profile state if available
+    if (backendProfile) {
+      const idU = Number(backendProfile?.id_usuarios);
+      if (!ids.idUsuarios && Number.isFinite(idU) && idU > 0) ids.idUsuarios = idU;
+      const idE = Number(backendProfile?.id_empleado);
+      if (!ids.idEmpleado && Number.isFinite(idE) && idE > 0) ids.idEmpleado = idE;
+      const idC = Number(backendProfile?.id_cliente);
+      if (!ids.idCliente && Number.isFinite(idC) && idC > 0) ids.idCliente = idC;
+    }
+
+    // 3) Look up by email (requires permissions, but is the most reliable when /auth/profile doesn't exist)
+    if (email && !ids.idUsuarios) {
+      try {
+        const allUsers = await usersAPI.getAll();
+        const found = allUsers.find((u: any) => String(u?.correo || u?.email || '').trim().toLowerCase() === email);
+        const idU = Number(found?.id_usuarios ?? found?.id_usuario ?? found?.id);
+        if (Number.isFinite(idU) && idU > 0) ids.idUsuarios = idU;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (email && !ids.idEmpleado) {
+      try {
+        const allEmpleados = await empleadosAPI.getAll();
+        const found = allEmpleados.find((e: any) => String(e?.correo || '').trim().toLowerCase() === email);
+        const idE = Number((found as any)?.id_empleado);
+        if (Number.isFinite(idE) && idE > 0) ids.idEmpleado = idE;
+      } catch {
+        // ignore
+      }
+    }
+
+    if (email && !ids.idCliente) {
+      try {
+        const allClientes = await clientesAPI.getAll();
+        const found = allClientes.find((c: any) => String(c?.correo || '').trim().toLowerCase() === email);
+        const idC = Number((found as any)?.id_cliente);
+        if (Number.isFinite(idC) && idC > 0) ids.idCliente = idC;
+      } catch {
+        // ignore
+      }
+    }
+
+    // 4) Last-resort: current user.id (unknown table)
+    const idFallback = Number(user?.id);
+    if (Number.isFinite(idFallback) && idFallback > 0) {
+      if (!ids.idUsuarios) ids.idUsuarios = idFallback;
+      if (!ids.idEmpleado && (user?.role === 'advisor' || user?.role === 'guide' || user?.role === 'admin')) ids.idEmpleado = idFallback;
+      if (!ids.idCliente && user?.role === 'client') ids.idCliente = idFallback;
+    }
+
+    return ids;
   };
 
   const loadBackendProfile = async () => {
@@ -194,10 +265,15 @@ export function UserProfile({ onClose }: UserProfileProps) {
       // 1) Intento principal: endpoint dedicado del auth
       await authAPI.updateProfile({
         nombre,
-        apellido: apellido || null,
+        apellido: apellido || undefined,
         correo: profileData.email,
         telefono: profileData.phone,
         preferencias: profileData.preferences
+      });
+
+      updateCurrentUser({
+        name: profileData.name,
+        phone: profileData.phone,
       });
 
       await refreshProfile();
@@ -206,26 +282,53 @@ export function UserProfile({ onClose }: UserProfileProps) {
       return;
     } catch (error: any) {
       const message = String(error?.message || '');
-      const looksLikeMissingEndpoint = /404|not found|cannot put/i.test(message);
+      const looksLikeMissingEndpoint = /\b404\b|not found|cannot put|no existe|ruta\s+put/i.test(message.toLowerCase());
 
       // 2) Fallback: actualizar según tipo de usuario
       try {
-        if (looksLikeMissingEndpoint && backendProfile?.tipo_usuario === 'cliente' && backendProfile?.id_cliente) {
-          await clientesAPI.update(Number(backendProfile.id_cliente), {
-            nombre,
-            apellido: apellido || null,
-            correo: profileData.email,
-            telefono: profileData.phone
-          });
-        } else if (looksLikeMissingEndpoint && backendProfile?.tipo_usuario === 'empleado' && backendProfile?.id_empleado) {
-          await empleadosAPI.update(Number(backendProfile.id_empleado), {
-            nombre,
-            apellido: apellido || null,
-            telefono: profileData.phone
-          });
-        } else {
+        if (!looksLikeMissingEndpoint) {
           throw error;
         }
+
+        const updatePayloadCommon = {
+          nombre,
+          apellido: apellido || undefined,
+          correo: profileData.email,
+          telefono: profileData.phone
+        };
+
+        const ids = await resolveSelfBackendIds();
+        let updatedAtLeastOne = false;
+
+        // IMPORTANT: 'Usuarios' table reads telefono from /api/usuarios, so update that first if possible.
+        if (ids.idUsuarios) {
+          await usersAPI.update(ids.idUsuarios, updatePayloadCommon);
+          updatedAtLeastOne = true;
+        }
+
+        // Optionally update role-specific tables when IDs are known
+        if (user?.role === 'client' && ids.idCliente) {
+          await clientesAPI.update(ids.idCliente, updatePayloadCommon);
+          updatedAtLeastOne = true;
+        }
+
+        if ((user?.role === 'advisor' || user?.role === 'guide' || user?.role === 'admin') && ids.idEmpleado) {
+          await empleadosAPI.update(ids.idEmpleado, {
+            nombre,
+            apellido: apellido || undefined,
+            telefono: profileData.phone
+          });
+          updatedAtLeastOne = true;
+        }
+
+        if (!updatedAtLeastOne) {
+          throw error;
+        }
+
+        updateCurrentUser({
+          name: profileData.name,
+          phone: profileData.phone,
+        });
 
         await refreshProfile();
         await loadBackendProfile();
@@ -648,7 +751,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                         </div>
                         <Switch
                           checked={privacySettings.shareBookingHistory}
-                          onCheckedChange={(checked) => setPrivacySettings(prev => ({ ...prev, shareBookingHistory: checked }))}
+                          onCheckedChange={(checked: boolean) => setPrivacySettings(prev => ({ ...prev, shareBookingHistory: checked }))}
                         />
                       </div>
                       
@@ -659,7 +762,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                         </div>
                         <Switch
                           checked={privacySettings.allowDataCollection}
-                          onCheckedChange={(checked) => setPrivacySettings(prev => ({ ...prev, allowDataCollection: checked }))}
+                          onCheckedChange={(checked: boolean) => setPrivacySettings(prev => ({ ...prev, allowDataCollection: checked }))}
                         />
                       </div>
                       
@@ -697,7 +800,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.emailNotifications}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, emailNotifications: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, emailNotifications: checked }))}
                       />
                     </div>
                     
@@ -711,7 +814,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.pushNotifications}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, pushNotifications: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, pushNotifications: checked }))}
                       />
                     </div>
                     
@@ -725,7 +828,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.smsNotifications}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, smsNotifications: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, smsNotifications: checked }))}
                       />
                     </div>
                   </div>
@@ -753,7 +856,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.bookingUpdates}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, bookingUpdates: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, bookingUpdates: checked }))}
                       />
                     </div>
                     
@@ -764,7 +867,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.promotionsOffers}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, promotionsOffers: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, promotionsOffers: checked }))}
                       />
                     </div>
                     
@@ -775,7 +878,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       </div>
                       <Switch
                         checked={notificationSettings.marketingEmails}
-                        onCheckedChange={(checked) => setNotificationSettings(prev => ({ ...prev, marketingEmails: checked }))}
+                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, marketingEmails: checked }))}
                       />
                     </div>
                   </div>

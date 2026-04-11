@@ -41,7 +41,10 @@ routes/authRoutes.js          # Rutas de autenticación
 ### 1. Login
 ```typescript
 // Lo que envías:
-{ correo: "admin@occitours.com", contrasena: "password123" }
+{ correo: "admin@occitours.com", contrasena: "<tu_contraseña>" }
+
+// Si no conoces la contraseña, usa el flujo de recuperación:
+// POST /api/auth/solicitar-recuperacion → POST /api/auth/resetear-contrasena
 
 // Lo que recibes:
 {

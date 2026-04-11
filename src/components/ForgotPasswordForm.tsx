@@ -6,12 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { motion } from 'motion/react';
+import { useAuth } from '../App';
 
 interface ForgotPasswordFormProps {
   onBackToLogin: () => void;
 }
 
 export function ForgotPasswordForm({ onBackToLogin }: ForgotPasswordFormProps) {
+  const { requestPasswordRecovery } = useAuth();
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
@@ -22,27 +24,14 @@ export function ForgotPasswordForm({ onBackToLogin }: ForgotPasswordFormProps) {
     setIsLoading(true);
     setError('');
 
-    // Simular envío de correo de recuperación
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    const trimmedEmail = email.trim().toLowerCase();
 
-    // Verificar si el email existe en el sistema
-    const savedUsers = localStorage.getItem('occitours_users_auth');
-    let userExists = false;
-
-    if (savedUsers) {
-      try {
-        const parsedUsers = JSON.parse(savedUsers);
-        userExists = !!parsedUsers[email];
-      } catch (error) {
-        console.error('Error al verificar usuarios:', error);
-      }
-    }
-
-    if (userExists || email === 'admin@occitours.com' || email === 'asesor@occitours.com' || 
-        email === 'guia@occitours.com' || email === 'cliente@occitours.com') {
+    // Lógica segura: el backend responde success aunque el correo no exista.
+    const result = await requestPasswordRecovery(trimmedEmail);
+    if (result.success) {
       setIsSuccess(true);
     } else {
-      setError('El correo electrónico no está registrado en el sistema.');
+      setError(result.error || 'No se pudo enviar el correo de recuperación. Intenta nuevamente.');
     }
 
     setIsLoading(false);

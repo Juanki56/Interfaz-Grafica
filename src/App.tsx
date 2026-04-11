@@ -1,8 +1,10 @@
-import React, { useState, createContext, useContext, useEffect } from 'react';
-import { Mountain, Users, Package, MapPin, CreditCard, User } from 'lucide-react';
+import { useState, createContext, useContext, useEffect } from 'react';
+import { Mountain } from 'lucide-react';
 import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
 import { ForgotPasswordForm } from './components/ForgotPasswordForm';
+import { VerifyEmailForm } from './components/VerifyEmailForm';
+import { ResetPasswordForm } from './components/ResetPasswordForm';
 import { AdminDashboardWithDropdown as AdminDashboard } from './components/AdminDashboardWithDropdown';
 import { AdvisorDashboardImproved as AdvisorDashboard } from './components/AdvisorDashboardImproved';
 import { GuideDashboardImproved as GuideDashboard } from './components/GuideDashboardImproved';
@@ -15,8 +17,6 @@ import { RoutesPage } from './components/RoutesPage';
 import { RouteDetailPage } from './components/RouteDetailPage';
 import { FarmsPage } from './components/FarmsPage';
 import { FarmDetailPage } from './components/FarmDetailPage';
-import { PackagesPage } from './components/PackagesPage';
-import { PackageDetailPage } from './components/PackageDetailPage';
 import { UserProfile } from './components/UserProfile';
 import { ProgrammingManagement } from './components/ProgrammingManagement';
 import { WhatsAppButton } from './components/WhatsAppButton';
@@ -41,7 +41,9 @@ const ROLE_MAPPING: Record<string, 'admin' | 'advisor' | 'guide' | 'client'> = {
   client: 'client'
 };
 
-const FORCED_ADMIN_EMAIL = 'admin@occitours.com';
+const FORCED_ADMIN_EMAIL = String(import.meta.env.VITE_FORCED_ADMIN_EMAIL || 'admin@occitours.com')
+  .toLowerCase()
+  .trim();
 
 // Duración de sesión en minutos (extensible para mantener sesión activa más tiempo)
 const SESSION_TIMEOUT_MINUTES = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || 120);
@@ -72,7 +74,16 @@ const enforceForcedAdminRole = (
 
 const normalizeRole = (roleValue?: unknown): 'admin' | 'advisor' | 'guide' | 'client' => {
   const normalized = String(roleValue || '').toLowerCase().trim();
-  return ROLE_MAPPING[normalized] || 'client';
+  const mapped = ROLE_MAPPING[normalized];
+  if (mapped) return mapped;
+
+  // Fallback tolerante: el backend a veces retorna nombres extendidos.
+  if (normalized.includes('admin') || normalized.includes('administrador')) return 'admin';
+  if (normalized.includes('asesor') || normalized.includes('advisor')) return 'advisor';
+  if (normalized.includes('guia') || normalized.includes('guía') || normalized.includes('guide')) return 'guide';
+  if (normalized.includes('cliente') || normalized.includes('client')) return 'client';
+
+  return 'client';
 };
 
 const resolveRoleFromSources = (...sources: unknown[]): 'admin' | 'advisor' | 'guide' | 'client' => {
@@ -133,13 +144,23 @@ const resolveRoleFromBackend = async (
 };
 
 // Mock authentication system (deprecated - now using real backend)
+type MockUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  password: string;
+};
+
+const DEFAULT_MOCK_USERS: Record<string, MockUser> = {
+  'admin@occitours.com': { id: '1', name: 'Administrador Principal', email: 'admin@occitours.com', role: 'admin', password: 'password123' },
+  'asesor@occitours.com': { id: '2', name: 'Ana García Asesor', email: 'asesor@occitours.com', role: 'advisor', password: 'password123' },
+  'guia@occitours.com': { id: '3', name: 'Carlos Ruiz Guía', email: 'guia@occitours.com', role: 'guide', password: 'password123' },
+  'cliente@occitours.com': { id: '4', name: 'María López Cliente', email: 'cliente@occitours.com', role: 'client', password: 'password123' }
+};
+
 const mockAuth = {
-  users: {
-    'admin@occitours.com': { id: '1', name: 'Administrador Principal', email: 'admin@occitours.com', role: 'admin', password: 'password123' },
-    'asesor@occitours.com': { id: '2', name: 'Ana García Asesor', email: 'asesor@occitours.com', role: 'advisor', password: 'password123' },
-    'guia@occitours.com': { id: '3', name: 'Carlos Ruiz Guía', email: 'guia@occitours.com', role: 'guide', password: 'password123' },
-    'cliente@occitours.com': { id: '4', name: 'María López Cliente', email: 'cliente@occitours.com', role: 'client', password: 'password123' }
-  },
+  users: { ...DEFAULT_MOCK_USERS } as Record<string, MockUser>,
 
   // Load users from localStorage on init
   init() {
@@ -183,12 +204,7 @@ const mockAuth = {
   // Clean corrupted data and reset
   resetAuth() {
     localStorage.removeItem('occitours_users_auth');
-    this.users = {
-      'admin@occitours.com': { id: '1', name: 'Administrador Principal', email: 'admin@occitours.com', role: 'admin', password: 'password123' },
-      'asesor@occitours.com': { id: '2', name: 'Ana García Asesor', email: 'asesor@occitours.com', role: 'advisor', password: 'password123' },
-      'guia@occitours.com': { id: '3', name: 'Carlos Ruiz Guía', email: 'guia@occitours.com', role: 'guide', password: 'password123' },
-      'cliente@occitours.com': { id: '4', name: 'María López Cliente', email: 'cliente@occitours.com', role: 'client', password: 'password123' }
-    };
+    this.users = { ...DEFAULT_MOCK_USERS };
     this.saveUsers();
     console.log('Auth system reset successfully');
   },
@@ -275,6 +291,14 @@ mockAuth.init();
 import { Toaster } from './components/ui/sonner';
 
 // Context for authentication and user management
+type LoginResult =
+  | { success: true }
+  | {
+      success: false;
+      code?: 'INVALID_CREDENTIALS' | 'EMAIL_NOT_VERIFIED' | 'SERVER_ERROR';
+      message?: string;
+    };
+
 interface AuthContextType {
   user: {
     id: string;
@@ -284,10 +308,19 @@ interface AuthContextType {
     phone?: string;
     status?: string;
   } | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   register: (name: string, email: string, password: string, role: string) => Promise<{ success: boolean; error?: string }>;
+  registerPending: (payload: { nombre: string; apellido: string; email: string; password: string }) => Promise<{ success: boolean; error?: string }>;
+  verifyEmail: (payload: { email: string; code: string }) => Promise<{ success: boolean; error?: string }>;
+  resendVerification: (email: string) => Promise<{ success: boolean; error?: string }>;
+  requestPasswordRecovery: (email: string) => Promise<{ success: boolean; error?: string }>;
+  resetPassword: (payload: { email: string; token: string; newPassword: string }) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   refreshProfile: () => Promise<void>;
+  updateCurrentUser: (updates: Partial<NonNullable<AuthContextType['user']>>) => void;
+  authFlags: {
+    useEmailVerificationFlow: boolean;
+  };
   currentView: string;
   setCurrentView: (view: string) => void;
   loading: boolean;
@@ -315,11 +348,41 @@ export default function App() {
   const [showRegister, setShowRegister] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [showVerifyEmail, setShowVerifyEmail] = useState(false);
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [authEmailDraft, setAuthEmailDraft] = useState('');
+  const [resetTokenDraft, setResetTokenDraft] = useState('');
   const [adminActiveTab, setAdminActiveTab] = useState('dashboard');
+
+  const useEmailVerificationFlow = String(import.meta.env.VITE_AUTH_USE_EMAIL_VERIFICATION || '').toLowerCase() === 'true';
 
   // Check for existing session on app load
   useEffect(() => {
     checkSession();
+  }, []);
+
+  // Si llega un link de recuperación con token+email, mostrar reset password sin romper el resto del flujo.
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      const token = url.searchParams.get('token');
+      const email = url.searchParams.get('email');
+
+      const pathWantsReset = url.pathname.toLowerCase().includes('reset-password');
+      const hasResetParams = Boolean(token && email);
+
+      if (pathWantsReset || hasResetParams) {
+        setAuthEmailDraft(email || '');
+        setResetTokenDraft(token || '');
+        setShowResetPassword(true);
+        setShowLogin(false);
+        setShowRegister(false);
+        setShowForgotPassword(false);
+        setShowVerifyEmail(false);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
@@ -358,6 +421,13 @@ export default function App() {
               ? `${data.perfil.nombre} ${data.perfil.apellido}`
               : data.perfil.nombre || '';
 
+            const resolvedEmail =
+              data.perfil.correo ||
+              data.perfil.email ||
+              tokenPayload?.correo ||
+              tokenPayload?.email ||
+              '';
+
             const backendRoleSource =
               data.perfil.rol_nombre ||
               data.perfil.rol ||
@@ -377,12 +447,12 @@ export default function App() {
             ];
 
             const frontendRoleResolved = await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources);
-            const frontendRole = enforceForcedAdminRole(data.perfil.correo || tokenPayload?.correo || tokenPayload?.email, frontendRoleResolved);
+            const frontendRole = enforceForcedAdminRole(resolvedEmail, frontendRoleResolved);
 
             const mappedUser = {
               id: data.perfil.id_cliente?.toString() || data.perfil.id_empleado?.toString() || data.perfil.id_usuarios?.toString() || '',
               name: nombreCompleto,
-              email: data.perfil.correo || '',
+              email: resolvedEmail,
               role: frontendRole, // Rol mapeado a inglés para el frontend
               phone: data.perfil.telefono || '',
               status: data.perfil.estado ? 'Activo' : 'Inactivo'
@@ -408,7 +478,7 @@ export default function App() {
   };
 
   // Backend authentication function
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     try {
       console.log('🔐 Intentando login con:', { correo: email });
       
@@ -436,7 +506,28 @@ export default function App() {
         localStorage.removeItem('token');
         localStorage.removeItem('session_expiry');
         setUser(null);
-        return false;
+
+        if (response.status === 403 && String(data?.error || '').toLowerCase().includes('no verificado')) {
+          return {
+            success: false,
+            code: 'EMAIL_NOT_VERIFIED',
+            message: data?.message || 'Debes verificar tu correo electrónico para iniciar sesión'
+          };
+        }
+
+        if (response.status === 401) {
+          return {
+            success: false,
+            code: 'INVALID_CREDENTIALS',
+            message: data?.message || 'Correo o contraseña incorrectos'
+          };
+        }
+
+        return {
+          success: false,
+          code: 'SERVER_ERROR',
+          message: data?.message || data?.error || 'Error al iniciar sesión'
+        };
       }
 
       // Guardar token
@@ -559,13 +650,17 @@ export default function App() {
         setCurrentView('profile');
       }
 
-      return true;
+      return { success: true };
 
     } catch (error) {
       console.error('Error login:', error);
       localStorage.removeItem('token');
       setUser(null);
-      return false;
+      return {
+        success: false,
+        code: 'SERVER_ERROR',
+        message: 'Error del servidor. Intenta nuevamente.'
+      };
     }
   };
 
@@ -594,6 +689,135 @@ export default function App() {
       return { success: true };
     } catch (error) {
       console.error('Registration error:', error);
+      return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
+    }
+  };
+
+  const registerPending: AuthContextType['registerPending'] = async ({ nombre, apellido, email, password }) => {
+    try {
+      if (!String(nombre || '').trim() || !String(apellido || '').trim()) {
+        return { success: false, error: 'Ingresa tu nombre y apellido' };
+      }
+
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.REGISTER_PENDING), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          nombre,
+          apellido,
+          correo: email,
+          contrasena: password
+        })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data?.message || data?.error || 'No se pudo enviar el código de verificación'
+        };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('registerPending error:', error);
+      return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
+    }
+  };
+
+  const verifyEmail: AuthContextType['verifyEmail'] = async ({ email, code }) => {
+    try {
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.VERIFY_EMAIL), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ correo: email, codigo: code })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data?.message || data?.error || 'No se pudo verificar el correo'
+        };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('verifyEmail error:', error);
+      return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
+    }
+  };
+
+  const resendVerification: AuthContextType['resendVerification'] = async (email) => {
+    try {
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.RESEND_VERIFICATION), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ correo: email })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return {
+          success: false,
+          error: data?.message || data?.error || 'No se pudo reenviar el código'
+        };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('resendVerification error:', error);
+      return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
+    }
+  };
+
+  const requestPasswordRecovery: AuthContextType['requestPasswordRecovery'] = async (email) => {
+    try {
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.REQUEST_PASSWORD_RECOVERY), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ correo: email })
+      });
+
+      // El backend responde success incluso si no existe el correo.
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        return { success: false, error: data?.message || data?.error || 'No se pudo solicitar recuperación' };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('requestPasswordRecovery error:', error);
+      return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
+    }
+  };
+
+  const resetPassword: AuthContextType['resetPassword'] = async ({ email, token, newPassword }) => {
+    try {
+      const response = await fetch(buildApiUrl(API_CONFIG.AUTH.RESET_PASSWORD), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ correo: email, token, nuevaContrasena: newPassword })
+      });
+
+      const data = await response.json().catch(() => null);
+      if (!response.ok) {
+        return { success: false, error: data?.message || data?.error || 'No se pudo restablecer la contraseña' };
+      }
+
+      return { success: true };
+    } catch (error) {
+      console.error('resetPassword error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
     }
   };
@@ -680,6 +904,16 @@ export default function App() {
     }
   };
 
+  const updateCurrentUser = (updates: Partial<NonNullable<AuthContextType['user']>>) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const merged = { ...prev, ...updates };
+      // Mantener enforcement admin por email
+      const roleEnforced = enforceForcedAdminRole(merged.email, merged.role);
+      return roleEnforced !== merged.role ? { ...merged, role: roleEnforced } : merged;
+    });
+  };
+
   // Auto logout si expira sesión local
   useEffect(() => {
     if (!user) return;
@@ -742,8 +976,17 @@ export default function App() {
     user,
     login,
     register,
+    registerPending,
+    verifyEmail,
+    resendVerification,
+    requestPasswordRecovery,
+    resetPassword,
     logout,
     refreshProfile,
+    updateCurrentUser,
+    authFlags: {
+      useEmailVerificationFlow
+    },
     currentView,
     setCurrentView: handleViewChange,
     loading,
@@ -766,33 +1009,80 @@ export default function App() {
     );
   }
 
-  // Show login/register forms when requested
-  if (showLogin || showRegister || showForgotPassword) {
+  // Show auth forms when requested
+  if (showLogin || showRegister || showForgotPassword || showVerifyEmail || showResetPassword) {
     return (
       <AuthContext.Provider value={authValue}>
         <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50">
-          {showRegister ? (
-            <RegisterForm onBackToLogin={() => {
-              setShowRegister(false);
-              setShowLogin(true);
-            }} />
+          {showResetPassword ? (
+            <ResetPasswordForm
+              initialEmail={authEmailDraft}
+              initialToken={resetTokenDraft}
+              onBackToLogin={() => {
+                setShowResetPassword(false);
+                setShowLogin(true);
+                // Limpieza suave de token en la URL si venía por query
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('token');
+                  url.searchParams.delete('email');
+                  window.history.replaceState({}, '', url.toString());
+                } catch {
+                  // ignore
+                }
+              }}
+            />
+          ) : showVerifyEmail ? (
+            <VerifyEmailForm
+              initialEmail={authEmailDraft}
+              onBackToLogin={() => {
+                setShowVerifyEmail(false);
+                setShowLogin(true);
+              }}
+            />
+          ) : showRegister ? (
+            <RegisterForm
+              onBackToLogin={() => {
+                setShowRegister(false);
+                setShowLogin(true);
+              }}
+              onShowVerifyEmail={(email) => {
+                setAuthEmailDraft(email);
+                setShowRegister(false);
+                setShowVerifyEmail(true);
+              }}
+            />
           ) : showForgotPassword ? (
-            <ForgotPasswordForm onBackToLogin={() => {
-              setShowForgotPassword(false);
-              setShowLogin(true);
-            }} />
+            <ForgotPasswordForm
+              onBackToLogin={() => {
+                setShowForgotPassword(false);
+                setShowLogin(true);
+              }}
+            />
           ) : (
-            <LoginForm onShowRegister={() => {
-              setShowLogin(false);
-              setShowRegister(true);
-            }} onShowForgotPassword={() => {
-              setShowLogin(false);
-              setShowForgotPassword(true);
-            }} onBackToHome={() => {
-              setShowLogin(false);
-              setShowRegister(false);
-              setCurrentView('home');
-            }} />
+            <LoginForm
+              onShowRegister={() => {
+                setShowLogin(false);
+                setShowRegister(true);
+              }}
+              onShowForgotPassword={() => {
+                setShowLogin(false);
+                setShowForgotPassword(true);
+              }}
+              onShowVerifyEmail={(email) => {
+                setAuthEmailDraft(email);
+                setShowLogin(false);
+                setShowVerifyEmail(true);
+              }}
+              onBackToHome={() => {
+                setShowLogin(false);
+                setShowRegister(false);
+                setShowForgotPassword(false);
+                setShowVerifyEmail(false);
+                setShowResetPassword(false);
+                setCurrentView('home');
+              }}
+            />
           )}
           <WhatsAppButton />
         </div>

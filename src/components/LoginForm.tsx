@@ -10,14 +10,16 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 interface LoginFormProps {
   onShowRegister: () => void;
   onShowForgotPassword: () => void;
+  onShowVerifyEmail: (emailDraft: string) => void;
   onBackToHome?: () => void;
 }
 
-export function LoginForm({ onShowRegister, onShowForgotPassword, onBackToHome }: LoginFormProps) {
+export function LoginForm({ onShowRegister, onShowForgotPassword, onShowVerifyEmail, onBackToHome }: LoginFormProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
+  const [loginCode, setLoginCode] = useState<'INVALID_CREDENTIALS' | 'EMAIL_NOT_VERIFIED' | 'SERVER_ERROR' | ''>('');
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
 
@@ -25,10 +27,12 @@ export function LoginForm({ onShowRegister, onShowForgotPassword, onBackToHome }
     e.preventDefault();
     setIsLoading(true);
     setError('');
+    setLoginCode('');
 
-    const success = await login(email, password);
-    if (!success) {
-      setError('Credenciales inválidas. Intenta nuevamente.');
+    const result = await login(email, password);
+    if (!result.success) {
+      setLoginCode(result.code || 'SERVER_ERROR');
+      setError(result.message || 'No se pudo iniciar sesión. Intenta nuevamente.');
     }
     setIsLoading(false);
   };
@@ -148,6 +152,16 @@ export function LoginForm({ onShowRegister, onShowForgotPassword, onBackToHome }
                 </Alert>
               )}
 
+              {loginCode === 'EMAIL_NOT_VERIFIED' && (
+                <button
+                  type="button"
+                  onClick={() => onShowVerifyEmail(email)}
+                  className="text-xs text-center text-green-700 hover:text-green-800 hover:underline transition-all w-full"
+                >
+                  Verificar mi correo
+                </button>
+              )}
+
               <Button 
                 type="submit" 
                 className="w-full bg-green-600 hover:bg-green-700 text-white"
@@ -175,6 +189,14 @@ export function LoginForm({ onShowRegister, onShowForgotPassword, onBackToHome }
                 className="text-xs text-center text-green-600 hover:text-green-700 hover:underline transition-all w-full mb-3"
               >
                 ¿Olvidaste tu contraseña?
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onShowVerifyEmail(email)}
+                className="text-xs text-center text-green-600 hover:text-green-700 hover:underline transition-all w-full mb-3"
+              >
+                ¿Ya tienes código? Verificar correo
               </button>
               
               <div className="pt-2">

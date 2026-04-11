@@ -4,18 +4,28 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { useAuth } from '../App';
 
 interface RegisterFormProps {
   onBackToLogin: () => void;
+  onShowVerifyEmail?: (emailDraft: string) => void;
 }
 
-export function RegisterForm({ onBackToLogin }: RegisterFormProps) {
-  const { register } = useAuth();
+const isStrongPassword = (password: string) => {
+  if (!password || password.length < 8) return false;
+  if (!/[A-Z]/.test(password)) return false;
+  if (!/[a-z]/.test(password)) return false;
+  if (!/[0-9]/.test(password)) return false;
+  if (!/[!@#$%^&*]/.test(password)) return false;
+  return true;
+};
+
+export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormProps) {
+  const { register, registerPending, authFlags } = useAuth();
   const [formData, setFormData] = useState({
-    name: '',
+    nombre: '',
+    apellido: '',
     email: '',
     password: '',
     confirmPassword: ''
@@ -34,8 +44,10 @@ export function RegisterForm({ onBackToLogin }: RegisterFormProps) {
     setError('');
     setSuccess('');
 
+    const requiresVerification = Boolean(authFlags?.useEmailVerificationFlow);
+
     // Validation
-    if (!formData.name || !formData.email || !formData.password) {
+    if (!formData.nombre || !formData.apellido || !formData.email || !formData.password) {
       setError('Todos los campos son obligatorios');
       setIsLoading(false);
       return;
@@ -47,23 +59,47 @@ export function RegisterForm({ onBackToLogin }: RegisterFormProps) {
       return;
     }
 
-    if (formData.password.length < 6) {
+    if (!requiresVerification && formData.password.length < 6) {
       setError('La contraseña debe tener al menos 6 caracteres');
       setIsLoading(false);
       return;
     }
 
+    if (requiresVerification && !isStrongPassword(formData.password)) {
+      setError('Contraseña débil: mínimo 8 caracteres, mayúscula, minúscula, número y carácter especial (!@#$%^&*)');
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      // Siempre crear usuarios con rol 'client'
-      const response = await register(formData.name, formData.email, formData.password, 'client');
-      
-      if (response.success) {
-        setSuccess('¡Cuenta de cliente creada exitosamente! Ya puedes iniciar sesión.');
-        setTimeout(() => {
-          onBackToLogin();
-        }, 2000);
+      if (requiresVerification) {
+        const response = await registerPending({
+          nombre: formData.nombre,
+          apellido: formData.apellido,
+          email: formData.email,
+          password: formData.password
+        });
+
+        if (response.success) {
+          setSuccess('Te enviamos un código de verificación. Revisa tu correo.');
+          if (onShowVerifyEmail) {
+            setTimeout(() => onShowVerifyEmail(formData.email), 700);
+          }
+        } else {
+          setError(response.error || 'Error al enviar código de verificación');
+        }
       } else {
-        setError(response.error || 'Error al crear la cuenta');
+        // Siempre crear usuarios con rol 'client'
+        const response = await register(`${formData.nombre} ${formData.apellido}`.trim(), formData.email, formData.password, 'client');
+
+        if (response.success) {
+          setSuccess('¡Cuenta de cliente creada exitosamente! Ya puedes iniciar sesión.');
+          setTimeout(() => {
+            onBackToLogin();
+          }, 2000);
+        } else {
+          setError(response.error || 'Error al crear la cuenta');
+        }
       }
 
     } catch (error) {
@@ -135,18 +171,37 @@ export function RegisterForm({ onBackToLogin }: RegisterFormProps) {
           
           <CardContent className="space-y-4">
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm text-green-800">Nombre Completo</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <Input
-                    type="text"
-                    placeholder="Tu nombre completo"
-                    value={formData.name}
-                    onChange={(e) => handleInputChange('name', e.target.value)}
-                    className="pl-10 bg-white border-green-200 focus:border-green-500"
-                    required
-                  />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-sm text-green-800">Nombre</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <Input
+                      type="text"
+                      placeholder="Tu nombre"
+                      autoComplete="given-name"
+                      value={formData.nombre}
+                      onChange={(e) => handleInputChange('nombre', e.target.value)}
+                      className="pl-10 bg-white border-green-200 focus:border-green-500"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm text-green-800">Apellido</label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <Input
+                      type="text"
+                      placeholder="Tu apellido"
+                      autoComplete="family-name"
+                      value={formData.apellido}
+                      onChange={(e) => handleInputChange('apellido', e.target.value)}
+                      className="pl-10 bg-white border-green-200 focus:border-green-500"
+                      required
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -157,6 +212,7 @@ export function RegisterForm({ onBackToLogin }: RegisterFormProps) {
                   <Input
                     type="email"
                     placeholder="tu@email.com"
+                    autoComplete="email"
                     value={formData.email}
                     onChange={(e) => handleInputChange('email', e.target.value)}
                     className="pl-10 bg-white border-green-200 focus:border-green-500"

@@ -168,7 +168,8 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
     const data = await response.json();
 
     // Si el token expiró, limpiar sesión
-    if (response.status === 401) {
+    const isAuthEndpoint = endpoint.startsWith('/api/auth/');
+    if (response.status === 401 && !isAuthEndpoint) {
       localStorage.removeItem('token');
       window.location.href = '/';
       throw new Error('Sesión expirada');
@@ -228,6 +229,51 @@ export const authAPI = {
     return fetchAPI('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ correo, contrasena }),
+    });
+  },
+
+  registerPending: async (userData: {
+    correo: string;
+    contrasena: string;
+    nombre: string;
+    apellido: string;
+    tipo_documento?: string;
+    numero_documento?: string;
+    telefono?: string;
+    direccion?: string;
+    fecha_nacimiento?: string;
+  }) => {
+    return fetchAPI('/api/auth/register-pending', {
+      method: 'POST',
+      body: JSON.stringify(userData),
+    });
+  },
+
+  verificarEmail: async (correo: string, codigo: string) => {
+    return fetchAPI('/api/auth/verificar-email', {
+      method: 'POST',
+      body: JSON.stringify({ correo, codigo }),
+    });
+  },
+
+  reenviarVerificacion: async (correo: string) => {
+    return fetchAPI('/api/auth/reenviar-verificacion', {
+      method: 'POST',
+      body: JSON.stringify({ correo }),
+    });
+  },
+
+  solicitarRecuperacion: async (correo: string) => {
+    return fetchAPI('/api/auth/solicitar-recuperacion', {
+      method: 'POST',
+      body: JSON.stringify({ correo }),
+    });
+  },
+
+  resetearContrasena: async (payload: { correo: string; token: string; nuevaContrasena: string }) => {
+    return fetchAPI('/api/auth/resetear-contrasena', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 
