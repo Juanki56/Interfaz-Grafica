@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Mountain, Mail, KeyRound, Lock, Eye, EyeOff, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { Mountain, Mail, Lock, Eye, EyeOff, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -26,7 +26,7 @@ export function ResetPasswordForm({ initialEmail = '', initialToken = '', onBack
   const { resetPassword } = useAuth();
 
   const [email, setEmail] = useState(initialEmail);
-  const [token, setToken] = useState(initialToken);
+  const token = initialToken;
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -35,8 +35,12 @@ export function ResetPasswordForm({ initialEmail = '', initialToken = '', onBack
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState('');
 
+  const missingLinkParams = useMemo(() => {
+    return !String(email || '').trim() || !String(token || '').trim();
+  }, [email, token]);
+
   const canSubmit = useMemo(() => {
-    return Boolean(email.trim() && token.trim() && newPassword && confirmPassword);
+    return Boolean(!missingLinkParams && email.trim() && token.trim() && newPassword && confirmPassword);
   }, [email, token, newPassword, confirmPassword]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -46,6 +50,12 @@ export function ResetPasswordForm({ initialEmail = '', initialToken = '', onBack
 
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedToken = token.trim();
+
+    if (!trimmedEmail || !trimmedToken) {
+      setError('El enlace de recuperación no es válido. Solicita uno nuevo.');
+      setIsLoading(false);
+      return;
+    }
 
     if (newPassword !== confirmPassword) {
       setError('Las contraseñas no coinciden');
@@ -132,7 +142,7 @@ export function ResetPasswordForm({ initialEmail = '', initialToken = '', onBack
           <div className="space-y-4">
             <h2 className="text-2xl">Crea una nueva contraseña</h2>
             <p className="text-green-100 text-lg leading-relaxed">
-              Ingresa el token que recibiste en el correo y define una nueva contraseña para tu cuenta.
+              Define una nueva contraseña para tu cuenta.
             </p>
 
             <div className="bg-white/10 backdrop-blur-sm rounded-lg p-4 mt-6">
@@ -164,24 +174,18 @@ export function ResetPasswordForm({ initialEmail = '', initialToken = '', onBack
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10 bg-white border-green-200 focus:border-green-500"
                     required
+                    readOnly={Boolean(initialEmail)}
                   />
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-sm text-green-800">Token</label>
-                <div className="relative">
-                  <KeyRound className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <Input
-                    type="text"
-                    placeholder="Pega aquí el token"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    className="pl-10 bg-white border-green-200 focus:border-green-500"
-                    required
-                  />
-                </div>
-              </div>
+              {missingLinkParams && (
+                <Alert className="border-red-200 bg-red-50">
+                  <AlertDescription className="text-red-600">
+                    Enlace inválido o incompleto. Vuelve a solicitar la recuperación desde “¿Olvidaste tu contraseña?”.
+                  </AlertDescription>
+                </Alert>
+              )}
 
               <div className="space-y-2">
                 <label className="text-sm text-green-800">Nueva contraseña</label>
