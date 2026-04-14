@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  Calendar,
   Filter,
   Search,
   Eye,
@@ -9,14 +8,8 @@ import {
   Trash2,
   Plus,
   FileText,
-  Users,
-  MapPin,
-  Home,
-  Briefcase,
   UserPlus,
   CheckCircle,
-  Clock,
-  XCircle,
   Download,
   AlertCircle,
   Upload,
@@ -41,7 +34,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from './ui/dialog';
 import {
   AlertDialog,
@@ -63,8 +55,7 @@ import {
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
-import { mockBookings } from '../utils/adminMockData';
-import { reservasAPI, clientesAPI } from '../services/api';
+import { reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 
@@ -78,7 +69,7 @@ export function BookingsManagement() {
   const canDeleteReservas = reservasPerms.canDelete();
   const canViewClientes = clientesPerms.canView();
 
-  const [bookings, setBookings] = useState(mockBookings);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -91,12 +82,11 @@ export function BookingsManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  // Mock data for dropdowns
-  const [mockClients, setMockClients] = useState<any[]>([
-    { id: '1', name: 'Juan Pérez', document: '1234567890' },
-    { id: '2', name: 'María García', document: '0987654321' },
-    { id: '3', name: 'Carlos López', document: '1122334455' },
-  ]);
+  const [clientes, setClientes] = useState<
+    Array<{ id: string; name: string; document: string; email?: string; phone?: string }>
+  >([]);
+  const [rutas, setRutas] = useState<Array<{ id: string; name: string }>>([]);
+  const [fincas, setFincas] = useState<Array<{ id: string; name: string }>>([]);
 
   // Cargar datos del backend al montar el componente
   useEffect(() => {
@@ -112,6 +102,12 @@ export function BookingsManagement() {
     if (canViewClientes) {
       cargarClientes();
     }
+
+    // Para el formulario de reservas (rutas/fincas)
+    if (canViewReservas) {
+      cargarRutas();
+      cargarFincas();
+    }
   }, [permisos.loadingRoles, canViewReservas, canViewClientes]);
 
   const cargarReservas = async () => {
@@ -123,35 +119,35 @@ export function BookingsManagement() {
       
       // Mapear datos del backend al formato del componente
       const reservasMapeadas = data.map((r: any) => ({
-        id: r.id_reserva?.toString() || `BK-${r.id_reserva}`,
+        id: (r.id_reserva ?? r.id)?.toString(),
         clientId: r.id_cliente?.toString(),
         clientName: `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim(),
-        clientEmail: r.cliente_email || '',
-        clientPhone: r.cliente_telefono || '',
-        packageName: 'Paquete Turístico',
+        clientEmail: r.cliente_email || r.correo || '',
+        clientPhone: r.cliente_telefono || r.telefono || '',
+        packageName: r.tipo_servicio || 'Reserva',
         date: r.fecha_reserva?.split('T')[0] || '',
-        participants: 1,
-        adults: 1,
+        participants: Number(r.numero_participantes ?? 1),
+        adults: Number(r.numero_participantes ?? 1),
         children: 0,
         status: r.estado || 'Pendiente',
         paymentStatus: 'Pendiente',
         paymentMethod: 'Por definir',
-        total: parseFloat(r.monto_total) || 0,
-        subtotal: parseFloat(r.monto_total) || 0,
+        total: Number(r.total ?? r.monto_total ?? 0),
+        subtotal: Number(r.total ?? r.monto_total ?? 0),
         discount: 0,
         checkIn: '08:00',
         checkOut: '17:00',
         guide: 'Por asignar',
         advisor: 'Administrador',
         emergency: 'Por definir',
-        specialRequests: r.notas || 'Ninguna'
+        specialRequests: r.notas || ''
       }));
       
       setBookings(reservasMapeadas);
     } catch (error) {
       console.error('❌ Error al cargar reservas:', error);
-      toast.error('Error al cargar reservas. Usando datos locales.');
-      setBookings(mockBookings);
+      toast.error('Error al cargar reservas. Verifica que el backend esté corriendo.');
+      setBookings([]);
     } finally {
       setIsLoading(false);
     }
@@ -163,32 +159,43 @@ export function BookingsManagement() {
       const clientesMapeados = data.map((c: any) => ({
         id: c.id_cliente?.toString(),
         name: `${c.nombre} ${c.apellido}`,
-        document: c.numero_documento || ''
+        document: c.numero_documento || '',
+        email: c.correo || '',
+        phone: c.telefono || ''
       }));
-      setMockClients(clientesMapeados.length > 0 ? clientesMapeados : mockClients);
+      setClientes(clientesMapeados);
     } catch (error) {
       console.error('Error al cargar clientes:', error);
     }
   };
 
-  const mockRoutes = [
-    { id: 'R1', name: 'Valle del Cocora', code: 'RT-001' },
-    { id: 'R2', name: 'Salento Mágico', code: 'RT-002' },
-    { id: 'R3', name: 'Filandia Colonial', code: 'RT-003' },
-  ];
+  const cargarRutas = async () => {
+    try {
+      const data = await rutasAPI.getAll();
+      setRutas(
+        (data || []).map((r: any) => ({
+          id: String(r.id_ruta),
+          name: r.nombre,
+        }))
+      );
+    } catch (error) {
+      console.error('Error al cargar rutas:', error);
+    }
+  };
 
-  const mockFarms = [
-    { id: 'F1', name: 'Finca El Ocaso', code: 'FN-001' },
-    { id: 'F2', name: 'Hacienda Bambusa', code: 'FN-002' },
-    { id: 'F3', name: 'Finca La Montaña', code: 'FN-003' },
-  ];
-
-  const mockServices = [
-    { id: 'S1', name: 'Transporte', code: 'SV-001' },
-    { id: 'S2', name: 'Alimentación', code: 'SV-002' },
-    { id: 'S3', name: 'Guía especializado', code: 'SV-003' },
-    { id: 'S4', name: 'Fotografía profesional', code: 'SV-004' },
-  ];
+  const cargarFincas = async () => {
+    try {
+      const data = await fincasAPI.getAll();
+      setFincas(
+        (data || []).map((f: any) => ({
+          id: String(f.id_finca),
+          name: f.nombre,
+        }))
+      );
+    } catch (error) {
+      console.error('Error al cargar fincas:', error);
+    }
+  };
 
   // Form state para crear/editar reserva
   const [formData, setFormData] = useState({
@@ -197,14 +204,17 @@ export function BookingsManagement() {
     bookingDate: '',
     routeId: '',
     farmId: '',
+    serviceType: 'ruta' as 'ruta' | 'finca',
     services: [] as string[],
     participants: 1,
     adults: 1,
     children: 0,
+    total: 0,
+    status: 'Pendiente',
     specialRequests: ''
   });
 
-  const [proofFile, setProofFile] = useState<File | null>(null);
+  const [, setProofFile] = useState<File | null>(null);
   const [proofFileName, setProofFileName] = useState('');
 
   // Filtrar reservas
@@ -242,22 +252,6 @@ export function BookingsManagement() {
         {status}
       </Badge>
     );
-  };
-
-  // Agregar item asociado
-  const handleAddAssociatedItem = (type: 'route' | 'farm' | 'service' | 'client') => {
-    if (type === 'route' || type === 'farm') {
-      // Lógica exclusiva: si eliges ruta, no puedes elegir finca y viceversa
-      if (type === 'route' && formData.farmId) {
-        toast.error('No puedes asociar una ruta si ya tienes una finca asociada');
-        return;
-      }
-      if (type === 'farm' && formData.routeId) {
-        toast.error('No puedes asociar una finca si ya tienes una ruta asociada');
-        return;
-      }
-    }
-    toast.success(`${type === 'route' ? 'Ruta' : type === 'farm' ? 'Finca' : type === 'service' ? 'Servicio' : 'Cliente adicional'} agregado`);
   };
 
   // Manejar cambio de archivo de comprobante
@@ -307,6 +301,9 @@ export function BookingsManagement() {
       
       const nuevaReserva = await reservasAPI.create({
         id_cliente: parseInt(formData.clientId),
+        fecha_reserva: formData.bookingDate,
+        estado: formData.status,
+        total: Number(formData.total) || 0,
         notas: formData.specialRequests || ''
       });
       
@@ -321,10 +318,13 @@ export function BookingsManagement() {
         bookingDate: '',
         routeId: '',
         farmId: '',
+        serviceType: 'ruta',
         services: [],
         participants: 1,
         adults: 1,
         children: 0,
+        total: 0,
+        status: 'Pendiente',
         specialRequests: ''
       });
       setProofFile(null);
@@ -355,10 +355,14 @@ export function BookingsManagement() {
 
     try {
       setIsLoading(true);
-      const reservaId = selectedBooking?.id?.toString().replace('BK-', '');
+      const reservaId = selectedBooking?.id?.toString();
       console.log('🔄 Actualizando reserva:', reservaId, formData);
       
       await reservasAPI.update(parseInt(reservaId), {
+        id_cliente: parseInt(formData.clientId),
+        fecha_reserva: formData.bookingDate,
+        estado: formData.status,
+        total: Number(formData.total) || 0,
         notas: formData.specialRequests
       });
       
@@ -376,10 +380,13 @@ export function BookingsManagement() {
         bookingDate: '',
         routeId: '',
         farmId: '',
+        serviceType: 'ruta',
         services: [],
         participants: 1,
         adults: 1,
         children: 0,
+        total: 0,
+        status: 'Pendiente',
         specialRequests: ''
       });
       
@@ -405,7 +412,7 @@ export function BookingsManagement() {
     }
 
     try {
-      const reservaId = bookingId.toString().replace('BK-', '');
+      const reservaId = bookingId.toString();
       
       // Si el nuevo estado es "Cancelada", llamar al endpoint de cancelar
       if (newStatus === 'Cancelada') {
@@ -430,8 +437,33 @@ export function BookingsManagement() {
   };
 
   // Generar PDF
-  const handleGeneratePDF = (booking: any) => {
+  const handleGeneratePDF = (_booking: any) => {
     toast.success('PDF generado correctamente');
+  };
+
+  const handleDeleteBooking = async () => {
+    if (!canDeleteReservas) {
+      toast.error('No tienes permiso para eliminar reservas');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const reservaId = selectedBooking?.id?.toString();
+      if (!reservaId) {
+        toast.error('Reserva inválida');
+        return;
+      }
+      await reservasAPI.delete(parseInt(reservaId));
+      toast.success('Reserva eliminada correctamente');
+      setIsDeleteDialogOpen(false);
+      await cargarReservas();
+    } catch (error: any) {
+      console.error('❌ Error al eliminar reserva:', error);
+      toast.error(error.message || 'Error al eliminar la reserva');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   if (!permisos.loadingRoles && !canViewReservas) {
@@ -580,17 +612,13 @@ export function BookingsManagement() {
                       <div className="flex items-center space-x-2">
                         <Switch
                           checked={booking.status === 'Confirmada'}
-                          onCheckedChange={(checked) => {
+                          onCheckedChange={(checked: boolean) => {
                             if (!canEditReservas) {
                               toast.error('No tienes permiso para editar reservas');
                               return;
                             }
                             const newStatus = checked ? 'Confirmada' : 'Pendiente';
-                            const updatedBookings = bookings.map(b => 
-                              b.id === booking.id ? { ...b, status: newStatus } : b
-                            );
-                            setBookings(updatedBookings);
-                            toast.success(`Estado cambiado a: ${newStatus}`);
+                            void handleChangeStatus(String(booking.id), newStatus);
                           }}
                           disabled={!canEditReservas}
                           className={booking.status === 'Confirmada' ? 'bg-green-600' : 'bg-gray-300'}
@@ -632,10 +660,13 @@ export function BookingsManagement() {
                                 bookingDate: booking.date || '',
                                 routeId: '',
                                 farmId: '',
+                                serviceType: 'ruta',
                                 services: [],
                                 participants: booking.participants || 1,
                                 adults: booking.adults || 1,
                                 children: booking.children || 0,
+                                total: booking.total || 0,
+                                status: booking.status || 'Pendiente',
                                 specialRequests: booking.specialRequests || ''
                               });
                               setIsEditModalOpen(true);
@@ -727,8 +758,8 @@ export function BookingsManagement() {
                     <Label htmlFor="create-clientSearch">Buscar cliente (por nombre o cédula) *</Label>
                     <Select 
                       value={formData.clientId} 
-                      onValueChange={(value) => {
-                        const client = mockClients.find(c => c.id === value);
+                      onValueChange={(value: string) => {
+                        const client = clientes.find(c => c.id === value);
                         setFormData({ 
                           ...formData, 
                           clientId: value, 
@@ -740,7 +771,7 @@ export function BookingsManagement() {
                         <SelectValue placeholder="Seleccione un cliente" />
                       </SelectTrigger>
                       <SelectContent>
-                        {mockClients.map(client => (
+                        {clientes.map(client => (
                           <SelectItem key={client.id} value={client.id}>
                             {client.name} - {client.document}
                           </SelectItem>
@@ -760,15 +791,15 @@ export function BookingsManagement() {
                         </div>
                         <div>
                           <span className="text-gray-600">Cédula:</span>
-                          <p className="text-gray-900">{mockClients.find(c => c.id === formData.clientId)?.document || 'N/A'}</p>
+                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.document || 'N/A'}</p>
                         </div>
                         <div>
                           <span className="text-gray-600">Correo:</span>
-                          <p className="text-gray-900">cliente@correo.com</p>
+                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.email || 'N/A'}</p>
                         </div>
                         <div>
                           <span className="text-gray-600">Teléfono:</span>
-                          <p className="text-gray-900">+57 300 123 4567</p>
+                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.phone || 'N/A'}</p>
                         </div>
                       </div>
                     </div>
@@ -786,7 +817,13 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="create-serviceType">Tipo de servicio *</Label>
-                    <Select defaultValue="ruta">
+                    <Select
+                      value={formData.serviceType}
+                      onValueChange={(value: string) => {
+                        const next = value === 'finca' ? 'finca' : 'ruta';
+                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '' });
+                      }}
+                    >
                       <SelectTrigger id="create-serviceType" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
@@ -798,21 +835,21 @@ export function BookingsManagement() {
                   </div>
                   <div>
                     <Label htmlFor="create-tourName">Nombre del tour o finca *</Label>
-                    <Select value={formData.routeId || formData.farmId} onValueChange={(value) => {
-                      if (mockRoutes.find(r => r.id === value)) {
+                    <Select value={formData.routeId || formData.farmId} onValueChange={(value: string) => {
+                      if (formData.serviceType === 'ruta') {
                         setFormData({ ...formData, routeId: value, farmId: '' });
-                      } else if (mockFarms.find(f => f.id === value)) {
-                        setFormData({ ...formData, farmId: value, routeId: '' });
+                        return;
                       }
+                      setFormData({ ...formData, farmId: value, routeId: '' });
                     }}>
                       <SelectTrigger id="create-tourName" className="bg-gray-50">
                         <SelectValue placeholder="Seleccione un servicio" />
                       </SelectTrigger>
                       <SelectContent>
-                        {mockRoutes.map(route => (
+                        {formData.serviceType === 'ruta' && rutas.map(route => (
                           <SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>
                         ))}
-                        {mockFarms.map(farm => (
+                        {formData.serviceType === 'finca' && fincas.map(farm => (
                           <SelectItem key={farm.id} value={farm.id}>{farm.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -915,6 +952,8 @@ export function BookingsManagement() {
                       id="create-total"
                       type="number"
                       placeholder="$0"
+                      value={formData.total}
+                      onChange={(e) => setFormData({ ...formData, total: Number(e.target.value) || 0 })}
                       className="bg-gray-50"
                     />
                   </div>
@@ -1010,15 +1049,15 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 gap-4">
                   <div>
                     <Label htmlFor="create-status">Estado actual *</Label>
-                    <Select defaultValue="pendiente">
+                    <Select value={formData.status} onValueChange={(value: string) => setFormData({ ...formData, status: value })}>
                       <SelectTrigger id="create-status" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="confirmada">Confirmada</SelectItem>
-                        <SelectItem value="pendiente">Pendiente</SelectItem>
-                        <SelectItem value="cancelada">Cancelada</SelectItem>
-                        <SelectItem value="reprogramada">Reprogramada</SelectItem>
+                        <SelectItem value="Confirmada">Confirmada</SelectItem>
+                        <SelectItem value="Pendiente">Pendiente</SelectItem>
+                        <SelectItem value="Cancelada">Cancelada</SelectItem>
+                        <SelectItem value="Reprogramada">Reprogramada</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1151,7 +1190,13 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label htmlFor="edit-serviceType">Tipo de servicio *</Label>
-                    <Select defaultValue="ruta">
+                    <Select
+                      value={formData.serviceType}
+                      onValueChange={(value: string) => {
+                        const next = value === 'finca' ? 'finca' : 'ruta';
+                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '' });
+                      }}
+                    >
                       <SelectTrigger id="edit-serviceType" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
@@ -1163,21 +1208,21 @@ export function BookingsManagement() {
                   </div>
                   <div>
                     <Label htmlFor="edit-packageName">Nombre del paquete / tour / finca *</Label>
-                    <Select value={formData.routeId || formData.farmId} onValueChange={(value) => {
-                      if (mockRoutes.find(r => r.id === value)) {
+                    <Select value={formData.routeId || formData.farmId} onValueChange={(value: string) => {
+                      if (formData.serviceType === 'ruta') {
                         setFormData({ ...formData, routeId: value, farmId: '' });
-                      } else if (mockFarms.find(f => f.id === value)) {
-                        setFormData({ ...formData, farmId: value, routeId: '' });
+                        return;
                       }
+                      setFormData({ ...formData, farmId: value, routeId: '' });
                     }}>
                       <SelectTrigger id="edit-packageName" className="bg-gray-50">
                         <SelectValue placeholder="Seleccione un servicio" />
                       </SelectTrigger>
                       <SelectContent>
-                        {mockRoutes.map(route => (
+                        {formData.serviceType === 'ruta' && rutas.map(route => (
                           <SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>
                         ))}
-                        {mockFarms.map(farm => (
+                        {formData.serviceType === 'finca' && fincas.map(farm => (
                           <SelectItem key={farm.id} value={farm.id}>{farm.name}</SelectItem>
                         ))}
                       </SelectContent>
@@ -1288,6 +1333,8 @@ export function BookingsManagement() {
                       id="edit-total"
                       type="number"
                       placeholder="$0"
+                      value={formData.total}
+                      onChange={(e) => setFormData({ ...formData, total: Number(e.target.value) || 0 })}
                       className="bg-gray-50"
                     />
                   </div>
@@ -1295,7 +1342,7 @@ export function BookingsManagement() {
                     <Label htmlFor="edit-paymentStatus">Estado de pago *</Label>
                     <Select 
                       value={selectedBooking?.paymentStatus || 'Pendiente'}
-                      onValueChange={(newStatus) => {
+                      onValueChange={(newStatus: string) => {
                         const updatedBookings = bookings.map(b =>
                           b.id === selectedBooking?.id ? { ...b, paymentStatus: newStatus } : b
                         );
@@ -1399,15 +1446,15 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 gap-4">
                   <div>
                     <Label htmlFor="edit-status">Estado actual *</Label>
-                    <Select defaultValue="confirmada">
+                    <Select value={formData.status} onValueChange={(value: string) => setFormData({ ...formData, status: value })}>
                       <SelectTrigger id="edit-status" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="confirmada">Confirmada</SelectItem>
-                        <SelectItem value="pendiente">Pendiente</SelectItem>
-                        <SelectItem value="cancelada">Cancelada</SelectItem>
-                        <SelectItem value="reprogramada">Reprogramada</SelectItem>
+                        <SelectItem value="Confirmada">Confirmada</SelectItem>
+                        <SelectItem value="Pendiente">Pendiente</SelectItem>
+                        <SelectItem value="Cancelada">Cancelada</SelectItem>
+                        <SelectItem value="Reprogramada">Reprogramada</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1665,16 +1712,8 @@ export function BookingsManagement() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => {
-                if (!canDeleteReservas) {
-                  toast.error('No tienes permiso para eliminar reservas');
-                  return;
-                }
-                setBookings(bookings.filter(b => b.id !== selectedBooking?.id));
-                setIsDeleteDialogOpen(false);
-                toast.success('Reserva eliminada correctamente');
-              }}
-              disabled={!canDeleteReservas}
+              onClick={handleDeleteBooking}
+              disabled={!canDeleteReservas || isLoading}
               className="bg-red-600 hover:bg-red-700"
             >
               Eliminar

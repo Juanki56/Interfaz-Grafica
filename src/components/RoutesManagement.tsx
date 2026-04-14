@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import {
   Route as RouteIcon,
@@ -7,16 +7,11 @@ import {
   Eye,
   Edit,
   Trash2,
-  MapPin,
   Clock,
   TrendingUp,
-  Users,
-  Star,
   ChevronLeft,
   ChevronRight,
   X,
-  Calendar,
-  FileText,
   DollarSign,
   CheckCircle
 } from 'lucide-react';
@@ -55,11 +50,13 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Separator } from './ui/separator';
+import { Checkbox } from './ui/checkbox';
 import { toast } from 'sonner';
-import { rutasAPI, Ruta } from '../services/api';
+import { rutasAPI, Ruta, RutaServicioPredefinido } from '../services/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
+import { useServices } from '../hooks/useServices';
 
 interface Route {
   id_ruta: number;
@@ -71,7 +68,14 @@ interface Route {
   imagen_url?: string | null;
   estado?: boolean | null;
   fecha_creacion?: string | null;
+  servicios_predefinidos?: RutaServicioPredefinido[] | null;
 }
+
+type PredefinedServiceFormItem = {
+  id_servicio: string;
+  cantidad_default: number;
+  requerido: boolean;
+};
 
 interface RoutesManagementProps {
   userRole?: 'admin' | 'advisor';
@@ -84,6 +88,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const canCreateRoute = routePerms.canCreate();
   const canEditRoute = routePerms.canEdit();
   const canDeleteRoute = routePerms.canDelete();
+
+  const { services } = useServices();
 
   const [routes, setRoutes] = useState<Route[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -105,6 +111,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     dificultad: 'Moderado',
     imagen_url: ''
   });
+
+  const [predefinedServices, setPredefinedServices] = useState<PredefinedServiceFormItem[]>([]);
+  const [serviceToAdd, setServiceToAdd] = useState<string>('');
 
   // Cargar rutas desde la API al montar el componente
   useEffect(() => {
@@ -143,7 +152,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
           dificultad: ruta.dificultad,
           imagen_url: ruta.imagen_url,
           estado: ruta.estado,
-          fecha_creacion: ruta.fecha_creacion
+          fecha_creacion: ruta.fecha_creacion,
+          servicios_predefinidos: ruta.servicios_predefinidos ?? [],
         };
       });
       
@@ -216,10 +226,46 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       dificultad: route.dificultad || 'Moderado',
       imagen_url: route.imagen_url || ''
     });
+
+    const servicios = Array.isArray(route.servicios_predefinidos) ? route.servicios_predefinidos : [];
+    setPredefinedServices(
+      servicios.map((s) => ({
+        id_servicio: String(s.id_servicio),
+        cantidad_default: Number(s.cantidad_default ?? 1),
+        requerido: s.requerido ?? true,
+      }))
+    );
+    setServiceToAdd('');
     
     console.log('📝 FormData preparado:', formData);
     
     setIsEditModalOpen(true);
+  };
+
+  const addPredefinedService = () => {
+    if (!serviceToAdd) return;
+    if (predefinedServices.some((s) => s.id_servicio === serviceToAdd)) {
+      setServiceToAdd('');
+      return;
+    }
+    setPredefinedServices((prev) => [
+      ...prev,
+      { id_servicio: serviceToAdd, cantidad_default: 1, requerido: true },
+    ]);
+    setServiceToAdd('');
+  };
+
+  const removePredefinedService = (idServicio: string) => {
+    setPredefinedServices((prev) => prev.filter((s) => s.id_servicio !== idServicio));
+  };
+
+  const updatePredefinedService = (
+    idServicio: string,
+    patch: Partial<PredefinedServiceFormItem>
+  ) => {
+    setPredefinedServices((prev) =>
+      prev.map((s) => (s.id_servicio === idServicio ? { ...s, ...patch } : s))
+    );
   };
 
   const handleDelete = (route: Route) => {
@@ -299,7 +345,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         precio_base: precio,
         dificultad: formData.dificultad || null,
         imagen_url: formData.imagen_url?.trim() || null,
-        estado: true
+        estado: true,
+        servicios_predefinidos: predefinedServices
+          .map((s) => ({
+            id_servicio: Number(s.id_servicio),
+            cantidad_default: Math.max(1, Number(s.cantidad_default) || 1),
+            requerido: Boolean(s.requerido),
+          }))
+          .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
       };
 
       console.log('📤 Enviando ruta a BD:', rutaData);
@@ -374,7 +427,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         precio_base: precio,
         dificultad: formData.dificultad || null,
         imagen_url: formData.imagen_url?.trim() || null,
-        estado: selectedRoute.estado
+        estado: selectedRoute.estado,
+        servicios_predefinidos: predefinedServices
+          .map((s) => ({
+            id_servicio: Number(s.id_servicio),
+            cantidad_default: Math.max(1, Number(s.cantidad_default) || 1),
+            requerido: Boolean(s.requerido),
+          }))
+          .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
       };
 
       console.log('📤 Actualizando ruta en BD:', routeId, rutaData);
@@ -409,6 +469,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       dificultad: 'Moderado',
       imagen_url: ''
     });
+    setPredefinedServices([]);
+    setServiceToAdd('');
   };
 
   // Toggle route status (Admin only)
@@ -473,7 +535,10 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
           </div>
           {canCreateRoute && (
             <Button
-              onClick={() => setIsCreateModalOpen(true)}
+              onClick={() => {
+                resetForm();
+                setIsCreateModalOpen(true);
+              }}
               className="bg-green-600 hover:bg-green-700 text-white"
             >
               <Plus className="w-4 h-4 mr-2" />
@@ -721,7 +786,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
       {/* Create Route Modal */}
       {canCreateRoute && (
-        <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+        <Dialog
+          open={isCreateModalOpen}
+          onOpenChange={(open: boolean) => {
+            setIsCreateModalOpen(open);
+            if (!open) resetForm();
+          }}
+        >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center space-x-2 text-green-700">
@@ -806,6 +877,102 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   placeholder="https://ejemplo.com/imagen.jpg"
                 />
               </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <Label>Servicios predefinidos (opcional)</Label>
+                  <p className="text-sm text-gray-500">Se incluirán por defecto cuando se use la ruta.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div className="sm:col-span-2">
+                    <Select value={serviceToAdd} onValueChange={setServiceToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona un servicio" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {services
+                          .filter((s) => !predefinedServices.some((ps) => ps.id_servicio === s.id))
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addPredefinedService}
+                    disabled={!serviceToAdd}
+                  >
+                    Agregar
+                  </Button>
+                </div>
+
+                {predefinedServices.length === 0 ? (
+                  <p className="text-sm text-gray-500">No hay servicios predefinidos.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {predefinedServices.map((ps) => {
+                      const svc = services.find((s) => s.id === ps.id_servicio);
+                      return (
+                        <div
+                          key={ps.id_servicio}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 border rounded-lg bg-gray-50"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{svc?.name || `Servicio #${ps.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID: {ps.id_servicio}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-gray-600">Cantidad</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={ps.cantidad_default}
+                              onChange={(e) =>
+                                updatePredefinedService(ps.id_servicio, {
+                                  cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
+                                })
+                              }
+                              className="w-24"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              checked={ps.requerido}
+                              onCheckedChange={(checked: boolean | 'indeterminate') =>
+                                updatePredefinedService(ps.id_servicio, {
+                                  requerido: checked === true,
+                                })
+                              }
+                            />
+                            <span className="text-sm text-gray-700">Requerido</span>
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removePredefinedService(ps.id_servicio)}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Quitar servicio"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
             <DialogFooter>
               <Button
@@ -830,7 +997,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
       {/* Edit Route Modal */}
       {canEditRoute && (
-        <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+        <Dialog
+          open={isEditModalOpen}
+          onOpenChange={(open: boolean) => {
+            setIsEditModalOpen(open);
+            if (!open) {
+              setSelectedRoute(null);
+              resetForm();
+            }
+          }}
+        >
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="flex items-center space-x-2 text-blue-700">
@@ -914,6 +1090,102 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
                   placeholder="https://ejemplo.com/imagen.jpg"
                 />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <Label>Servicios predefinidos (opcional)</Label>
+                  <p className="text-sm text-gray-500">Edita los servicios que quedarán por defecto en esta ruta.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div className="sm:col-span-2">
+                    <Select value={serviceToAdd} onValueChange={setServiceToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona un servicio" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {services
+                          .filter((s) => !predefinedServices.some((ps) => ps.id_servicio === s.id))
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addPredefinedService}
+                    disabled={!serviceToAdd}
+                  >
+                    Agregar
+                  </Button>
+                </div>
+
+                {predefinedServices.length === 0 ? (
+                  <p className="text-sm text-gray-500">No hay servicios predefinidos.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {predefinedServices.map((ps) => {
+                      const svc = services.find((s) => s.id === ps.id_servicio);
+                      return (
+                        <div
+                          key={ps.id_servicio}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 border rounded-lg bg-gray-50"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{svc?.name || `Servicio #${ps.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID: {ps.id_servicio}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-gray-600">Cantidad</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={ps.cantidad_default}
+                              onChange={(e) =>
+                                updatePredefinedService(ps.id_servicio, {
+                                  cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
+                                })
+                              }
+                              className="w-24"
+                            />
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Checkbox
+                              checked={ps.requerido}
+                              onCheckedChange={(checked: boolean | 'indeterminate') =>
+                                updatePredefinedService(ps.id_servicio, {
+                                  requerido: checked === true,
+                                })
+                              }
+                            />
+                            <span className="text-sm text-gray-700">Requerido</span>
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removePredefinedService(ps.id_servicio)}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Quitar servicio"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -1028,6 +1300,39 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     <p className="text-gray-900 bg-gray-50 p-4 rounded-lg leading-relaxed">
                       {selectedRoute.descripcion}
                     </p>
+                  </div>
+                </>
+              )}
+
+              {Array.isArray(selectedRoute.servicios_predefinidos) && selectedRoute.servicios_predefinidos.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="text-gray-600 mb-2 block font-semibold">Servicios predefinidos</Label>
+                    <div className="space-y-2">
+                      {selectedRoute.servicios_predefinidos.map((sp) => (
+                        <div
+                          key={String(sp.id_ruta_servicio_predefinido ?? sp.id_servicio)}
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-gray-50 p-3 rounded-lg"
+                        >
+                          <div>
+                            <p className="font-medium text-gray-900">{sp.servicio?.nombre ?? `Servicio #${sp.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID servicio: {sp.id_servicio}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                              Cantidad: {sp.cantidad_default}
+                            </Badge>
+                            <Badge
+                              variant="secondary"
+                              className={sp.requerido ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}
+                            >
+                              {sp.requerido ? 'Requerido' : 'Opcional'}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </>
               )}

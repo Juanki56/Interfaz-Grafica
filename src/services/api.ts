@@ -72,11 +72,26 @@ export interface Empleado {
 }
 
 export interface Reserva {
-  id_reserva: number;
+  id_reserva?: number;
+  id?: number;
+
   id_cliente: number;
   fecha_reserva: string;
   estado: string;
-  total: number;
+
+  // Totales (según implementación backend puede venir como total o monto_total)
+  total?: number | string | null;
+  monto_total?: number | string | null;
+
+  numero_participantes?: number | null;
+  tipo_servicio?: string | null;
+  notas?: string | null;
+
+  // Campos de JOIN (si el backend devuelve vista enriquecida)
+  cliente_nombre?: string | null;
+  cliente_apellido?: string | null;
+  cliente_email?: string | null;
+  cliente_telefono?: string | null;
 }
 
 export interface Ruta {
@@ -89,6 +104,25 @@ export interface Ruta {
   imagen_url?: string | null;         // text NULL en BD
   estado?: boolean | null;            // bool NULL en BD
   fecha_creacion?: string | null;     // timestamp NULL en BD
+  servicios_predefinidos?: RutaServicioPredefinido[] | null;
+}
+
+export interface RutaServicioPredefinido {
+  id_ruta_servicio_predefinido?: number;
+  id_ruta?: number;
+  id_servicio: number;
+  cantidad_default: number;
+  requerido: boolean;
+  fecha_creacion?: string;
+  servicio?: {
+    id_servicio: number;
+    nombre: string;
+    descripcion?: string | null;
+    precio?: number | null;
+    imagen_url?: string | null;
+    estado?: boolean | null;
+    fecha_creacion?: string | null;
+  };
 }
 
 export interface Propietario {
@@ -431,8 +465,8 @@ export const empleadosAPI = {
 
 export const reservasAPI = {
   getAll: async (): Promise<Reserva[]> => {
-    const response = await fetchAPI<{ data: Reserva[] }>('/api/reservas');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/reservas');
+    return unwrapApiArray<Reserva>(response);
   },
 
   getById: async (id: number): Promise<Reserva> => {
@@ -441,8 +475,8 @@ export const reservasAPI = {
   },
 
   getByCliente: async (idCliente: number): Promise<Reserva[]> => {
-    const response = await fetchAPI<{ data: Reserva[] }>(`/api/reservas/cliente/${idCliente}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/reservas/cliente/${idCliente}`);
+    return unwrapApiArray<Reserva>(response);
   },
 
   create: async (reservaData: Partial<Reserva>) => {
@@ -476,8 +510,8 @@ export const reservasAPI = {
   },
 
   buscar: async (termino: string): Promise<Reserva[]> => {
-    const response = await fetchAPI<{ data: Reserva[] }>(`/api/reservas/buscar?q=${termino}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/reservas/buscar?q=${termino}`);
+    return unwrapApiArray<Reserva>(response);
   },
 };
 
