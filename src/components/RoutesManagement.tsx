@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
 import {
   Route as RouteIcon,
@@ -52,7 +52,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
 import { toast } from 'sonner';
-import { rutasAPI, Ruta, RutaServicioPredefinido } from '../services/api';
+import { rutasAPI, Ruta, RutaServicioPredefinido, RutaServicioOpcional } from '../services/api';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
@@ -69,12 +69,18 @@ interface Route {
   estado?: boolean | null;
   fecha_creacion?: string | null;
   servicios_predefinidos?: RutaServicioPredefinido[] | null;
+  servicios_opcionales?: RutaServicioOpcional[] | null;
 }
 
 type PredefinedServiceFormItem = {
   id_servicio: string;
   cantidad_default: number;
   requerido: boolean;
+};
+
+type OptionalServiceFormItem = {
+  id_servicio: string;
+  cantidad_default: number;
 };
 
 interface RoutesManagementProps {
@@ -90,6 +96,25 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const canDeleteRoute = routePerms.canDelete();
 
   const { services } = useServices();
+
+  const requiredServiceIds = useMemo(() => {
+    const normalize = (value: string) =>
+      String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\u0300-\u036f]/g, '');
+
+    const poliza = services.find((s) => normalize(s.name).includes('poliza'));
+    const medico = services.find((s) => normalize(s.name).includes('personal medico'));
+
+    const ids = [poliza?.id, medico?.id].filter(Boolean) as string[];
+    return {
+      ids,
+      polizaId: poliza?.id || null,
+      medicoId: medico?.id || null,
+    };
+  }, [services]);
 
   const [routes, setRoutes] = useState<Route[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -114,6 +139,32 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
   const [predefinedServices, setPredefinedServices] = useState<PredefinedServiceFormItem[]>([]);
   const [serviceToAdd, setServiceToAdd] = useState<string>('');
+
+  const [optionalServices, setOptionalServices] = useState<OptionalServiceFormItem[]>([]);
+  const [optionalServiceToAdd, setOptionalServiceToAdd] = useState<string>('');
+
+  // Asegura que Póliza + Personal médico estén SIEMPRE como predefinidos requeridos.
+  // (Backend también lo forza, pero lo bloqueamos en UI para evitar confusión.)
+  useEffect(() => {
+    if (!requiredServiceIds.ids.length) return;
+    if (!isCreateModalOpen && !isEditModalOpen) return;
+
+    setPredefinedServices((prev) => {
+      const byId = new Map(prev.map((s) => [s.id_servicio, s] as const));
+      for (const id of requiredServiceIds.ids) {
+        byId.set(id, { id_servicio: id, cantidad_default: 1, requerido: true });
+      }
+
+      return Array.from(byId.values()).map((s) =>
+        requiredServiceIds.ids.includes(s.id_servicio)
+          ? { ...s, cantidad_default: 1, requerido: true }
+          : s
+      );
+    });
+
+    // Nunca permitir que un obligatorio esté como opcional
+    setOptionalServices((prev) => prev.filter((s) => !requiredServiceIds.ids.includes(s.id_servicio)));
+  }, [requiredServiceIds, isCreateModalOpen, isEditModalOpen]);
 
   // Cargar rutas desde la API al montar el componente
   useEffect(() => {
@@ -154,6 +205,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
           estado: ruta.estado,
           fecha_creacion: ruta.fecha_creacion,
           servicios_predefinidos: ruta.servicios_predefinidos ?? [],
+          servicios_opcionales: (ruta as any).servicios_opcionales ?? [],
         };
       });
       
@@ -235,7 +287,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         requerido: s.requerido ?? true,
       }))
     );
+
+    const opc = Array.isArray(route.servicios_opcionales) ? route.servicios_opcionales : [];
+    setOptionalServices(
+      opc.map((s) => ({
+        id_servicio: String(s.id_servicio),
+        cantidad_default: Number(s.cantidad_default ?? 1),
+      }))
+    );
     setServiceToAdd('');
+    setOptionalServiceToAdd('');
     
     console.log('📝 FormData preparado:', formData);
     
@@ -244,10 +305,18 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
   const addPredefinedService = () => {
     if (!serviceToAdd) return;
+    if (requiredServiceIds.ids.includes(serviceToAdd)) {
+      setServiceToAdd('');
+      return;
+    }
     if (predefinedServices.some((s) => s.id_servicio === serviceToAdd)) {
       setServiceToAdd('');
       return;
     }
+
+    // Evita que el mismo servicio exista como opcional
+    setOptionalServices((prev) => prev.filter((s) => s.id_servicio !== serviceToAdd));
+
     setPredefinedServices((prev) => [
       ...prev,
       { id_servicio: serviceToAdd, cantidad_default: 1, requerido: true },
@@ -256,6 +325,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   };
 
   const removePredefinedService = (idServicio: string) => {
+    if (requiredServiceIds.ids.includes(idServicio)) return;
     setPredefinedServices((prev) => prev.filter((s) => s.id_servicio !== idServicio));
   };
 
@@ -263,7 +333,46 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     idServicio: string,
     patch: Partial<PredefinedServiceFormItem>
   ) => {
+    if (requiredServiceIds.ids.includes(idServicio)) {
+      // Mantener obligatorios en 1 y requerido=true
+      setPredefinedServices((prev) =>
+        prev.map((s) =>
+          s.id_servicio === idServicio
+            ? { ...s, cantidad_default: 1, requerido: true }
+            : s
+        )
+      );
+      return;
+    }
     setPredefinedServices((prev) =>
+      prev.map((s) => (s.id_servicio === idServicio ? { ...s, ...patch } : s))
+    );
+  };
+
+  const addOptionalService = () => {
+    if (!optionalServiceToAdd) return;
+    if (requiredServiceIds.ids.includes(optionalServiceToAdd)) {
+      setOptionalServiceToAdd('');
+      return;
+    }
+    if (predefinedServices.some((s) => s.id_servicio === optionalServiceToAdd)) {
+      setOptionalServiceToAdd('');
+      return;
+    }
+    if (optionalServices.some((s) => s.id_servicio === optionalServiceToAdd)) {
+      setOptionalServiceToAdd('');
+      return;
+    }
+    setOptionalServices((prev) => [...prev, { id_servicio: optionalServiceToAdd, cantidad_default: 1 }]);
+    setOptionalServiceToAdd('');
+  };
+
+  const removeOptionalService = (idServicio: string) => {
+    setOptionalServices((prev) => prev.filter((s) => s.id_servicio !== idServicio));
+  };
+
+  const updateOptionalService = (idServicio: string, patch: Partial<OptionalServiceFormItem>) => {
+    setOptionalServices((prev) =>
       prev.map((s) => (s.id_servicio === idServicio ? { ...s, ...patch } : s))
     );
   };
@@ -353,6 +462,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
             requerido: Boolean(s.requerido),
           }))
           .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
+
+        servicios_opcionales: optionalServices
+          .map((s) => ({
+            id_servicio: Number(s.id_servicio),
+            cantidad_default: Math.max(1, Number(s.cantidad_default) || 1),
+          }))
+          .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
       };
 
       console.log('📤 Enviando ruta a BD:', rutaData);
@@ -435,6 +551,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
             requerido: Boolean(s.requerido),
           }))
           .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
+
+        servicios_opcionales: optionalServices
+          .map((s) => ({
+            id_servicio: Number(s.id_servicio),
+            cantidad_default: Math.max(1, Number(s.cantidad_default) || 1),
+          }))
+          .filter((s) => Number.isFinite(s.id_servicio) && s.id_servicio > 0),
       };
 
       console.log('📤 Actualizando ruta en BD:', routeId, rutaData);
@@ -471,6 +594,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     });
     setPredefinedServices([]);
     setServiceToAdd('');
+    setOptionalServices([]);
+    setOptionalServiceToAdd('');
   };
 
   // Toggle route status (Admin only)
@@ -894,7 +1019,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                       </SelectTrigger>
                       <SelectContent>
                         {services
-                          .filter((s) => !predefinedServices.some((ps) => ps.id_servicio === s.id))
+                          .filter(
+                            (s) =>
+                              !predefinedServices.some((ps) => ps.id_servicio === s.id) &&
+                              !optionalServices.some((os) => os.id_servicio === s.id)
+                          )
                           .map((s) => (
                             <SelectItem key={s.id} value={s.id}>
                               {s.name}
@@ -919,6 +1048,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   <div className="space-y-2">
                     {predefinedServices.map((ps) => {
                       const svc = services.find((s) => s.id === ps.id_servicio);
+                      const isRequired = requiredServiceIds.ids.includes(ps.id_servicio);
                       return (
                         <div
                           key={ps.id_servicio}
@@ -927,6 +1057,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                           <div className="flex-1">
                             <p className="font-medium text-gray-900">{svc?.name || `Servicio #${ps.id_servicio}`}</p>
                             <p className="text-xs text-gray-500">ID: {ps.id_servicio}</p>
+                            {isRequired && (
+                              <p className="text-xs text-green-700 mt-1">Obligatorio (siempre incluido)</p>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-2">
@@ -936,6 +1069,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                               min="1"
                               step="1"
                               value={ps.cantidad_default}
+                              disabled={isRequired}
                               onChange={(e) =>
                                 updatePredefinedService(ps.id_servicio, {
                                   cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
@@ -948,6 +1082,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                           <div className="flex items-center gap-2">
                             <Checkbox
                               checked={ps.requerido}
+                              disabled={isRequired}
                               onCheckedChange={(checked: boolean | 'indeterminate') =>
                                 updatePredefinedService(ps.id_servicio, {
                                   requerido: checked === true,
@@ -962,6 +1097,96 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                             variant="ghost"
                             size="sm"
                             onClick={() => removePredefinedService(ps.id_servicio)}
+                            disabled={isRequired}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Quitar servicio"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <Label>Servicios opcionales por ruta (opcional)</Label>
+                  <p className="text-sm text-gray-500">Se ofrecerán para seleccionar al reservar esta ruta.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div className="sm:col-span-2">
+                    <Select value={optionalServiceToAdd} onValueChange={setOptionalServiceToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona un servicio" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {services
+                          .filter(
+                            (s) =>
+                              !predefinedServices.some((ps) => ps.id_servicio === s.id) &&
+                              !optionalServices.some((os) => os.id_servicio === s.id) &&
+                              !requiredServiceIds.ids.includes(s.id)
+                          )
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addOptionalService}
+                    disabled={!optionalServiceToAdd}
+                  >
+                    Agregar
+                  </Button>
+                </div>
+
+                {optionalServices.length === 0 ? (
+                  <p className="text-sm text-gray-500">No hay servicios opcionales.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {optionalServices.map((os) => {
+                      const svc = services.find((s) => s.id === os.id_servicio);
+                      return (
+                        <div
+                          key={os.id_servicio}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 border rounded-lg bg-gray-50"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{svc?.name || `Servicio #${os.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID: {os.id_servicio}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-gray-600">Cantidad sugerida</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={os.cantidad_default}
+                              onChange={(e) =>
+                                updateOptionalService(os.id_servicio, {
+                                  cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
+                                })
+                              }
+                              className="w-28"
+                            />
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeOptionalService(os.id_servicio)}
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             title="Quitar servicio"
                           >
@@ -1108,7 +1333,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                       </SelectTrigger>
                       <SelectContent>
                         {services
-                          .filter((s) => !predefinedServices.some((ps) => ps.id_servicio === s.id))
+                          .filter(
+                            (s) =>
+                              !predefinedServices.some((ps) => ps.id_servicio === s.id) &&
+                              !optionalServices.some((os) => os.id_servicio === s.id)
+                          )
                           .map((s) => (
                             <SelectItem key={s.id} value={s.id}>
                               {s.name}
@@ -1133,6 +1362,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   <div className="space-y-2">
                     {predefinedServices.map((ps) => {
                       const svc = services.find((s) => s.id === ps.id_servicio);
+                      const isRequired = requiredServiceIds.ids.includes(ps.id_servicio);
                       return (
                         <div
                           key={ps.id_servicio}
@@ -1141,6 +1371,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                           <div className="flex-1">
                             <p className="font-medium text-gray-900">{svc?.name || `Servicio #${ps.id_servicio}`}</p>
                             <p className="text-xs text-gray-500">ID: {ps.id_servicio}</p>
+                            {isRequired && (
+                              <p className="text-xs text-green-700 mt-1">Obligatorio (siempre incluido)</p>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-2">
@@ -1150,6 +1383,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                               min="1"
                               step="1"
                               value={ps.cantidad_default}
+                              disabled={isRequired}
                               onChange={(e) =>
                                 updatePredefinedService(ps.id_servicio, {
                                   cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
@@ -1162,6 +1396,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                           <div className="flex items-center gap-2">
                             <Checkbox
                               checked={ps.requerido}
+                              disabled={isRequired}
                               onCheckedChange={(checked: boolean | 'indeterminate') =>
                                 updatePredefinedService(ps.id_servicio, {
                                   requerido: checked === true,
@@ -1176,6 +1411,96 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                             variant="ghost"
                             size="sm"
                             onClick={() => removePredefinedService(ps.id_servicio)}
+                            disabled={isRequired}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            title="Quitar servicio"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <div>
+                  <Label>Servicios opcionales por ruta (opcional)</Label>
+                  <p className="text-sm text-gray-500">Se ofrecerán para seleccionar al reservar esta ruta.</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                  <div className="sm:col-span-2">
+                    <Select value={optionalServiceToAdd} onValueChange={setOptionalServiceToAdd}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Selecciona un servicio" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {services
+                          .filter(
+                            (s) =>
+                              !predefinedServices.some((ps) => ps.id_servicio === s.id) &&
+                              !optionalServices.some((os) => os.id_servicio === s.id) &&
+                              !requiredServiceIds.ids.includes(s.id)
+                          )
+                          .map((s) => (
+                            <SelectItem key={s.id} value={s.id}>
+                              {s.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addOptionalService}
+                    disabled={!optionalServiceToAdd}
+                  >
+                    Agregar
+                  </Button>
+                </div>
+
+                {optionalServices.length === 0 ? (
+                  <p className="text-sm text-gray-500">No hay servicios opcionales.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {optionalServices.map((os) => {
+                      const svc = services.find((s) => s.id === os.id_servicio);
+                      return (
+                        <div
+                          key={os.id_servicio}
+                          className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 border rounded-lg bg-gray-50"
+                        >
+                          <div className="flex-1">
+                            <p className="font-medium text-gray-900">{svc?.name || `Servicio #${os.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID: {os.id_servicio}</p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-gray-600">Cantidad sugerida</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={os.cantidad_default}
+                              onChange={(e) =>
+                                updateOptionalService(os.id_servicio, {
+                                  cantidad_default: Math.max(1, parseInt(e.target.value || '1', 10) || 1),
+                                })
+                              }
+                              className="w-28"
+                            />
+                          </div>
+
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeOptionalService(os.id_servicio)}
                             className="text-red-600 hover:text-red-700 hover:bg-red-50"
                             title="Quitar servicio"
                           >
@@ -1328,6 +1653,36 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                               className={sp.requerido ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}
                             >
                               {sp.requerido ? 'Requerido' : 'Opcional'}
+                            </Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {Array.isArray(selectedRoute.servicios_opcionales) && selectedRoute.servicios_opcionales.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="text-gray-600 mb-2 block font-semibold">Servicios opcionales</Label>
+                    <div className="space-y-2">
+                      {selectedRoute.servicios_opcionales.map((so) => (
+                        <div
+                          key={String(so.id_ruta_servicio_opcional ?? so.id_servicio)}
+                          className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-gray-50 p-3 rounded-lg"
+                        >
+                          <div>
+                            <p className="font-medium text-gray-900">{so.servicio?.nombre ?? `Servicio #${so.id_servicio}`}</p>
+                            <p className="text-xs text-gray-500">ID servicio: {so.id_servicio}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="secondary" className="bg-blue-100 text-blue-700">
+                              Cantidad sugerida: {so.cantidad_default}
+                            </Badge>
+                            <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                              Opcional
                             </Badge>
                           </div>
                         </div>

@@ -1,10 +1,15 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Star, MapPin, Clock, Users, Shield, ChevronRight, Sparkles, TrendingUp, Facebook, Instagram, Twitter, Mail, Phone } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './ui/carousel';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { getFeaturedRoutes, mockFarms } from '../utils/mockData';
+import { mockFarms } from '../utils/mockData';
+import { programacionAPI, rutasAPI, type Programacion, type Ruta } from '../services/api';
+import { ProgrammedRouteBookingModal } from './ProgrammedRouteBookingModal';
+import { useAuth } from '../App';
 import { motion } from 'motion/react';
 import heroImage from 'figma:asset/d8d3bc172f99829d8ecd1672db5f890e39054e24.png';
 
@@ -12,9 +17,279 @@ interface HomePageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
 
+const FALLBACK_ROUTE_IMAGE =
+  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
+
+function formatDurationDays(duracion_dias?: number | null): string {
+  if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
+  const days = Number(duracion_dias);
+  return days === 1 ? '1 día' : `${days} días`;
+}
+
+function parseApiDate(value?: string | null): Date | null {
+  if (!value) return null;
+
+  const normalized = String(value).trim();
+  if (!normalized) return null;
+
+  const direct = new Date(normalized);
+  if (!Number.isNaN(direct.getTime())) return direct;
+
+  const ymdOnly = normalized.slice(0, 10);
+  const fallback = new Date(`${ymdOnly}T00:00:00`);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+}
+
 export function HomePage({ onViewChange }: HomePageProps) {
-  const featuredRoutes = getFeaturedRoutes();
-  const featuredRoute = featuredRoutes[0]; // Primera ruta destacada
+  const { user } = useAuth();
+  const [routes, setRoutes] = useState<Ruta[]>([]);
+  const [programaciones, setProgramaciones] = useState<Programacion[]>([]);
+  const [selectedProgramacion, setSelectedProgramacion] = useState<Programacion | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const data = await rutasAPI.getActivas();
+        if (cancelled) return;
+        setRoutes(data || []);
+      } catch {
+        if (cancelled) return;
+        setRoutes([]);
+      }
+    };
+
+    void load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const loadProgramaciones = useCallback(async () => {
+    try {
+      const data = await programacionAPI.getPublicas();
+      setProgramaciones(data || []);
+    } catch {
+      setProgramaciones([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const data = await programacionAPI.getPublicas();
+        if (cancelled) return;
+        setProgramaciones(data || []);
+      } catch {
+        if (cancelled) return;
+        setProgramaciones([]);
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProgramaciones]);
+
+  const featuredRoute = useMemo(() => {
+    const active = routes.filter((r) => r.estado !== false);
+    return active.find((r) => r.destacado) || active[0] || null;
+  }, [routes]);
+
+  const routeById = useMemo(() => {
+    const map = new Map<number, Ruta>();
+    for (const r of routes) {
+      if (Number.isFinite(Number(r.id_ruta))) map.set(Number(r.id_ruta), r);
+    }
+    return map;
+  }, [routes]);
+
+  const upcomingProgramaciones = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    return (programaciones || [])
+      .filter((p) => {
+        if (!p) return false;
+        const estado = String(p.estado || '').toLowerCase().trim();
+        if (estado !== 'programado') return false;
+        if (p.es_personalizada) return false;
+        if (Number(p.cupos_disponibles ?? 0) <= 0) return false;
+        const d = parseApiDate(String(p.fecha_salida || ''));
+        return d ? d >= today : false;
+      })
+      .sort((a, b) => String(a.fecha_salida).localeCompare(String(b.fecha_salida)))
+      .slice(0, 12);
+  }, [programaciones]);
+
+  const formatDate = (value?: string | null) => {
+    if (!value) return '—';
+    const d = parseApiDate(value);
+    if (!d) return String(value);
+    return d.toLocaleDateString('es-CO', { weekday: 'short', year: 'numeric', month: 'short', day: '2-digit' });
+  };
+
+  const handleProgrammedBookingClick = (programacion: Programacion) => {
+    if (!user) {
+      onViewChange('home');
+      setTimeout(() => {
+        const loginButton = document.querySelector('[data-login-trigger]') as HTMLElement | null;
+        if (loginButton) loginButton.click();
+      }, 100);
+      return;
+    }
+
+    if (user.role !== 'client') {
+      toast.error('Solo los clientes pueden reservar cupos desde el home.');
+      return;
+    }
+
+    setSelectedProgramacion(programacion);
+  };
+
+  const renderScheduledRoutesSection = () => (
+    <section className="py-20 px-4 bg-gradient-to-br from-green-50 to-emerald-50">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-10">
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <Badge className="bg-green-600 text-white">Salidas confirmadas</Badge>
+              <Badge variant="outline" className="border-green-300 text-green-700">
+                {upcomingProgramaciones.length} disponibles
+              </Badge>
+            </div>
+            <h2 className="text-4xl mb-2 text-gray-800">Carrusel de rutas programadas</h2>
+            <p className="text-lg text-gray-600">Salidas públicas, no personalizadas y con cupos disponibles.</p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => onViewChange('routes')}
+            className="border-green-300 hover:bg-green-50"
+          >
+            Ver catálogo
+            <ArrowRight className="ml-2 w-4 h-4" />
+          </Button>
+        </div>
+
+        {upcomingProgramaciones.length > 0 ? (
+          <div className="relative px-12">
+            <Carousel opts={{ align: 'start' }} className="w-full">
+              <CarouselContent>
+                {upcomingProgramaciones.map((p) => {
+                  const ruta = routeById.get(Number(p.id_ruta));
+                  const nombre = ruta?.nombre || p.ruta_nombre || `Ruta ${p.id_ruta}`;
+                  const imagen = ruta?.imagen_url || FALLBACK_ROUTE_IMAGE;
+                  const ubicacion = ruta?.ubicacion || '—';
+                  const dificultad = ruta?.dificultad || '—';
+                  const cuposDisponibles = Number(p.cupos_disponibles ?? 0);
+                  const cuposTotales = Number(p.cupos_totales ?? 0);
+                  const precio =
+                    p.precio_programacion != null
+                      ? Number(p.precio_programacion)
+                      : ruta?.precio_base != null
+                        ? Number(ruta.precio_base)
+                        : null;
+
+                  return (
+                    <CarouselItem key={p.id_programacion} className="md:basis-1/2 lg:basis-1/3">
+                      <Card className="overflow-hidden bg-white shadow-xl h-full border-green-200 hover:shadow-2xl transition-all duration-300">
+                        <div className="relative h-48">
+                          <ImageWithFallback
+                            src={imagen}
+                            alt={nombre}
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
+                          <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-2">
+                            <Badge className="bg-green-600 text-white">
+                              {formatDate(p.fecha_salida)}
+                            </Badge>
+                            <Badge variant="outline" className="bg-white/90 border-white text-green-800">
+                              {cuposDisponibles} cupos
+                            </Badge>
+                          </div>
+                          <div className="absolute bottom-4 left-4 right-4">
+                            <p className="text-white/85 text-xs uppercase tracking-wide">Ruta programada</p>
+                            <h3 className="text-xl text-white leading-snug">{nombre}</h3>
+                          </div>
+                        </div>
+                        <CardContent className="p-5 flex flex-col gap-3">
+                          <div>
+                            <p className="text-sm text-gray-600 mt-1 flex items-center gap-1">
+                              <MapPin className="w-4 h-4 text-green-600" />
+                              {ubicacion}
+                            </p>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3 text-sm">
+                            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 flex items-center gap-2 text-gray-700">
+                              <Clock className="w-4 h-4 text-green-600" />
+                              {formatDate(p.fecha_salida)}
+                            </div>
+                            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 flex items-center gap-2 text-gray-700">
+                              <TrendingUp className="w-4 h-4 text-green-600" />
+                              {dificultad}
+                            </div>
+                            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-gray-700">
+                              <span className="text-xs text-gray-500 block">Horario</span>
+                              <span className="font-medium">{p.hora_salida || 'Por definir'}</span>
+                            </div>
+                            <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-gray-700">
+                              <span className="text-xs text-gray-500 block">Capacidad</span>
+                              <span className="font-medium">{cuposDisponibles}/{cuposTotales || '—'} libres</span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
+                            <div className="text-green-700">
+                              <span className="text-lg">
+                                {precio == null || Number.isNaN(precio) ? 'Consultar' : `$${precio.toLocaleString()}`}
+                              </span>
+                              <span className="text-xs text-gray-500 ml-2">por persona</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => onViewChange('route-detail', String(p.id_ruta))}
+                                className="border-green-300 text-green-700 hover:bg-green-50"
+                              >
+                                Ver ruta
+                                <ChevronRight className="ml-2 w-4 h-4" />
+                              </Button>
+                              <Button
+                                onClick={() => handleProgrammedBookingClick(p)}
+                                className="bg-green-600 hover:bg-green-700"
+                              >
+                                Reservar cupo
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </CarouselItem>
+                  );
+                })}
+              </CarouselContent>
+              <CarouselPrevious className="border-green-300" />
+              <CarouselNext className="border-green-300" />
+            </Carousel>
+          </div>
+        ) : (
+          <Card className="border-dashed border-green-200 bg-white/80">
+            <CardContent className="py-10 text-center text-gray-600">
+              Aun no hay rutas programadas visibles para el home.
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </section>
+  );
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
@@ -59,6 +334,16 @@ export function HomePage({ onViewChange }: HomePageProps) {
         </div>
       </section>
 
+      {renderScheduledRoutesSection()}
+
+      <ProgrammedRouteBookingModal
+        isOpen={Boolean(selectedProgramacion)}
+        onClose={() => setSelectedProgramacion(null)}
+        programacion={selectedProgramacion}
+        ruta={selectedProgramacion ? routeById.get(Number(selectedProgramacion.id_ruta)) ?? null : null}
+        onSuccess={loadProgramaciones}
+      />
+
       {/* Featured Route Section */}
       {featuredRoute && (
         <section className="py-20 px-4">
@@ -72,49 +357,51 @@ export function HomePage({ onViewChange }: HomePageProps) {
               <div className="grid md:grid-cols-2 gap-0">
                 <div className="relative h-64 md:h-full">
                   <ImageWithFallback
-                    src={featuredRoute.image}
-                    alt={featuredRoute.name}
+                    src={featuredRoute.imagen_url || FALLBACK_ROUTE_IMAGE}
+                    alt={featuredRoute.nombre}
                     className="w-full h-full object-cover"
                   />
                   <Badge className="absolute top-4 left-4 bg-green-600 text-white">
-                    Destacado
+                    {featuredRoute.destacado ? 'Destacado' : 'Recomendado'}
                   </Badge>
                 </div>
-                
+
                 <CardContent className="p-8 flex flex-col justify-center">
-                  <h3 className="text-3xl mb-4 text-gray-800">{featuredRoute.name}</h3>
+                  <h3 className="text-3xl mb-4 text-gray-800">{featuredRoute.nombre}</h3>
                   <p className="text-gray-600 mb-6 text-lg leading-relaxed">
-                    {featuredRoute.description}
+                    {featuredRoute.descripcion || '—'}
                   </p>
-                  
+
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     <div className="flex items-center space-x-2">
                       <Clock className="w-5 h-5 text-green-600" />
-                      <span className="text-gray-700">{featuredRoute.duration}</span>
+                      <span className="text-gray-700">{formatDurationDays(featuredRoute.duracion_dias)}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       <Users className="w-5 h-5 text-green-600" />
-                      <span className="text-gray-700">Máx. {featuredRoute.maxGroupSize}</span>
+                      <span className="text-gray-700">Máx. {featuredRoute.capacidad_maxima ?? '—'}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       <MapPin className="w-5 h-5 text-green-600" />
-                      <span className="text-gray-700">{featuredRoute.location}</span>
+                      <span className="text-gray-700">{featuredRoute.ubicacion ?? '—'}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       <Star className="w-5 h-5 text-green-600" />
-                      <span className="text-gray-700">{featuredRoute.difficulty}</span>
+                      <span className="text-gray-700">{featuredRoute.dificultad ?? '—'}</span>
                     </div>
                   </div>
-                  
+
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="text-3xl text-green-600">
-                        ${featuredRoute.price.toLocaleString()}
+                        {featuredRoute.precio_base == null
+                          ? 'Consultar'
+                          : `$${Number(featuredRoute.precio_base).toLocaleString()}`}
                       </span>
                       <span className="text-gray-500 ml-2">por persona</span>
                     </div>
-                    <Button 
-                      onClick={() => onViewChange('route-detail', featuredRoute.id)}
+                    <Button
+                      onClick={() => onViewChange('route-detail', String(featuredRoute.id_ruta))}
                       className="bg-green-600 hover:bg-green-700"
                     >
                       Ver Detalles

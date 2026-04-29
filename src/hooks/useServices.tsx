@@ -64,7 +64,10 @@ interface ServicesContextType {
 
 const ServicesContext = createContext<ServicesContextType | undefined>(undefined);
 
-export const ServicesProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const ServicesProvider: React.FC<{ children: React.ReactNode; enabled?: boolean }> = ({
+  children,
+  enabled = true,
+}) => {
   const [services, setServices] = useState<Service[]>([]);
 
   const refreshServices = async () => {
@@ -78,8 +81,9 @@ export const ServicesProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   useEffect(() => {
+    if (!enabled) return;
     void refreshServices();
-  }, []);
+  }, [enabled]);
 
   const getServiceById = (id: string) => {
     return services.find(service => service.id === id);

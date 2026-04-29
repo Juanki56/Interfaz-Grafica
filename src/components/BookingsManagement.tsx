@@ -20,6 +20,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Switch } from './ui/switch';
+import { Checkbox } from './ui/checkbox';
 import {
   Table,
   TableBody,
@@ -58,6 +59,25 @@ import { toast } from 'sonner';
 import { reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
+
+const normalizeReservationStatus = (status?: string | null) => {
+  const normalized = String(status || '').trim();
+  if (['Pendiente', 'Confirmada', 'Cancelada', 'Completada'].includes(normalized)) {
+    return normalized;
+  }
+  return 'Pendiente';
+};
+
+const normalizePaymentStatus = (status?: string | null) => {
+  const normalized = String(status || '').trim();
+  if (['Pendiente', 'Parcial', 'Pagado', 'Cancelado'].includes(normalized)) {
+    return normalized;
+  }
+  return 'Pendiente';
+};
+
+const canReservationBeConfirmed = (paymentStatus?: string | null) =>
+  ['Parcial', 'Pagado'].includes(normalizePaymentStatus(paymentStatus));
 
 export function BookingsManagement() {
   const permisos = usePermissions();
@@ -129,10 +149,13 @@ export function BookingsManagement() {
         participants: Number(r.numero_participantes ?? 1),
         adults: Number(r.numero_participantes ?? 1),
         children: 0,
-        status: r.estado || 'Pendiente',
-        paymentStatus: 'Pendiente',
-        paymentMethod: 'Por definir',
+        status: normalizeReservationStatus(r.estado),
+        paymentStatus: normalizePaymentStatus(r.estado_pago),
+        paymentMethod: r.metodo_pago || 'Por definir',
         total: Number(r.total ?? r.monto_total ?? 0),
+        totalAmount: Number(r.total ?? r.monto_total ?? 0),
+        paidAmount: Number(r.monto_pagado ?? 0),
+        pendingAmount: Number(r.saldo_pendiente ?? r.total ?? r.monto_total ?? 0),
         subtotal: Number(r.total ?? r.monto_total ?? 0),
         discount: 0,
         checkIn: '08:00',
@@ -205,6 +228,7 @@ export function BookingsManagement() {
     routeId: '',
     farmId: '',
     serviceType: 'ruta' as 'ruta' | 'finca',
+    programacionId: '',
     services: [] as string[],
     participants: 1,
     adults: 1,
@@ -213,6 +237,143 @@ export function BookingsManagement() {
     status: 'Pendiente',
     specialRequests: ''
   });
+
+  const [formRutaDetalle, setFormRutaDetalle] = useState<any>(null);
+  const [formRutaOpcionalesSeleccion, setFormRutaOpcionalesSeleccion] = useState<Record<number, number>>({});
+  const [isLoadingRutaDetalle, setIsLoadingRutaDetalle] = useState(false);
+
+  const [reservaDetalle, setReservaDetalle] = useState<any>(null);
+  const [detalleRuta, setDetalleRuta] = useState<any>(null);
+  const [detalleOpcionalesSeleccion, setDetalleOpcionalesSeleccion] = useState<Record<number, number>>({});
+  const [detalleProgramacionId, setDetalleProgramacionId] = useState('');
+  const [isLoadingDetalle, setIsLoadingDetalle] = useState(false);
+
+  const resolveRouteIdFromReservaDetalle = (payload: any): number | null => {
+    const candidates = [
+      payload?.id_ruta,
+      payload?.ruta?.id_ruta,
+      payload?.programacion?.id_ruta,
+      payload?.programacion?.ruta?.id_ruta,
+      payload?.programaciones?.[0]?.id_ruta,
+      payload?.programaciones?.[0]?.ruta?.id_ruta,
+      payload?.detalle_programacion?.id_ruta,
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+    return null;
+  };
+
+  const resolveProgramacionIdFromReservaDetalle = (payload: any): number | null => {
+    const candidates = [
+      payload?.id_programacion,
+      payload?.programacion?.id_programacion,
+      payload?.programaciones?.[0]?.id_programacion,
+      payload?.detalle_programacion?.id_programacion,
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+    return null;
+  };
+
+  const obtenerIdReservaDesdeRespuesta = (payload: any): number | null => {
+    const candidates = [
+      payload?.id_reserva,
+      payload?.id,
+      payload?.data?.id_reserva,
+      payload?.data?.id,
+      payload?.reserva?.id_reserva,
+      payload?.reserva?.id,
+    ];
+    for (const candidate of candidates) {
+      const value = Number(candidate);
+      if (Number.isFinite(value) && value > 0) return value;
+    }
+    return null;
+  };
+
+  const cargarRutaDetalleParaFormulario = async (idRuta: number) => {
+    try {
+      setIsLoadingRutaDetalle(true);
+      const ruta = await rutasAPI.getById(idRuta);
+      setFormRutaDetalle(ruta);
+      setFormRutaOpcionalesSeleccion((prev) => {
+        const next: Record<number, number> = {};
+        const opcionales = Array.isArray(ruta?.servicios_opcionales) ? ruta.servicios_opcionales : [];
+        for (const so of opcionales) {
+          const idServicio = Number(so?.id_servicio);
+          if (!Number.isFinite(idServicio) || idServicio <= 0) continue;
+          next[idServicio] = prev[idServicio] ?? 0;
+        }
+        return next;
+      });
+    } catch (error) {
+      console.error('Error al cargar detalle de ruta:', error);
+      setFormRutaDetalle(null);
+      setFormRutaOpcionalesSeleccion({});
+    } finally {
+      setIsLoadingRutaDetalle(false);
+    }
+  };
+
+  const cargarDetalleReserva = async (idReserva: number) => {
+    try {
+      setIsLoadingDetalle(true);
+      const detalle = await reservasAPI.getById(idReserva);
+      setReservaDetalle(detalle);
+
+      const idProgramacion = resolveProgramacionIdFromReservaDetalle(detalle);
+      setDetalleProgramacionId(idProgramacion ? String(idProgramacion) : '');
+
+      const idRuta = resolveRouteIdFromReservaDetalle(detalle);
+      if (!idRuta) {
+        setDetalleRuta(null);
+        setDetalleOpcionalesSeleccion({});
+        return;
+      }
+
+      const ruta = await rutasAPI.getById(idRuta);
+      setDetalleRuta(ruta);
+      setDetalleOpcionalesSeleccion((prev) => {
+        const next: Record<number, number> = {};
+        const opcionales = Array.isArray(ruta?.servicios_opcionales) ? ruta.servicios_opcionales : [];
+        for (const so of opcionales) {
+          const idServicio = Number(so?.id_servicio);
+          if (!Number.isFinite(idServicio) || idServicio <= 0) continue;
+          next[idServicio] = prev[idServicio] ?? 0;
+        }
+        return next;
+      });
+    } catch (error) {
+      console.error('Error al cargar detalle de reserva:', error);
+      setReservaDetalle(null);
+      setDetalleRuta(null);
+      setDetalleOpcionalesSeleccion({});
+    } finally {
+      setIsLoadingDetalle(false);
+    }
+  };
+
+  useEffect(() => {
+    const shouldLoadRoute = formData.serviceType === 'ruta' && Number(formData.routeId) > 0;
+    if (!shouldLoadRoute) {
+      setFormRutaDetalle(null);
+      setFormRutaOpcionalesSeleccion({});
+      return;
+    }
+
+    void cargarRutaDetalleParaFormulario(Number(formData.routeId));
+  }, [formData.serviceType, formData.routeId]);
+
+  useEffect(() => {
+    if (!isDetailModalOpen) return;
+    const idReserva = Number(selectedBooking?.id);
+    if (!Number.isFinite(idReserva) || idReserva <= 0) return;
+    void cargarDetalleReserva(idReserva);
+  }, [isDetailModalOpen, selectedBooking?.id]);
 
   const [, setProofFile] = useState<File | null>(null);
   const [proofFileName, setProofFileName] = useState('');
@@ -250,6 +411,27 @@ export function BookingsManagement() {
     return (
       <Badge variant={variants[status] || 'secondary'} className={`${colors[status]} text-white`}>
         {status}
+      </Badge>
+    );
+  };
+
+  const getPaymentStatusBadge = (status: string) => {
+    const normalized = normalizePaymentStatus(status);
+    const variants: { [key: string]: 'default' | 'secondary' | 'destructive' | 'outline' } = {
+      'Pagado': 'default',
+      'Parcial': 'secondary',
+      'Pendiente': 'outline',
+      'Cancelado': 'destructive',
+    };
+    const colors: { [key: string]: string } = {
+      'Pagado': 'bg-green-500',
+      'Parcial': 'bg-blue-500',
+      'Pendiente': 'bg-yellow-500',
+      'Cancelado': 'bg-red-500',
+    };
+    return (
+      <Badge variant={variants[normalized] || 'outline'} className={`${colors[normalized]} text-white`}>
+        {normalized}
       </Badge>
     );
   };
@@ -295,19 +477,68 @@ export function BookingsManagement() {
       return;
     }
 
+    if (formData.serviceType === 'ruta') {
+      if (!formData.routeId) {
+        toast.error('Selecciona una ruta');
+        return;
+      }
+
+      const idProgramacion = Number(formData.programacionId);
+      if (!Number.isFinite(idProgramacion) || idProgramacion <= 0) {
+        toast.error('Ingresa un ID de programación válido para asociar la ruta');
+        return;
+      }
+    }
+
+    if (formData.serviceType === 'finca' && !formData.farmId) {
+      toast.error('Selecciona una finca');
+      return;
+    }
+
     try {
       setIsLoading(true);
       console.log('➕ Creando reserva:', formData);
       
+      const numeroParticipantes = Number(formData.adults + formData.children) || 1;
       const nuevaReserva = await reservasAPI.create({
         id_cliente: parseInt(formData.clientId),
         fecha_reserva: formData.bookingDate,
-        estado: formData.status,
+        estado: 'Pendiente',
         total: Number(formData.total) || 0,
-        notas: formData.specialRequests || ''
+        notas: formData.specialRequests || '',
+        numero_participantes: numeroParticipantes,
+        tipo_servicio: formData.serviceType === 'ruta' ? 'Ruta' : 'Finca',
       });
       
       console.log('✅ Reserva creada:', nuevaReserva);
+
+      const idReservaCreada = obtenerIdReservaDesdeRespuesta(nuevaReserva);
+      if (!idReservaCreada) {
+        toast.warning('Reserva creada, pero no se pudo obtener el ID para completar la asociación de ruta/servicios.');
+      } else if (formData.serviceType === 'ruta') {
+        try {
+          await reservasAPI.agregarProgramacion(idReservaCreada, Number(formData.programacionId));
+
+          const opcionalesSeleccionados = Object.entries(formRutaOpcionalesSeleccion)
+            .map(([id_servicio, cantidad]) => ({
+              id_servicio: Number(id_servicio),
+              cantidad: Number(cantidad),
+            }))
+            .filter((item) => Number.isFinite(item.id_servicio) && item.id_servicio > 0 && item.cantidad > 0);
+
+          for (const item of opcionalesSeleccionados) {
+            await reservasAPI.agregarServicio(idReservaCreada, {
+              id_servicio: item.id_servicio,
+              cantidad: item.cantidad,
+            });
+          }
+        } catch (error: any) {
+          console.error('❌ Error al asociar programación/servicios a la reserva:', error);
+          toast.error(error?.message || 'Reserva creada, pero falló la asociación de la ruta/servicios.');
+          toast.info('Puedes abrir la reserva y asignar la programación desde el detalle.');
+        }
+      }
+
       toast.success('Reserva creada correctamente');
       setIsCreateModalOpen(false);
       
@@ -319,6 +550,7 @@ export function BookingsManagement() {
         routeId: '',
         farmId: '',
         serviceType: 'ruta',
+        programacionId: '',
         services: [],
         participants: 1,
         adults: 1,
@@ -327,6 +559,8 @@ export function BookingsManagement() {
         status: 'Pendiente',
         specialRequests: ''
       });
+      setFormRutaDetalle(null);
+      setFormRutaOpcionalesSeleccion({});
       setProofFile(null);
       setProofFileName('');
       
@@ -357,6 +591,11 @@ export function BookingsManagement() {
       setIsLoading(true);
       const reservaId = selectedBooking?.id?.toString();
       console.log('🔄 Actualizando reserva:', reservaId, formData);
+
+      if (formData.status === 'Confirmada' && !canReservationBeConfirmed(selectedBooking?.paymentStatus)) {
+        toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
+        return;
+      }
       
       await reservasAPI.update(parseInt(reservaId), {
         id_cliente: parseInt(formData.clientId),
@@ -381,6 +620,7 @@ export function BookingsManagement() {
         routeId: '',
         farmId: '',
         serviceType: 'ruta',
+        programacionId: '',
         services: [],
         participants: 1,
         adults: 1,
@@ -413,6 +653,12 @@ export function BookingsManagement() {
 
     try {
       const reservaId = bookingId.toString();
+      const bookingActual = bookings.find((booking) => String(booking.id) === reservaId);
+
+      if (newStatus === 'Confirmada' && !canReservationBeConfirmed(bookingActual?.paymentStatus)) {
+        toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
+        return;
+      }
       
       // Si el nuevo estado es "Cancelada", llamar al endpoint de cancelar
       if (newStatus === 'Cancelada') {
@@ -620,23 +866,14 @@ export function BookingsManagement() {
                             const newStatus = checked ? 'Confirmada' : 'Pendiente';
                             void handleChangeStatus(String(booking.id), newStatus);
                           }}
-                          disabled={!canEditReservas}
+                          disabled={!canEditReservas || (booking.status !== 'Confirmada' && !canReservationBeConfirmed(booking.paymentStatus))}
                           className={booking.status === 'Confirmada' ? 'bg-green-600' : 'bg-gray-300'}
                         />
                         {getStatusBadge(booking.status)}
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge 
-                        variant={booking.paymentStatus === 'Pagado' ? 'default' : booking.paymentStatus === 'Abonado' ? 'secondary' : 'destructive'}
-                        className={
-                          booking.paymentStatus === 'Pagado' ? 'bg-green-600' : 
-                          booking.paymentStatus === 'Abonado' ? 'bg-blue-600' : 
-                          'bg-red-600'
-                        }
-                      >
-                        {booking.paymentStatus}
-                      </Badge>
+                      {getPaymentStatusBadge(booking.paymentStatus)}
                     </TableCell>
                     <TableCell>
                       <div className="flex space-x-2">
@@ -661,6 +898,7 @@ export function BookingsManagement() {
                                 routeId: '',
                                 farmId: '',
                                 serviceType: 'ruta',
+                                programacionId: '',
                                 services: [],
                                 participants: booking.participants || 1,
                                 adults: booking.adults || 1,
@@ -821,7 +1059,7 @@ export function BookingsManagement() {
                       value={formData.serviceType}
                       onValueChange={(value: string) => {
                         const next = value === 'finca' ? 'finca' : 'ruta';
-                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '' });
+                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '', programacionId: '' });
                       }}
                     >
                       <SelectTrigger id="create-serviceType" className="bg-gray-50">
@@ -855,6 +1093,24 @@ export function BookingsManagement() {
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {formData.serviceType === 'ruta' && (
+                    <div>
+                      <Label htmlFor="create-programacionId">ID de programación *</Label>
+                      <Input
+                        id="create-programacionId"
+                        type="number"
+                        min="1"
+                        value={formData.programacionId}
+                        onChange={(e) => setFormData({ ...formData, programacionId: e.target.value })}
+                        className="bg-gray-50"
+                        placeholder="Ej: 12"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Se usa para asociar la ruta real y cargar los servicios predefinidos automáticamente.
+                      </p>
+                    </div>
+                  )}
                   <div>
                     <Label htmlFor="create-bookingDate">Fecha de reserva *</Label>
                     <Input
@@ -882,6 +1138,67 @@ export function BookingsManagement() {
                     />
                   </div>
                 </div>
+
+                {formData.serviceType === 'ruta' && (
+                  <div className="mt-4">
+                    <Label className="text-gray-700">Servicios opcionales disponibles (según ruta)</Label>
+                    {isLoadingRutaDetalle ? (
+                      <p className="text-sm text-gray-500 mt-2">Cargando servicios opcionales...</p>
+                    ) : Array.isArray(formRutaDetalle?.servicios_opcionales) && formRutaDetalle.servicios_opcionales.length > 0 ? (
+                      <div className="space-y-2 mt-2">
+                        {formRutaDetalle.servicios_opcionales.map((so: any) => {
+                          const idServicio = Number(so?.id_servicio);
+                          if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+                          const cantidadSeleccionada = Number(formRutaOpcionalesSeleccion[idServicio] ?? 0);
+                          const checked = cantidadSeleccionada > 0;
+                          const cantidadDefault = Number(so?.cantidad_default ?? 1) || 1;
+                          const nombreServicio = so?.servicio?.nombre ?? `Servicio #${idServicio}`;
+                          const precio = so?.servicio?.precio;
+
+                          return (
+                            <div key={String(so?.id_ruta_servicio_opcional ?? idServicio)} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-gray-50 p-3 rounded-lg">
+                              <div className="flex items-start gap-3">
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(nextChecked) => {
+                                    const willCheck = Boolean(nextChecked);
+                                    setFormRutaOpcionalesSeleccion((prev) => ({
+                                      ...prev,
+                                      [idServicio]: willCheck ? (prev[idServicio] > 0 ? prev[idServicio] : cantidadDefault) : 0,
+                                    }));
+                                  }}
+                                />
+                                <div>
+                                  <p className="font-medium text-gray-900">{nombreServicio}</p>
+                                  <p className="text-xs text-gray-500">
+                                    ID: {idServicio}{typeof precio === 'number' ? ` • $${precio.toLocaleString()}` : ''}
+                                  </p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs text-gray-600">Cantidad</Label>
+                                <Input
+                                  type="number"
+                                  min="1"
+                                  value={checked ? cantidadSeleccionada : ''}
+                                  disabled={!checked}
+                                  onChange={(e) => {
+                                    const nextQty = Math.max(1, Number(e.target.value) || 1);
+                                    setFormRutaOpcionalesSeleccion((prev) => ({ ...prev, [idServicio]: nextQty }));
+                                  }}
+                                  className="w-24 bg-white"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500 mt-2">Esta ruta no tiene servicios opcionales configurados.</p>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -959,16 +1276,17 @@ export function BookingsManagement() {
                   </div>
                   <div>
                     <Label htmlFor="create-paymentStatus">Estado de pago *</Label>
-                    <Select defaultValue="pendiente">
+                    <Select value="Pendiente" disabled>
                       <SelectTrigger id="create-paymentStatus" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="pagado">Pagado</SelectItem>
-                        <SelectItem value="pendiente">Pendiente</SelectItem>
-                        <SelectItem value="reembolsado">Reembolsado</SelectItem>
+                        <SelectItem value="Pendiente">Pendiente</SelectItem>
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Se actualiza desde ventas y abonos cuando exista la venta asociada.
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="create-paymentMethod">Método de pago</Label>
@@ -1049,17 +1367,17 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 gap-4">
                   <div>
                     <Label htmlFor="create-status">Estado actual *</Label>
-                    <Select value={formData.status} onValueChange={(value: string) => setFormData({ ...formData, status: value })}>
+                    <Select value="Pendiente" disabled>
                       <SelectTrigger id="create-status" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="Confirmada">Confirmada</SelectItem>
                         <SelectItem value="Pendiente">Pendiente</SelectItem>
-                        <SelectItem value="Cancelada">Cancelada</SelectItem>
-                        <SelectItem value="Reprogramada">Reprogramada</SelectItem>
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Toda reserva nueva inicia en pendiente y se confirma cuando el pago respaldado lo permita.
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="create-observations">Observaciones internas</Label>
@@ -1341,15 +1659,8 @@ export function BookingsManagement() {
                   <div>
                     <Label htmlFor="edit-paymentStatus">Estado de pago *</Label>
                     <Select 
-                      value={selectedBooking?.paymentStatus || 'Pendiente'}
-                      onValueChange={(newStatus: string) => {
-                        const updatedBookings = bookings.map(b =>
-                          b.id === selectedBooking?.id ? { ...b, paymentStatus: newStatus } : b
-                        );
-                        setBookings(updatedBookings);
-                        setSelectedBooking({ ...selectedBooking, paymentStatus: newStatus });
-                        toast.success(`Estado de pago cambiado a: ${newStatus}`);
-                      }}
+                      value={normalizePaymentStatus(selectedBooking?.paymentStatus)}
+                      disabled
                     >
                       <SelectTrigger id="edit-paymentStatus" className="bg-gray-50">
                         <SelectValue />
@@ -1358,14 +1669,20 @@ export function BookingsManagement() {
                         <SelectItem value="Pagado">
                           <span className="text-green-600 font-medium">Pagado</span>
                         </SelectItem>
-                        <SelectItem value="Abonado">
-                          <span className="text-blue-600 font-medium">Abonado</span>
+                        <SelectItem value="Parcial">
+                          <span className="text-blue-600 font-medium">Parcial</span>
+                        </SelectItem>
+                        <SelectItem value="Pendiente">
+                          <span className="text-yellow-600 font-medium">Pendiente</span>
                         </SelectItem>
                         <SelectItem value="Cancelado">
                           <span className="text-red-600 font-medium">Cancelado</span>
                         </SelectItem>
                       </SelectContent>
                     </Select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Este estado se administra desde ventas y abonos, no desde reservas.
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="edit-paymentMethod">Método de pago</Label>
@@ -1446,7 +1763,16 @@ export function BookingsManagement() {
                 <div className="grid grid-cols-1 gap-4">
                   <div>
                     <Label htmlFor="edit-status">Estado actual *</Label>
-                    <Select value={formData.status} onValueChange={(value: string) => setFormData({ ...formData, status: value })}>
+                    <Select
+                      value={formData.status}
+                      onValueChange={(value: string) => {
+                        if (value === 'Confirmada' && !canReservationBeConfirmed(selectedBooking?.paymentStatus)) {
+                          toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
+                          return;
+                        }
+                        setFormData({ ...formData, status: value });
+                      }}
+                    >
                       <SelectTrigger id="edit-status" className="bg-gray-50">
                         <SelectValue />
                       </SelectTrigger>
@@ -1454,7 +1780,7 @@ export function BookingsManagement() {
                         <SelectItem value="Confirmada">Confirmada</SelectItem>
                         <SelectItem value="Pendiente">Pendiente</SelectItem>
                         <SelectItem value="Cancelada">Cancelada</SelectItem>
-                        <SelectItem value="Reprogramada">Reprogramada</SelectItem>
+                        <SelectItem value="Completada">Completada</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1541,6 +1867,186 @@ export function BookingsManagement() {
           </DialogHeader>
           {selectedBooking && (
             <div className="space-y-6">
+              <div className="bg-white border border-green-200 p-4 rounded-lg">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h4 className="font-medium text-green-800">Ruta / Programación</h4>
+                    <p className="text-sm text-gray-600">
+                      {detalleRuta?.nombre ? `Ruta: ${detalleRuta.nombre}` : 'Ruta: (sin asignar / no disponible)'}
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="border-green-600 text-green-700 hover:bg-green-50"
+                    onClick={() => {
+                      const idReserva = Number(selectedBooking?.id);
+                      if (!Number.isFinite(idReserva) || idReserva <= 0) return;
+                      void cargarDetalleReserva(idReserva);
+                    }}
+                    disabled={isLoadingDetalle}
+                  >
+                    {isLoadingDetalle ? 'Actualizando...' : 'Actualizar'}
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                  <div>
+                    <p className="text-sm text-gray-600">ID Reserva</p>
+                    <p className="font-medium">{selectedBooking.id}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">ID Programación</p>
+                    <p className="font-medium">{detalleProgramacionId || '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">ID Ruta</p>
+                    <p className="font-medium">{String(resolveRouteIdFromReservaDetalle(reservaDetalle) || '—')}</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="md:col-span-2">
+                    <Label htmlFor="detalle-programacionId">Asignar/Actualizar programación</Label>
+                    <Input
+                      id="detalle-programacionId"
+                      type="number"
+                      min="1"
+                      placeholder="Ej: 12"
+                      value={detalleProgramacionId}
+                      onChange={(e) => setDetalleProgramacionId(e.target.value)}
+                      className="bg-gray-50"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button
+                      className="w-full bg-green-600 hover:bg-green-700"
+                      onClick={async () => {
+                        const idReserva = Number(selectedBooking?.id);
+                        const idProgramacion = Number(detalleProgramacionId);
+                        if (!Number.isFinite(idReserva) || idReserva <= 0) {
+                          toast.error('Reserva inválida');
+                          return;
+                        }
+                        if (!Number.isFinite(idProgramacion) || idProgramacion <= 0) {
+                          toast.error('ID de programación inválido');
+                          return;
+                        }
+                        try {
+                          await reservasAPI.agregarProgramacion(idReserva, idProgramacion);
+                          toast.success('Programación asignada correctamente');
+                          await cargarDetalleReserva(idReserva);
+                        } catch (error: any) {
+                          toast.error(error?.message || 'No se pudo asignar la programación');
+                        }
+                      }}
+                      disabled={isLoadingDetalle}
+                    >
+                      Asociar
+                    </Button>
+                  </div>
+                </div>
+
+                {Array.isArray(detalleRuta?.servicios_opcionales) && detalleRuta.servicios_opcionales.length > 0 && (
+                  <div className="mt-6">
+                    <Label className="text-gray-700">Servicios opcionales disponibles</Label>
+                    <div className="space-y-2 mt-2">
+                      {detalleRuta.servicios_opcionales.map((so: any) => {
+                        const idServicio = Number(so?.id_servicio);
+                        if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+                        const cantidadSeleccionada = Number(detalleOpcionalesSeleccion[idServicio] ?? 0);
+                        const checked = cantidadSeleccionada > 0;
+                        const cantidadDefault = Number(so?.cantidad_default ?? 1) || 1;
+                        const nombreServicio = so?.servicio?.nombre ?? `Servicio #${idServicio}`;
+                        const precio = so?.servicio?.precio;
+
+                        return (
+                          <div key={String(so?.id_ruta_servicio_opcional ?? idServicio)} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-gray-50 p-3 rounded-lg">
+                            <div className="flex items-start gap-3">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(nextChecked) => {
+                                  const willCheck = Boolean(nextChecked);
+                                  setDetalleOpcionalesSeleccion((prev) => ({
+                                    ...prev,
+                                    [idServicio]: willCheck ? (prev[idServicio] > 0 ? prev[idServicio] : cantidadDefault) : 0,
+                                  }));
+                                }}
+                              />
+                              <div>
+                                <p className="font-medium text-gray-900">{nombreServicio}</p>
+                                <p className="text-xs text-gray-500">
+                                  ID: {idServicio}{typeof precio === 'number' ? ` • $${precio.toLocaleString()}` : ''}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs text-gray-600">Cantidad</Label>
+                              <Input
+                                type="number"
+                                min="1"
+                                value={checked ? cantidadSeleccionada : ''}
+                                disabled={!checked}
+                                onChange={(e) => {
+                                  const nextQty = Math.max(1, Number(e.target.value) || 1);
+                                  setDetalleOpcionalesSeleccion((prev) => ({ ...prev, [idServicio]: nextQty }));
+                                }}
+                                className="w-24 bg-white"
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex justify-end mt-3">
+                      <Button
+                        className="bg-green-600 hover:bg-green-700"
+                        disabled={isLoadingDetalle}
+                        onClick={async () => {
+                          const idReserva = Number(selectedBooking?.id);
+                          if (!Number.isFinite(idReserva) || idReserva <= 0) {
+                            toast.error('Reserva inválida');
+                            return;
+                          }
+                          try {
+                            const opcionalesSeleccionados = Object.entries(detalleOpcionalesSeleccion)
+                              .map(([id_servicio, cantidad]) => ({
+                                id_servicio: Number(id_servicio),
+                                cantidad: Number(cantidad),
+                              }))
+                              .filter((item) => Number.isFinite(item.id_servicio) && item.id_servicio > 0 && item.cantidad > 0);
+
+                            if (opcionalesSeleccionados.length === 0) {
+                              toast.info('Selecciona al menos un servicio opcional');
+                              return;
+                            }
+
+                            for (const item of opcionalesSeleccionados) {
+                              await reservasAPI.agregarServicio(idReserva, {
+                                id_servicio: item.id_servicio,
+                                cantidad: item.cantidad,
+                              });
+                            }
+
+                            toast.success('Servicios opcionales agregados');
+                            setDetalleOpcionalesSeleccion({});
+                            await cargarDetalleReserva(idReserva);
+                          } catch (error: any) {
+                            toast.error(error?.message || 'No se pudieron agregar los servicios opcionales');
+                          }
+                        }}
+                      >
+                        Agregar opcionales
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {isLoadingDetalle && (
+                  <p className="text-sm text-gray-500 mt-3">Cargando detalle de reserva...</p>
+                )}
+              </div>
+
               {/* Información del cliente */}
               <div className="bg-green-50 p-4 rounded-lg">
                 <h4 className="font-medium text-green-800 mb-3">Información del Cliente</h4>
@@ -1612,9 +2118,7 @@ export function BookingsManagement() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Estado de Pago</span>
-                    <Badge variant={selectedBooking.paymentStatus === 'Pagado' ? 'default' : 'outline'}>
-                      {selectedBooking.paymentStatus}
-                    </Badge>
+                    {getPaymentStatusBadge(selectedBooking.paymentStatus)}
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Método de Pago</span>

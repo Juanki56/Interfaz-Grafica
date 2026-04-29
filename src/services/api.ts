@@ -74,6 +74,7 @@ export interface Empleado {
 export interface Reserva {
   id_reserva?: number;
   id?: number;
+  id_venta?: number | null;
 
   id_cliente: number;
   fecha_reserva: string;
@@ -86,18 +87,42 @@ export interface Reserva {
   numero_participantes?: number | null;
   tipo_servicio?: string | null;
   notas?: string | null;
+  estado_pago?: string | null;
+  monto_pagado?: number | string | null;
+  saldo_pendiente?: number | string | null;
+  metodo_pago?: string | null;
 
   // Campos de JOIN (si el backend devuelve vista enriquecida)
   cliente_nombre?: string | null;
   cliente_apellido?: string | null;
   cliente_email?: string | null;
   cliente_telefono?: string | null;
+
+  // Detalles opcionales (según implementación backend)
+  id_programacion?: number | null;
+  id_ruta?: number | null;
+  programacion?: any;
+  programaciones?: any[];
+  servicios?: any[];
+}
+
+export interface AcompananteReservaPayload {
+  id_cliente?: number | null;
+  nombre: string;
+  apellido: string;
+  tipo_documento?: string | null;
+  numero_documento?: string | null;
+  telefono?: string | null;
+  fecha_nacimiento?: string | null;
 }
 
 export interface Ruta {
   id_ruta: number;
   nombre: string;
   descripcion?: string | null;        // text NULL en BD
+  ubicacion?: string | null;          // text/varchar NULL (según BD)
+  capacidad_maxima?: number | null;   // int4 NULL (según BD)
+  destacado?: boolean | null;         // bool NULL (según BD)
   duracion_dias?: number | null;      // int4 NULL en BD
   precio_base?: number | null;        // numeric NULL en BD
   dificultad?: string | null;         // varchar NULL en BD
@@ -105,6 +130,7 @@ export interface Ruta {
   estado?: boolean | null;            // bool NULL en BD
   fecha_creacion?: string | null;     // timestamp NULL en BD
   servicios_predefinidos?: RutaServicioPredefinido[] | null;
+  servicios_opcionales?: RutaServicioOpcional[] | null;
 }
 
 export interface RutaServicioPredefinido {
@@ -123,6 +149,45 @@ export interface RutaServicioPredefinido {
     estado?: boolean | null;
     fecha_creacion?: string | null;
   };
+}
+
+export interface RutaServicioOpcional {
+  id_ruta_servicio_opcional?: number;
+  id_ruta?: number;
+  id_servicio: number;
+  cantidad_default: number;
+  fecha_creacion?: string;
+  servicio?: {
+    id_servicio: number;
+    nombre: string;
+    descripcion?: string | null;
+    precio?: number | null;
+    imagen_url?: string | null;
+    estado?: boolean | null;
+    fecha_creacion?: string | null;
+  };
+}
+
+export interface Programacion {
+  id_programacion: number;
+  id_ruta: number;
+  id_empleado?: number | null;
+
+  fecha_salida: string;
+  hora_salida?: string | null;
+  fecha_regreso: string;
+  hora_regreso?: string | null;
+  lugar_encuentro?: string | null;
+
+  cupos_totales?: number | null;
+  cupos_disponibles?: number | null;
+  precio_programacion?: number | string | null;
+  estado?: string | null;
+  es_personalizada?: boolean | null;
+
+  ruta_nombre?: string | null;
+  empleado_nombre?: string | null;
+  empleado_apellido?: string | null;
 }
 
 export interface Propietario {
@@ -184,6 +249,113 @@ export interface PagoProveedor {
   estado?: string | null;
 }
 
+export interface VentaReserva {
+  id_venta: number;
+  id_reserva: number;
+  monto_total: number | string;
+  monto_pagado: number | string;
+  saldo_pendiente: number | string;
+  estado_pago: string;
+  metodo_pago?: string | null;
+  fecha_venta?: string | null;
+}
+
+export interface SolicitudPersonalizada {
+  id_solicitud_personalizada: number;
+  id_cliente: number;
+  id_reserva?: number | null;
+  id_ruta: number;
+  cantidad_personas: number;
+  fecha_deseada: string;
+  hora_deseada?: string | null;
+  fecha_regreso_deseada?: string | null;
+  hora_regreso_deseada?: string | null;
+  lugar_encuentro?: string | null;
+  observaciones?: string | null;
+  servicios_opcionales?: any | null;
+  precio_cotizado?: number | null;
+  estado: string;
+  id_empleado_cotizador?: number | null;
+  id_programacion?: number | null;
+
+  // Campos enriquecidos (JOIN backend)
+  reserva_codigo_qr?: string | null;
+  reserva_estado?: string | null;
+  reserva_monto_total?: number | string | null;
+  ruta_nombre?: string | null;
+  ruta_duracion_dias?: number | null;
+  ruta_dificultad?: string | null;
+  ruta_imagen_url?: string | null;
+
+  // Venta (para mostrar id_venta cuando esté lista para pagar)
+  id_venta?: number | null;
+  venta_estado_pago?: string | null;
+  venta_saldo_pendiente?: number | string | null;
+}
+
+export interface PagoSolicitud {
+  id_pago: number;
+  id_venta: number;
+  id_reserva: number;
+  monto: number;
+  metodo_pago?: string | null;
+  numero_transaccion?: string | null;
+  comprobante_url?: string | null;
+  comprobante_nombre?: string | null;
+  comprobante_tipo?: string | null;
+  estado?: string | null;
+  fecha_pago?: string | null;
+  observaciones?: string | null;
+}
+
+export interface PagoReservaProgramada extends PagoSolicitud {}
+
+export interface PagoCliente {
+  id_pago: number;
+  id_venta: number;
+  id_reserva: number;
+  monto: number | string;
+  metodo_pago?: string | null;
+  numero_transaccion?: string | null;
+  comprobante_url?: string | null;
+  comprobante_nombre?: string | null;
+  comprobante_tipo?: string | null;
+  estado?: string | null;
+  fecha_pago?: string | null;
+  observaciones?: string | null;
+  motivo_rechazo?: string | null;
+  fecha_verificacion?: string | null;
+  monto_total?: number | string | null;
+  monto_pagado?: number | string | null;
+  saldo_pendiente?: number | string | null;
+  estado_pago?: string | null;
+  cliente_nombre?: string | null;
+  cliente_apellido?: string | null;
+  cliente_telefono?: string | null;
+  numero_documento?: string | null;
+}
+
+export interface Venta {
+  id_venta: number;
+  id_reserva: number;
+  fecha_venta?: string | null;
+  monto_total: number | string;
+  monto_pagado: number | string;
+  saldo_pendiente: number | string;
+  estado_pago: string;
+  metodo_pago?: string | null;
+  fecha_creacion?: string | null;
+  fecha_reserva?: string | null;
+  reserva_estado?: string | null;
+  notas?: string | null;
+  id_cliente?: number | null;
+  cliente_nombre?: string | null;
+  cliente_apellido?: string | null;
+  cliente_telefono?: string | null;
+  numero_documento?: string | null;
+  email?: string | null;
+}
+
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================
@@ -201,9 +373,11 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
     const response = await fetch(buildApiUrl(endpoint), config);
     const data = await response.json();
 
-    // Si el token expiró, limpiar sesión
+    // Si hay token y el backend responde 401 (token inválido/expirado), limpiar sesión.
+    // Importante: si NO hay token (catálogo público), no debemos redirigir.
     const isAuthEndpoint = endpoint.startsWith('/api/auth/');
-    if (response.status === 401 && !isAuthEndpoint) {
+    const hasToken = !!localStorage.getItem('token');
+    if (response.status === 401 && hasToken && !isAuthEndpoint) {
       localStorage.removeItem('token');
       window.location.href = '/';
       throw new Error('Sesión expirada');
@@ -513,6 +687,164 @@ export const reservasAPI = {
     const response = await fetchAPI<any>(`/api/reservas/buscar?q=${termino}`);
     return unwrapApiArray<Reserva>(response);
   },
+
+  // Asigna una programación a la reserva. El backend deduce la ruta desde la programación.
+  agregarProgramacion: async (
+    idReserva: number,
+    payloadOrIdProgramacion:
+      | number
+      | {
+          id_programacion: number;
+          cantidad_personas?: number;
+          precio_unitario?: number | string | null;
+        }
+  ) => {
+    const payload =
+      typeof payloadOrIdProgramacion === 'number'
+        ? { id_programacion: payloadOrIdProgramacion }
+        : payloadOrIdProgramacion;
+
+    return fetchAPI(`/api/reservas/${idReserva}/programacion`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Agrega un servicio adicional a la reserva (por ejemplo, uno opcional de la ruta)
+  agregarServicio: async (
+    idReserva: number,
+    payload: { id_servicio: number; cantidad: number }
+  ) => {
+    return fetchAPI(`/api/reservas/${idReserva}/servicios`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  agregarAcompanante: async (idReserva: number, payload: AcompananteReservaPayload) => {
+    return fetchAPI(`/api/reservas/${idReserva}/acompanante`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  pagarCompleto: async (
+    idReserva: number,
+    payload: {
+      metodo_pago?: string | null;
+      numero_transaccion?: string | null;
+      comprobante_url: string;
+      comprobante_nombre?: string | null;
+      comprobante_tipo?: string | null;
+      observaciones?: string | null;
+    }
+  ) => {
+    return fetchAPI<{
+      success: boolean;
+      message: string;
+      data: {
+        pago: PagoReservaProgramada;
+        venta: VentaReserva;
+        reserva: {
+          id_reserva: number;
+          monto_total: number | string;
+        };
+      };
+    }>(`/api/reservas/${idReserva}/pago-completo`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
+// =====================================================
+// VENTAS
+// =====================================================
+
+export const ventasAPI = {
+  getAll: async (): Promise<Venta[]> => {
+    const response = await fetchAPI<any>('/api/ventas');
+    return unwrapApiArray<Venta>(response);
+  },
+
+  getById: async (id: number): Promise<Venta> => {
+    const response = await fetchAPI<{ data: Venta }>(`/api/ventas/${id}`);
+    return response.data;
+  },
+
+  cancelar: async (id: number) => {
+    return fetchAPI(`/api/ventas/${id}/cancelar`, {
+      method: 'POST',
+    });
+  },
+
+  buscar: async (termino: string): Promise<Venta[]> => {
+    const response = await fetchAPI<any>(`/api/ventas/buscar?q=${encodeURIComponent(termino)}`);
+    return unwrapApiArray<Venta>(response);
+  },
+};
+
+// =====================================================
+// PAGOS / ABONOS DE CLIENTES
+// =====================================================
+
+export const pagosAPI = {
+  getAll: async (): Promise<PagoCliente[]> => {
+    const response = await fetchAPI<any>('/api/pagos');
+    return unwrapApiArray<PagoCliente>(response);
+  },
+
+  getById: async (id: number): Promise<PagoCliente> => {
+    const response = await fetchAPI<{ data: PagoCliente }>(`/api/pagos/${id}`);
+    return response.data;
+  },
+
+  getByReserva: async (idReserva: number): Promise<PagoCliente[]> => {
+    const response = await fetchAPI<{ data: PagoCliente[] }>(`/api/pagos/reserva/${idReserva}`);
+    return response.data || [];
+  },
+
+  getByVenta: async (idVenta: number): Promise<PagoCliente[]> => {
+    const response = await fetchAPI<{ data: PagoCliente[] }>(`/api/pagos/venta/${idVenta}`);
+    return response.data || [];
+  },
+
+  create: async (payload: {
+    id_venta: number;
+    id_reserva: number;
+    monto: number;
+    metodo_pago?: string | null;
+    numero_transaccion?: string | null;
+    comprobante_url?: string | null;
+    comprobante_nombre?: string | null;
+    comprobante_tipo?: string | null;
+    observaciones?: string | null;
+  }) => {
+    return fetchAPI('/api/pagos', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  verificar: async (
+    id: number,
+    payload: {
+      estado: 'Verificado' | 'Aprobado' | 'Rechazado';
+      observaciones?: string | null;
+      motivo_rechazo?: string | null;
+    }
+  ) => {
+    return fetchAPI(`/api/pagos/${id}/verificar`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/pagos/${id}`, {
+      method: 'DELETE',
+    });
+  },
 };
 
 // =====================================================
@@ -521,13 +853,25 @@ export const reservasAPI = {
 
 export const rutasAPI = {
   getAll: async (): Promise<Ruta[]> => {
-    const response = await fetchAPI<{ data: Ruta[] }>('/api/rutas');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/rutas');
+    return unwrapApiArray<Ruta>(response);
+  },
+
+  // Catálogo público (clientes / no autenticado)
+  getActivas: async (): Promise<Ruta[]> => {
+    const response = await fetchAPI<any>('/api/rutas/activas');
+    return unwrapApiArray<Ruta>(response);
   },
 
   getById: async (id: number): Promise<Ruta> => {
-    const response = await fetchAPI<{ data: Ruta }>(`/api/rutas/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/rutas/${id}`);
+    return (response?.data ?? response) as Ruta;
+  },
+
+  // Detalle público (solo si está activa)
+  getActivaById: async (id: number): Promise<Ruta> => {
+    const response = await fetchAPI<any>(`/api/rutas/activas/${id}`);
+    return (response?.data ?? response) as Ruta;
   },
 
   create: async (rutaData: Partial<Ruta>) => {
@@ -1044,5 +1388,148 @@ export const serviciosAPI = {
   getProveedores: async (id: number) => {
     const response = await fetchAPI<any>(`/api/servicios/${id}/proveedores`);
     return unwrapApiArray<any>(response);
+  },
+};
+
+// =====================================================
+// SOLICITUDES PERSONALIZADAS (CLIENTE + STAFF)
+// =====================================================
+
+export const solicitudesPersonalizadasAPI = {
+  create: async (payload: {
+    id_ruta: number;
+    fecha_deseada: string;
+    hora_deseada?: string;
+    cantidad_personas: number;
+    observaciones?: string;
+    servicios_opcionales?: any;
+  }) => {
+    return fetchAPI('/api/solicitudes-personalizadas', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  getMine: async (): Promise<SolicitudPersonalizada[]> => {
+    const response = await fetchAPI<{ data: SolicitudPersonalizada[] }>('/api/solicitudes-personalizadas/mias');
+    return response.data || [];
+  },
+
+  getById: async (id: number): Promise<SolicitudPersonalizada> => {
+    const response = await fetchAPI<{ data: SolicitudPersonalizada }>(`/api/solicitudes-personalizadas/${id}`);
+    return response.data;
+  },
+
+  listPagos: async (id: number): Promise<PagoSolicitud[]> => {
+    const response = await fetchAPI<{ data: PagoSolicitud[] }>(`/api/solicitudes-personalizadas/${id}/pagos`);
+    return response.data || [];
+  },
+
+  crearPago: async (
+    id: number,
+    payload: {
+      monto: number;
+      metodo_pago?: string | null;
+      numero_transaccion?: string | null;
+      comprobante_url: string;
+      comprobante_nombre?: string | null;
+      comprobante_tipo?: string | null;
+      observaciones?: string | null;
+    }
+  ) => {
+    return fetchAPI(`/api/solicitudes-personalizadas/${id}/pagos`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // STAFF: listar todas (opcionalmente por estado)
+  listAll: async (params?: { estado?: string | null }): Promise<SolicitudPersonalizada[]> => {
+    const estado = params?.estado ? String(params.estado) : '';
+    const qs = estado ? `?estado=${encodeURIComponent(estado)}` : '';
+    const response = await fetchAPI<{ data: SolicitudPersonalizada[] }>(`/api/solicitudes-personalizadas${qs}`);
+    return response.data || [];
+  },
+
+  // STAFF: cotizar/actualizar estado
+  cotizar: async (
+    id: number,
+    payload: {
+      precio_cotizado?: number | null;
+      estado?: string | null;
+    }
+  ) => {
+    return fetchAPI(`/api/solicitudes-personalizadas/${id}/cotizar`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // STAFF: convertir solicitud a programación + reserva + venta
+  convertirAProgramacion: async (
+    id: number,
+    payload: {
+      fecha_salida: string;
+      fecha_regreso: string;
+      precio_programacion: number;
+      hora_salida?: string | null;
+      hora_regreso?: string | null;
+      cupos_totales?: number | null;
+      id_empleado?: number | null;
+      lugar_encuentro?: string | null;
+      precio_cotizado?: number | null;
+    }
+  ) => {
+    return fetchAPI(`/api/solicitudes-personalizadas/${id}/convertir-a-programacion`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
+// =====================================================
+// PROGRAMACION
+// =====================================================
+
+export const programacionAPI = {
+  getAll: async (): Promise<Programacion[]> => {
+    const response = await fetchAPI<any>('/api/programaciones');
+    return unwrapApiArray<Programacion>(response);
+  },
+
+  // Público: programaciones activas/futuras para Home (sin token)
+  getPublicas: async (): Promise<Programacion[]> => {
+    const response = await fetchAPI<any>('/api/programaciones/publicas');
+    return unwrapApiArray<Programacion>(response);
+  },
+
+  getFechasOcupadasRuta: async (idRuta: number): Promise<string[]> => {
+    const response = await fetchAPI<any>(`/api/programaciones/ruta/${idRuta}/fechas-ocupadas`);
+    return unwrapApiArray<string>(response);
+  },
+
+  getById: async (id: number): Promise<Programacion> => {
+    const response = await fetchAPI<any>(`/api/programaciones/${id}`);
+    return (response?.data ?? response) as Programacion;
+  },
+
+  create: async (data: Partial<Programacion>) => {
+    return fetchAPI('/api/programaciones', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  update: async (id: number, data: Partial<Programacion>) => {
+    return fetchAPI(`/api/programaciones/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  delete: async (id: number) => {
+    return fetchAPI(`/api/programaciones/${id}`, {
+      method: 'DELETE',
+    });
   },
 };

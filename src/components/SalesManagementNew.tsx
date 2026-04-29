@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Plus,
   Search,
@@ -49,6 +49,7 @@ import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
+import { clientesAPI, fincasAPI, pagosAPI, reservasAPI, rutasAPI, serviciosAPI, ventasAPI, type PagoCliente, type Reserva, type Venta } from '../services/api';
 
 // ===========================
 // INTERFACES Y TIPOS
@@ -87,16 +88,35 @@ interface Service {
   description: string;
 }
 
+interface SalePayment {
+  id: string;
+  backendId: number;
+  amount: number;
+  date: string;
+  status: 'Pendiente' | 'Aprobado' | 'Rechazado' | 'Verificado';
+  paymentMethod: string;
+  transactionNumber?: string;
+  receiptUrl?: string;
+  receiptName?: string;
+  observations?: string;
+  rejectionReason?: string;
+}
+
 interface Sale {
   id: string;
+  backendId?: number;
+  reservationId?: number;
   client: Client;
   saleType: string;
   amount: number;
+  paidAmount?: number;
+  pendingAmount?: number;
   date: string;
-  status: 'Pagado' | 'Pendiente' | 'Anulado';
+  status: 'Pagado' | 'Pendiente' | 'Parcial' | 'Anulado';
   mainService?: Route | Farm;
   additionalServices: Service[];
   paymentMethod: string;
+  paymentHistory?: SalePayment[];
   cancellationDate?: string;
   cancellationReason?: string;
 }
@@ -107,6 +127,104 @@ interface CancelledSale extends Sale {
 }
 
 type ViewMode = 'list' | 'create' | 'detail';
+
+function normalizeSaleStatus(status?: string | null): Sale['status'] {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'pagado') return 'Pagado';
+  if (normalized === 'parcial') return 'Parcial';
+  if (normalized === 'cancelado') return 'Anulado';
+  return 'Pendiente';
+}
+
+function formatBackendDate(value?: string | null): string {
+  if (!value) return new Date().toISOString().split('T')[0];
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
+  return parsed.toISOString().split('T')[0];
+}
+
+function normalizePaymentStatus(status?: string | null): SalePayment['status'] {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'aprobado') return 'Aprobado';
+  if (normalized === 'rechazado') return 'Rechazado';
+  if (normalized === 'verificado') return 'Verificado';
+  return 'Pendiente';
+}
+
+function mapPagoToSalePayment(pago: PagoCliente): SalePayment {
+  return {
+    id: `A-${String(pago.id_pago).padStart(3, '0')}`,
+    backendId: Number(pago.id_pago),
+    amount: Number(pago.monto || 0),
+    date: formatBackendDate(pago.fecha_pago),
+    status: normalizePaymentStatus(pago.estado),
+    paymentMethod: String(pago.metodo_pago || 'Por definir'),
+    transactionNumber: pago.numero_transaccion || undefined,
+    receiptUrl: pago.comprobante_url || undefined,
+    receiptName: pago.comprobante_nombre || undefined,
+    observations: pago.observaciones || undefined,
+    rejectionReason: pago.motivo_rechazo || undefined,
+  };
+}
+
+function mapVentaToSale(venta: Venta, reserva?: Reserva | null): Sale {
+  const programacion = reserva?.programaciones?.[0] as any;
+  const finca = (reserva as any)?.fincas?.[0];
+  const servicios = (reserva?.servicios || []).map((servicio: any, index: number) => ({
+    id: String(servicio.id_servicio || servicio.id_detalle_reserva_servicio || index),
+    name: String(servicio.servicio_nombre || `Servicio #${servicio.id_servicio || index + 1}`),
+    price: Number(servicio.subtotal ?? servicio.precio_unitario ?? 0),
+    category: 'Servicio',
+    description: String(servicio.descripcion || `Cantidad: ${servicio.cantidad || 1}`),
+  }));
+
+  let saleType = 'Reserva';
+  let mainService: Route | Farm | undefined;
+
+  if (programacion) {
+    saleType = servicios.length > 0 ? 'Ruta + Servicios' : 'Ruta';
+    mainService = {
+      id: String(programacion.id_programacion || programacion.id_ruta || ''),
+      name: String(programacion.ruta_nombre || `Programación #${programacion.id_programacion}`),
+      distance: programacion.fecha_salida ? `Salida ${formatBackendDate(programacion.fecha_salida)}` : 'Ruta programada',
+      difficulty: String(programacion.dificultad || 'Por definir'),
+      price: Number(programacion.subtotal ?? programacion.precio_unitario ?? venta.monto_total ?? 0),
+    };
+  } else if (finca) {
+    saleType = servicios.length > 0 ? 'Finca + Servicios' : 'Finca';
+    mainService = {
+      id: String(finca.id_finca || ''),
+      name: String(finca.finca_nombre || `Finca #${finca.id_finca}`),
+      capacity: Number(finca.capacidad_personas || 0),
+      location: String(finca.ubicacion || 'Por definir'),
+      price: Number(finca.subtotal ?? venta.monto_total ?? 0),
+      includedServices: [],
+    };
+  }
+
+  return {
+    id: `V-${String(venta.id_venta).padStart(3, '0')}`,
+    backendId: Number(venta.id_venta),
+    reservationId: Number(venta.id_reserva),
+    client: {
+      id: String(venta.id_cliente || venta.id_reserva || venta.id_venta),
+      name: `${String(venta.cliente_nombre || '').trim()} ${String(venta.cliente_apellido || '').trim()}`.trim() || 'Cliente',
+      document: String(venta.numero_documento || 'Documento no disponible'),
+      phone: String(venta.cliente_telefono || '—'),
+      email: String(venta.email || '—'),
+    },
+    saleType,
+    amount: Number(venta.monto_total || 0),
+    paidAmount: Number(venta.monto_pagado || 0),
+    pendingAmount: Number(venta.saldo_pendiente || 0),
+    date: formatBackendDate(venta.fecha_venta || venta.fecha_creacion),
+    status: normalizeSaleStatus(venta.estado_pago),
+    mainService,
+    additionalServices: servicios,
+    paymentMethod: String(venta.metodo_pago || 'Por definir'),
+    paymentHistory: [],
+  };
+}
 
 // ===========================
 // DATOS MOCK
@@ -455,8 +573,14 @@ export function SalesManagement() {
 
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedSale, setSelectedSale] = useState<Sale | null>(null);
-  const [sales, setSales] = useState<Sale[]>(mockSales);
+  const [sales, setSales] = useState<Sale[]>([]);
   const [cancelledSales, setCancelledSales] = useState<CancelledSale[]>([]);
+  const [loadingSales, setLoadingSales] = useState(true);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [createClients, setCreateClients] = useState<Client[]>(mockClients);
+  const [createRoutes, setCreateRoutes] = useState<Route[]>(mockRoutes);
+  const [createFarms, setCreateFarms] = useState<Farm[]>(mockFarms);
+  const [createServices, setCreateServices] = useState<Service[]>(mockServices);
   
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
@@ -472,6 +596,85 @@ export function SalesManagement() {
   const [saleToCancel, setSaleToCancel] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState('');
 
+  useEffect(() => {
+    if (!canViewVentas) return;
+
+    const loadSales = async () => {
+      try {
+        setLoadingSales(true);
+        const data = await ventasAPI.getAll();
+        setSales((data || []).map((venta) => mapVentaToSale(venta)));
+      } catch (error: any) {
+        toast.error(error?.message || 'No se pudieron cargar las ventas');
+        setSales([]);
+      } finally {
+        setLoadingSales(false);
+      }
+    };
+
+    void loadSales();
+  }, [canViewVentas]);
+
+  useEffect(() => {
+    if (!canCreateVenta) return;
+
+    const loadCreateData = async () => {
+      try {
+        const [clients, routes, farms, services] = await Promise.all([
+          clientesAPI.getAll(),
+          rutasAPI.getAll(),
+          fincasAPI.getAll(),
+          serviciosAPI.getAll(),
+        ]);
+
+        setCreateClients(
+          (clients || []).map((client) => ({
+            id: String(client.id_cliente),
+            name: `${String(client.nombre || '').trim()} ${String(client.apellido || '').trim()}`.trim(),
+            document: String(client.numero_documento || 'Sin documento'),
+            phone: String(client.telefono || '—'),
+            email: String((client as any).correo || '—'),
+          }))
+        );
+
+        setCreateRoutes(
+          (routes || []).map((route) => ({
+            id: String(route.id_ruta),
+            name: String(route.nombre),
+            distance: `${route.duracion_dias || '—'} día(s)`,
+            difficulty: String(route.dificultad || 'Por definir'),
+            price: Number(route.precio_base || 0),
+          }))
+        );
+
+        setCreateFarms(
+          (farms || []).map((farm) => ({
+            id: String(farm.id_finca),
+            name: String(farm.nombre),
+            capacity: Number(farm.capacidad_personas || 0),
+            location: String(farm.ubicacion || farm.direccion || 'Por definir'),
+            price: Number(farm.precio_por_noche || 0),
+            includedServices: [],
+          }))
+        );
+
+        setCreateServices(
+          (services || []).map((service) => ({
+            id: String(service.id_servicio),
+            name: String(service.nombre),
+            price: Number(service.precio || 0),
+            category: String(service.categoria || 'Servicio'),
+            description: String(service.descripcion || 'Sin descripción'),
+          }))
+        );
+      } catch {
+        // Si algo falla, mantener la UI con los datos mock existentes.
+      }
+    };
+
+    void loadCreateData();
+  }, [canCreateVenta]);
+
   const handleCreateSale = (newSale: Sale) => {
     if (!canCreateVenta) {
       toast.error('No tienes permiso para crear ventas');
@@ -482,9 +685,28 @@ export function SalesManagement() {
     setViewMode('list');
   };
 
-  const handleViewDetail = (sale: Sale) => {
-    setSelectedSale(sale);
-    setViewMode('detail');
+  const handleViewDetail = async (sale: Sale) => {
+    try {
+      setLoadingDetail(true);
+      const ventaDetallePromise = sale.backendId ? ventasAPI.getById(sale.backendId) : Promise.resolve(null as any);
+      const reservaDetallePromise = sale.reservationId ? reservasAPI.getById(sale.reservationId) : Promise.resolve(null as any);
+      const pagosDetallePromise = sale.backendId ? pagosAPI.getByVenta(sale.backendId) : Promise.resolve([]);
+      const [ventaDetalle, reservaDetalle, pagosDetalle] = await Promise.all([
+        ventaDetallePromise,
+        reservaDetallePromise,
+        pagosDetallePromise,
+      ]);
+      const mapped = ventaDetalle ? mapVentaToSale(ventaDetalle, reservaDetalle) : sale;
+      setSelectedSale({
+        ...mapped,
+        paymentHistory: (pagosDetalle || []).map(mapPagoToSalePayment),
+      });
+      setViewMode('detail');
+    } catch (error: any) {
+      toast.error(error?.message || 'No se pudo cargar el detalle de la venta');
+    } finally {
+      setLoadingDetail(false);
+    }
   };
 
   const handleInitiateCancellation = (saleId: string) => {
@@ -497,15 +719,22 @@ export function SalesManagement() {
     setShowCancelDialog(true);
   };
 
-  const handleConfirmCancellation = () => {
+  const handleConfirmCancellation = async () => {
     if (!canEditVenta) {
       toast.error('No tienes permiso para anular ventas');
       return;
     }
 
     if (saleToCancel) {
-      const saleToUpdate = sales.find(s => s.id === saleToCancel);
-      if (saleToUpdate) {
+      const saleToUpdate = sales.find((s) => s.id === saleToCancel);
+      if (!saleToUpdate?.backendId) {
+        toast.error('No se pudo identificar la venta a anular');
+        return;
+      }
+
+      try {
+        await ventasAPI.cancelar(saleToUpdate.backendId);
+
         const cancelledSale: CancelledSale = {
           ...saleToUpdate,
           status: 'Anulado',
@@ -513,23 +742,20 @@ export function SalesManagement() {
           cancellationReason: cancellationReason || 'Sin motivo especificado'
         };
 
-        setSales(sales.map(s => 
-          s.id === saleToCancel ? cancelledSale : s
-        ));
-
-        setCancelledSales([cancelledSale, ...cancelledSales]);
+        setSales((current) => current.map((s) => (s.id === saleToCancel ? cancelledSale : s)));
+        setCancelledSales((current) => [cancelledSale, ...current]);
 
         if (selectedSale?.id === saleToCancel) {
           setSelectedSale(cancelledSale);
         }
 
-        console.log('Venta anulada guardada:', cancelledSale);
-        console.log('Registro de ventas anuladas:', [cancelledSale, ...cancelledSales]);
+        toast.success('Venta anulada correctamente');
+        setShowCancelDialog(false);
+        setSaleToCancel(null);
+        setCancellationReason('');
+      } catch (error: any) {
+        toast.error(error?.message || 'No se pudo anular la venta');
       }
-
-      setShowCancelDialog(false);
-      setSaleToCancel(null);
-      setCancellationReason('');
     }
   };
 
@@ -559,6 +785,8 @@ export function SalesManagement() {
           <SalesListView
             key="list"
             sales={sales}
+            loading={loadingSales}
+            loadingDetail={loadingDetail}
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             filterType={filterType}
@@ -587,10 +815,10 @@ export function SalesManagement() {
             key="create"
             onBack={() => setViewMode('list')}
             onCreate={handleCreateSale}
-            clients={mockClients}
-            routes={mockRoutes}
-            farms={mockFarms}
-            services={mockServices}
+            clients={createClients}
+            routes={createRoutes}
+            farms={createFarms}
+            services={createServices}
             canCreateVenta={canCreateVenta}
           />
         )}
@@ -677,6 +905,8 @@ export function SalesManagement() {
 
 interface SalesListViewProps {
   sales: Sale[];
+  loading: boolean;
+  loadingDetail: boolean;
   searchTerm: string;
   setSearchTerm: (value: string) => void;
   filterType: string;
@@ -695,6 +925,8 @@ interface SalesListViewProps {
 
 function SalesListView({
   sales,
+  loading,
+  loadingDetail,
   searchTerm,
   setSearchTerm,
   filterType,
@@ -723,6 +955,7 @@ function SalesListView({
     const styles = {
       Pagado: 'bg-green-100 text-green-700 border-green-200',
       Pendiente: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+      Parcial: 'bg-blue-100 text-blue-700 border-blue-200',
       Anulado: 'bg-red-100 text-red-700 border-red-200'
     };
     return styles[status];
@@ -808,6 +1041,9 @@ function SalesListView({
 
       <Card className="border-green-100 shadow-sm">
         <CardContent className="p-6">
+          {loading ? (
+            <div className="py-16 text-center text-gray-500">Cargando ventas...</div>
+          ) : (
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -851,7 +1087,7 @@ function SalesListView({
                           className="text-green-600 hover:text-green-700 hover:bg-green-50"
                           title="Ver Detalles"
                         >
-                          <Eye className="w-4 h-4" />
+                          {loadingDetail ? <span className="text-xs">...</span> : <Eye className="w-4 h-4" />}
                         </Button>
                         
                         <Button
@@ -882,8 +1118,9 @@ function SalesListView({
               </TableBody>
             </Table>
           </div>
+          )}
 
-          {totalPages > 1 && (
+          {!loading && totalPages > 1 && (
             <div className="flex items-center justify-between mt-6">
               <p className="text-sm text-gray-600">
                 Mostrando {startIndex + 1} - {Math.min(startIndex + itemsPerPage, filteredSales.length)} de {filteredSales.length} ventas
@@ -1567,6 +1804,8 @@ interface SaleDetailViewProps {
 }
 
 function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailViewProps) {
+  const paymentHistory = sale.paymentHistory || [];
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -1579,13 +1818,33 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
     const styles = {
       Pagado: 'bg-green-100 text-green-700 border-green-200',
       Pendiente: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+      Parcial: 'bg-blue-100 text-blue-700 border-blue-200',
       Anulado: 'bg-red-100 text-red-700 border-red-200'
+    };
+    return styles[status];
+  };
+
+  const getPaymentStatusBadge = (status: SalePayment['status']) => {
+    const styles = {
+      Pendiente: 'bg-yellow-100 text-yellow-700 border-yellow-200',
+      Aprobado: 'bg-green-100 text-green-700 border-green-200',
+      Rechazado: 'bg-red-100 text-red-700 border-red-200',
+      Verificado: 'bg-blue-100 text-blue-700 border-blue-200'
     };
     return styles[status];
   };
 
   const handlePrintPDF = () => {
     alert(`Generando PDF de la venta ${sale.id}...`);
+  };
+
+  const handleOpenReceipt = (receiptUrl?: string) => {
+    if (!receiptUrl) {
+      toast.error('Este pago no tiene comprobante adjunto');
+      return;
+    }
+
+    window.open(receiptUrl, '_blank', 'noopener,noreferrer');
   };
 
   return (
@@ -1774,6 +2033,76 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
               </div>
             </CardContent>
           </Card>
+
+          <Card className="border-green-100 shadow-sm">
+            <CardContent className="p-6">
+              <h2 className="text-green-800 mb-4">Comprobantes y Abonos</h2>
+              {paymentHistory.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="border-green-100 bg-green-50">
+                        <TableHead className="text-green-800">ID</TableHead>
+                        <TableHead className="text-green-800">Fecha</TableHead>
+                        <TableHead className="text-green-800">Método</TableHead>
+                        <TableHead className="text-green-800 text-right">Monto</TableHead>
+                        <TableHead className="text-green-800">Estado</TableHead>
+                        <TableHead className="text-green-800 text-right">Comprobante</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paymentHistory.map((payment, index) => (
+                        <TableRow
+                          key={payment.backendId}
+                          className={`border-green-50 ${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}
+                        >
+                          <TableCell className="font-medium text-gray-900">{payment.id}</TableCell>
+                          <TableCell className="text-gray-600">
+                            {new Date(payment.date).toLocaleDateString('es-CO')}
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-gray-900 capitalize">{payment.paymentMethod}</p>
+                              <p className="text-sm text-gray-500">{payment.transactionNumber || 'Sin referencia'}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right font-medium text-gray-900">
+                            {formatCurrency(payment.amount)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="secondary" className={getPaymentStatusBadge(payment.status)}>
+                              {payment.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {payment.receiptUrl ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleOpenReceipt(payment.receiptUrl)}
+                                className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                              >
+                                <Eye className="w-4 h-4 mr-2" />
+                                Ver
+                              </Button>
+                            ) : (
+                              <span className="text-sm text-gray-400">Sin archivo</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-4">
+                  <p className="text-sm text-gray-600">
+                    Esta venta aún no tiene comprobantes ni abonos registrados.
+                  </p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
 
         <div className="lg:col-span-1">
@@ -1833,6 +2162,10 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
                     <span className="font-medium text-green-700">
                       {formatCurrency(sale.amount)}
                     </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-medium text-gray-900">Comprobantes:</span>
+                    <span className="font-medium text-gray-900">{paymentHistory.length}</span>
                   </div>
                 </div>
               </div>

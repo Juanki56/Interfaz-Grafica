@@ -341,6 +341,7 @@ export const useAuth = () => {
 };
 
 export default function App() {
+  const hasBackendToken = Boolean(localStorage.getItem('token'));
   const [user, setUser] = useState<AuthContextType['user']>(null);
   const [currentView, setCurrentView] = useState('home');
   const [selectedItemId, setSelectedItemId] = useState<string>('');
@@ -1145,7 +1146,9 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={authValue}>
-      <ServicesProvider>
+      <ServicesProvider
+        enabled={hasBackendToken && !!user && (user.role === 'admin' || user.role === 'advisor')}
+      >
         <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
         {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (
           <>

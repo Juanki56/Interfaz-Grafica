@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X, Calendar, Users, Clock, MapPin, DollarSign, CreditCard, User, Phone, Mail, UtensilsCrossed, Coffee, Soup, Pizza, Check, Bus, Home, Utensils, QrCode, CheckCircle2, Clock3 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -9,7 +9,28 @@ import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
+import { Calendar as BookingCalendar } from './ui/calendar';
 import { toast } from 'sonner';
+import { programacionAPI, solicitudesPersonalizadasAPI, type SolicitudPersonalizada } from '../services/api';
+
+function parseDurationDays(durationLabel: string): number {
+  const match = String(durationLabel || '').match(/(\d+)/);
+  const value = match ? Number.parseInt(match[1], 10) : NaN;
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+function toYMD(date: Date): string {
+  const copy = new Date(date);
+  copy.setHours(0, 0, 0, 0);
+  return copy.toISOString().slice(0, 10);
+}
+
+function addDays(date: Date, days: number): Date {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
 
 interface Restaurant {
   id: number;
@@ -44,6 +65,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
     date: '',
+    time: '',
     participants: 1,
     companions: 0,
     includeTransport: false,
@@ -59,6 +81,50 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
   const [bookingStatus, setBookingStatus] = useState<'pending' | 'confirmed' | null>(null);
   const [bookingId, setBookingId] = useState<string>('');
   const [paymentAmount, setPaymentAmount] = useState<'50' | '100'>('50'); // Nuevo estado para el monto de pago
+
+  const [createdSolicitud, setCreatedSolicitud] = useState<SolicitudPersonalizada | null>(null);
+
+  const [paymentData, setPaymentData] = useState({
+    monto: '',
+    metodo_pago: 'Transferencia',
+    numero_transaccion: '',
+    comprobante_url: '',
+    observaciones: '',
+  });
+
+  const [occupiedDates, setOccupiedDates] = useState<Set<string>>(new Set());
+  const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+
+  const durationDays = useMemo(() => parseDurationDays(tour.duration), [tour.duration]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (type !== 'ruta') return;
+
+    const idRuta = Number(tour.id);
+    if (!Number.isFinite(idRuta) || idRuta <= 0) return;
+
+    let cancelled = false;
+    setIsLoadingAvailability(true);
+    programacionAPI
+      .getFechasOcupadasRuta(idRuta)
+      .then((dates) => {
+        if (cancelled) return;
+        setOccupiedDates(new Set((dates || []).map((d) => String(d).trim()).filter(Boolean)));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setOccupiedDates(new Set());
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingAvailability(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, tour.id, type]);
 
   const totalSteps = 4; // Participantes y servicios, Contacto, Pago, Confirmación
 
@@ -153,15 +219,18 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     setStep(1);
     setBookingStatus(null);
     setBookingId('');
+    setCreatedSolicitud(null);
     setPaymentAmount('50'); // Resetear el monto de pago
     setBookingData({
       date: '',
+      time: '',
       participants: 1,
       companions: 0,
       includeTransport: false,
       includeAccommodation: false,
       accommodationDays: 1,
       includeFood: false,
+      meetingPoint: '',
       specialRequests: '',
       contactName: '',
       contactPhone: '',
@@ -170,7 +239,451 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     onClose();
   };
 
+  const formatSolicitudEstado = (estado?: string | null) => {
+    const value = String(estado ?? '').trim();
+    if (!value) return '—';
+    const lowered = value.toLowerCase();
+    if (lowered.includes('pend')) return 'Pendiente de cotización';
+    if (lowered.includes('coti')) return 'Cotizada';
+    if (lowered.includes('rech')) return 'Rechazada';
+    if (lowered.includes('conv') || lowered.includes('program')) return 'Programada';
+    return value;
+  };
+
+  const submitRutaSolicitud = async () => {
+    const idRuta = Number(tour.id);
+    if (Number.isNaN(idRuta)) {
+      toast.error('No se pudo enviar la solicitud', { description: 'ID de ruta inválido.' });
+      return;
+    }
+
+    if (!bookingData.date || !bookingData.time) {
+      toast.error('Completa la fecha y la hora');
+      return;
+    }
+
+    const cantidadPersonas = 1 + Number(bookingData.companions || 0);
+    if (cantidadPersonas <= 0) {
+      toast.error('Cantidad de personas inválida');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const created = await solicitudesPersonalizadasAPI.create({
+        id_ruta: idRuta,
+        fecha_deseada: bookingData.date,
+        hora_deseada: bookingData.time,
+        cantidad_personas: cantidadPersonas,
+        observaciones: bookingData.specialRequests?.trim() || undefined,
+      });
+
+      const createdId: number | undefined =
+        (created as any)?.data?.solicitud?.id_solicitud_personalizada ??
+        (created as any)?.data?.solicitud?.id ??
+        (created as any)?.data?.id_solicitud_personalizada;
+
+      if (createdId != null) {
+        const full = await solicitudesPersonalizadasAPI.getById(Number(createdId));
+        setCreatedSolicitud(full);
+      } else {
+        const fallbackSolicitud = (created as any)?.data?.solicitud as SolicitudPersonalizada | undefined;
+        if (fallbackSolicitud) setCreatedSolicitud(fallbackSolicitud);
+      }
+
+      toast.success('Solicitud enviada', {
+        description: 'Si ya aparece ID de venta, puedes pagar de inmediato (con comprobante).',
+      });
+    } catch (e: any) {
+      toast.error('No se pudo enviar la solicitud', {
+        description: e?.message || 'Intenta nuevamente.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const refreshRutaSolicitud = async () => {
+    if (!createdSolicitud?.id_solicitud_personalizada) return;
+    setIsSubmitting(true);
+    try {
+      const full = await solicitudesPersonalizadasAPI.getById(createdSolicitud.id_solicitud_personalizada);
+      setCreatedSolicitud(full);
+      toast.success('Estado actualizado');
+    } catch (e: any) {
+      toast.error('No se pudo actualizar', {
+        description: e?.message || 'Intenta nuevamente.',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (!isOpen) return null;
+
+  // Flujo real para rutas (solicitud personalizada)
+  if (type === 'ruta') {
+    const capacity = Number.isFinite(tour.capacity) ? Number(tour.capacity) : 0;
+    const maxCompanions = Math.max(0, Math.min((capacity > 0 ? capacity - 1 : 10), 10));
+    const totalPeople = 1 + Number(bookingData.companions || 0);
+
+    const selectedDate = bookingData.date ? new Date(`${bookingData.date}T00:00:00`) : undefined;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const isStartDateDisabled = (date: Date) => {
+      const base = new Date(date);
+      base.setHours(0, 0, 0, 0);
+      if (base < today) return true;
+
+      // Bloqueo por rango: si la ruta dura N días, se deshabilita el inicio si algún día del rango está ocupado.
+      for (let i = 0; i < durationDays; i += 1) {
+        const d = addDays(base, i);
+        if (occupiedDates.has(toYMD(d))) return true;
+      }
+      return false;
+    };
+
+    const formatSelectedDate = (date: Date | undefined) => {
+      if (!date) return 'Selecciona una fecha';
+      return date.toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: '2-digit' });
+    };
+
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-2xl max-h-[90vh] bg-white shadow-xl border-2 overflow-hidden">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 border-b">
+            <div>
+              <CardTitle className="text-xl">
+                {createdSolicitud ? 'Solicitud enviada' : 'Solicitar ruta personalizada'}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">
+                {createdSolicitud
+                  ? 'Puedes actualizar el estado aquí mismo.'
+                  : 'Elige fecha y hora; el equipo confirmará disponibilidad.'}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onClick={resetAndClose} className="hover:bg-red-100">
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
+
+          <CardContent className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
+            {/* Tour Summary */}
+            <div className="bg-green-50 p-4 rounded-lg mb-6">
+              <div className="flex items-center space-x-4">
+                <img src={tour.image} alt={tour.name} className="w-16 h-16 rounded-lg object-cover" />
+                <div className="flex-1">
+                  <h3 className="font-semibold text-lg text-green-800">{tour.name}</h3>
+                  <div className="flex items-center space-x-4 text-sm text-muted-foreground mt-1">
+                    <div className="flex items-center">
+                      <Clock className="w-3 h-3 mr-1" />
+                      {tour.duration}
+                    </div>
+                    <div className="flex items-center">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      {tour.location}
+                    </div>
+                    <Badge className={getDifficultyColor(tour.difficulty)}>{tour.difficulty}</Badge>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-lg font-bold text-green-600">${tour.price.toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">por persona</p>
+                </div>
+              </div>
+            </div>
+
+            {!createdSolicitud ? (
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-semibold mb-4">Detalles de la solicitud</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="date">Fecha *</Label>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start text-left font-normal"
+                            disabled={isLoadingAvailability}
+                          >
+                            <Calendar className="mr-2 h-4 w-4" />
+                            {isLoadingAvailability ? 'Cargando disponibilidad…' : formatSelectedDate(selectedDate)}
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start">
+                          <BookingCalendar
+                            mode="single"
+                            selected={selectedDate}
+                            onSelect={(date) => {
+                              if (!date) return;
+                              handleInputChange('date', toYMD(date));
+                            }}
+                            disabled={isStartDateDisabled}
+                            initialFocus
+                          />
+                        </PopoverContent>
+                      </Popover>
+                      {durationDays > 1 ? (
+                        <p className="text-xs text-gray-500">
+                          La ruta dura {durationDays} días: se bloqueará el rango completo.
+                        </p>
+                      ) : null}
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="time">Hora *</Label>
+                      <Input
+                        id="time"
+                        type="time"
+                        value={bookingData.time}
+                        onChange={(e) => handleInputChange('time', e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="companions">Número de acompañantes</Label>
+                      <Select
+                        value={String(bookingData.companions)}
+                        onValueChange={(value) => handleInputChange('companions', parseInt(value))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Seleccionar" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {Array.from({ length: maxCompanions + 1 }, (_, i) => (
+                            <SelectItem key={i} value={i.toString()}>
+                              {i} acompañante{i !== 1 ? 's' : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500">Total de personas: {totalPeople}</p>
+                    </div>
+
+                    <div className="space-y-2 md:col-span-2">
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                        El punto de encuentro lo define el asesor cuando revise tu solicitud y asigne la salida.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="specialRequests">Observaciones (opcional)</Label>
+                  <Textarea
+                    id="specialRequests"
+                    placeholder="Indica detalles adicionales (accesibilidad, preferencias, etc.)"
+                    value={bookingData.specialRequests}
+                    onChange={(e) => handleInputChange('specialRequests', e.target.value)}
+                    className="min-h-[90px]"
+                  />
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
+                  <p className="text-sm text-blue-800">
+                    Una vez el staff cotice y asigne guía, aparecerá el <strong>ID de venta</strong> para pagar.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-200 p-6 rounded-lg">
+                  <div className="space-y-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">ID solicitud</span>
+                      <span className="font-semibold text-green-800">#{createdSolicitud.id_solicitud_personalizada}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">Estado</span>
+                      <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300">
+                        {formatSolicitudEstado(createdSolicitud.estado)}
+                      </Badge>
+                    </div>
+                    {createdSolicitud.id_reserva != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Reserva</span>
+                        <span className="font-medium">#{createdSolicitud.id_reserva}</span>
+                      </div>
+                    )}
+                    {createdSolicitud.reserva_codigo_qr && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Código QR</span>
+                        <span className="font-mono text-xs">{createdSolicitud.reserva_codigo_qr}</span>
+                      </div>
+                    )}
+
+                    <Separator className="bg-green-200" />
+
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-600">ID venta</span>
+                      <span className="font-semibold">
+                        {createdSolicitud.id_venta != null ? `#${createdSolicitud.id_venta}` : 'Aún no disponible'}
+                      </span>
+                    </div>
+                    {createdSolicitud.reserva_monto_total != null && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Total</span>
+                        <span className="font-medium">
+                          ${Number(createdSolicitud.reserva_monto_total || 0).toLocaleString()}
+                        </span>
+                      </div>
+                    )}
+                    {createdSolicitud.id_venta != null && createdSolicitud.venta_estado_pago && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-600">Estado pago</span>
+                        <span className="font-medium">{createdSolicitud.venta_estado_pago}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {createdSolicitud.id_solicitud_personalizada && createdSolicitud.id_venta != null && String(createdSolicitud.venta_estado_pago || '') !== 'Pagado' ? (
+                  <div className="border border-green-200 rounded-lg p-4 bg-white">
+                    <h4 className="font-semibold text-green-800 mb-3">Registrar pago (con comprobante)</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Monto *</Label>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={paymentData.monto}
+                          onChange={(e) => setPaymentData((p) => ({ ...p, monto: e.target.value }))}
+                          placeholder={
+                            createdSolicitud.venta_saldo_pendiente != null
+                              ? String(createdSolicitud.venta_saldo_pendiente)
+                              : 'Ej: 120000'
+                          }
+                        />
+                        {createdSolicitud.venta_saldo_pendiente != null ? (
+                          <p className="text-xs text-gray-500">
+                            Saldo pendiente: ${Number(createdSolicitud.venta_saldo_pendiente || 0).toLocaleString()}
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Método de pago</Label>
+                        <Select
+                          value={paymentData.metodo_pago}
+                          onValueChange={(value) => setPaymentData((p) => ({ ...p, metodo_pago: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Transferencia">Transferencia</SelectItem>
+                            <SelectItem value="QR">QR</SelectItem>
+                            <SelectItem value="PSE">PSE</SelectItem>
+                            <SelectItem value="Efectivo">Efectivo</SelectItem>
+                            <SelectItem value="Tarjeta">Tarjeta</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Número de transacción (opcional)</Label>
+                        <Input
+                          value={paymentData.numero_transaccion}
+                          onChange={(e) => setPaymentData((p) => ({ ...p, numero_transaccion: e.target.value }))}
+                          placeholder="Ej: 123ABC"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>URL del comprobante *</Label>
+                        <Input
+                          value={paymentData.comprobante_url}
+                          onChange={(e) => setPaymentData((p) => ({ ...p, comprobante_url: e.target.value }))}
+                          placeholder="Pega el link (Drive, Dropbox, etc.)"
+                        />
+                        <p className="text-xs text-gray-500">
+                          El staff verificará el comprobante y luego programará la ruta.
+                        </p>
+                      </div>
+
+                      <div className="md:col-span-2 space-y-2">
+                        <Label>Observaciones (opcional)</Label>
+                        <Textarea
+                          value={paymentData.observaciones}
+                          onChange={(e) => setPaymentData((p) => ({ ...p, observaciones: e.target.value }))}
+                          placeholder="Ej: Pago realizado desde Nequi"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end mt-4">
+                      <Button
+                        className="bg-green-700 hover:bg-green-800"
+                        disabled={isSubmitting}
+                        onClick={async () => {
+                          try {
+                            const monto = Number(paymentData.monto || createdSolicitud.venta_saldo_pendiente || createdSolicitud.reserva_monto_total || 0);
+                            if (!Number.isFinite(monto) || monto <= 0) {
+                              toast.error('Monto inválido');
+                              return;
+                            }
+                            if (!String(paymentData.comprobante_url || '').trim()) {
+                              toast.error('Debes pegar la URL del comprobante');
+                              return;
+                            }
+
+                            setIsSubmitting(true);
+                            await solicitudesPersonalizadasAPI.crearPago(createdSolicitud.id_solicitud_personalizada, {
+                              monto,
+                              metodo_pago: paymentData.metodo_pago || null,
+                              numero_transaccion: paymentData.numero_transaccion?.trim() || null,
+                              comprobante_url: paymentData.comprobante_url.trim(),
+                              observaciones: paymentData.observaciones?.trim() || null,
+                            });
+
+                            toast.success('Pago registrado', {
+                              description: 'Quedó pendiente de verificación.'
+                            });
+                            await refreshRutaSolicitud();
+                          } catch (e: any) {
+                            toast.error('No se pudo registrar el pago', {
+                              description: e?.message || 'Intenta nuevamente.'
+                            });
+                          } finally {
+                            setIsSubmitting(false);
+                          }
+                        }}
+                      >
+                        {isSubmitting ? 'Enviando…' : 'Registrar pago'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="flex gap-3 justify-end">
+                  <Button variant="outline" onClick={refreshRutaSolicitud} disabled={isSubmitting}>
+                    {isSubmitting ? 'Actualizando…' : 'Actualizar estado'}
+                  </Button>
+                  <Button onClick={resetAndClose} className="bg-green-600 hover:bg-green-700" disabled={isSubmitting}>
+                    Cerrar
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+
+          {!createdSolicitud && (
+            <div className="p-6 border-t bg-gray-50 flex justify-between">
+              <Button variant="outline" onClick={resetAndClose} disabled={isSubmitting}>
+                Cancelar
+              </Button>
+              <Button onClick={submitRutaSolicitud} disabled={isSubmitting} className="bg-green-600 hover:bg-green-700">
+                {isSubmitting ? 'Enviando…' : 'Enviar solicitud'}
+              </Button>
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">

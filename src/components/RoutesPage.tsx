@@ -1,62 +1,100 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Clock, Users, MapPin, Star, Filter, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Clock, Users, MapPin, Filter, ChevronRight } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { mockRoutes, Route } from '../utils/mockData';
+import { rutasAPI, type Ruta } from '../services/api';
 
 interface RoutesPageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
 
+const FALLBACK_ROUTE_IMAGE =
+  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
+
+function normalizeString(value: unknown): string {
+  return String(value ?? '').trim();
+}
+
+function formatDurationDays(duracion_dias?: number | null): string {
+  if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
+  const days = Number(duracion_dias);
+  return days === 1 ? '1 día' : `${days} días`;
+}
+
 export function RoutesPage({ onViewChange }: RoutesPageProps) {
-  const [filteredRoutes, setFilteredRoutes] = useState<Route[]>(mockRoutes);
+  const [routes, setRoutes] = useState<Ruta[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
   const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
   const [priceFilter, setPriceFilter] = useState<string>('all');
   const [locationFilter, setLocationFilter] = useState<string>('all');
 
-  const handleDifficultyFilter = (difficulty: string) => {
-    setDifficultyFilter(difficulty);
-    applyFilters(difficulty, priceFilter, locationFilter);
+  const loadRoutes = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const data = await rutasAPI.getActivas();
+      setRoutes(data || []);
+    } catch (e: any) {
+      setError(e?.message || 'No se pudieron cargar las rutas');
+      setRoutes([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handlePriceFilter = (price: string) => {
-    setPriceFilter(price);
-    applyFilters(difficultyFilter, price, locationFilter);
-  };
+  useEffect(() => {
+    void loadRoutes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const handleLocationFilter = (location: string) => {
-    setLocationFilter(location);
-    applyFilters(difficultyFilter, priceFilter, location);
-  };
+  const availableLocations = useMemo(() => {
+    const locations = routes
+      .map((r) => normalizeString(r.ubicacion))
+      .filter((v) => v.length > 0);
+    return Array.from(new Set(locations)).sort((a, b) => a.localeCompare(b));
+  }, [routes]);
 
-  const applyFilters = (difficulty: string, price: string, location: string) => {
-    let filtered = [...mockRoutes];
+  const availableDifficulties = useMemo(() => {
+    const diffs = routes
+      .map((r) => normalizeString(r.dificultad))
+      .filter((v) => v.length > 0);
+    return Array.from(new Set(diffs)).sort((a, b) => a.localeCompare(b));
+  }, [routes]);
 
-    if (difficulty !== 'all') {
-      filtered = filtered.filter(route => route.difficulty === difficulty);
+  const filteredRoutes = useMemo(() => {
+    let filtered = [...routes];
+
+    if (difficultyFilter !== 'all') {
+      filtered = filtered.filter((route) => normalizeString(route.dificultad) === difficultyFilter);
     }
 
-    if (price !== 'all') {
-      if (price === 'low') {
-        filtered = filtered.filter(route => route.price < 100000);
-      } else if (price === 'medium') {
-        filtered = filtered.filter(route => route.price >= 100000 && route.price < 150000);
-      } else if (price === 'high') {
-        filtered = filtered.filter(route => route.price >= 150000);
+    if (priceFilter !== 'all') {
+      filtered = filtered.filter((route) => route.precio_base != null);
+
+      if (priceFilter === 'low') {
+        filtered = filtered.filter((route) => Number(route.precio_base) < 100000);
+      } else if (priceFilter === 'medium') {
+        filtered = filtered.filter(
+          (route) => Number(route.precio_base) >= 100000 && Number(route.precio_base) < 150000
+        );
+      } else if (priceFilter === 'high') {
+        filtered = filtered.filter((route) => Number(route.precio_base) >= 150000);
       }
     }
 
-    if (location !== 'all') {
-      filtered = filtered.filter(route => 
-        route.location.toLowerCase().includes(location.toLowerCase())
+    if (locationFilter !== 'all') {
+      filtered = filtered.filter((route) =>
+        normalizeString(route.ubicacion).toLowerCase().includes(locationFilter.toLowerCase())
       );
     }
 
-    setFilteredRoutes(filtered);
-  };
+    return filtered;
+  }, [routes, difficultyFilter, priceFilter, locationFilter]);
 
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
@@ -71,18 +109,25 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
     }
   };
 
+  const clearFilters = () => {
+    setDifficultyFilter('all');
+    setPriceFilter('all');
+    setLocationFilter('all');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50 pt-20 relative">
       {/* Background Image with Blur */}
-      <div 
+      <div
         className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-20"
         style={{
-          backgroundImage: 'url(https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxuYXR1cmUlMjBmb3Jlc3QlMjBtb3VudGFpbnMlMjBibHVyfGVufDF8fHx8MTc2NTIxOTc4M3ww&ixlib=rb-4.1.0&q=80&w=1080)',
+          backgroundImage:
+            'url(https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxuYXR1cmUlMjBmb3Jlc3QlMjBtb3VudGFpbnMlMjBibHVyfGVufDF8fHx8MTc2NTIxOTc4M3ww&ixlib=rb-4.1.0&q=80&w=1080)',
           filter: 'blur(4px)',
-          backgroundAttachment: 'fixed'
+          backgroundAttachment: 'fixed',
         }}
       />
-      
+
       {/* Content */}
       <div className="relative z-10 max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
@@ -112,41 +157,45 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
             <Filter className="w-5 h-5 text-gray-600" />
             <h3 className="text-lg text-gray-800">Filtrar Rutas</h3>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm text-gray-600 mb-2">Municipio</label>
-              <Select value={locationFilter} onValueChange={handleLocationFilter}>
+              <label className="block text-sm text-gray-600 mb-2">Ubicación</label>
+              <Select value={locationFilter} onValueChange={setLocationFilter}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar municipio" />
+                  <SelectValue placeholder="Seleccionar ubicación" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Todos los municipios</SelectItem>
-                  <SelectItem value="Sopetrán">Sopetrán</SelectItem>
-                  <SelectItem value="Santa Fe de Antioquia">Santa Fe de Antioquia</SelectItem>
-                  <SelectItem value="San Jerónimo">San Jerónimo</SelectItem>
+                  <SelectItem value="all">Todas</SelectItem>
+                  {availableLocations.map((loc) => (
+                    <SelectItem key={loc} value={loc}>
+                      {loc}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div>
               <label className="block text-sm text-gray-600 mb-2">Dificultad</label>
-              <Select value={difficultyFilter} onValueChange={handleDifficultyFilter}>
+              <Select value={difficultyFilter} onValueChange={setDifficultyFilter}>
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccionar dificultad" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Todas las dificultades</SelectItem>
-                  <SelectItem value="Fácil">Fácil</SelectItem>
-                  <SelectItem value="Moderado">Moderado</SelectItem>
-                  <SelectItem value="Difícil">Difícil</SelectItem>
+                  <SelectItem value="all">Todas</SelectItem>
+                  {availableDifficulties.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {d}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div>
               <label className="block text-sm text-gray-600 mb-2">Rango de Precio</label>
-              <Select value={priceFilter} onValueChange={handlePriceFilter}>
+              <Select value={priceFilter} onValueChange={setPriceFilter}>
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccionar precio" />
                 </SelectTrigger>
@@ -161,103 +210,114 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
           </div>
         </div>
 
-        {/* Routes Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-          {filteredRoutes.map((route) => (
-            <Card key={route.id} className="overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1">
-              <div className="relative h-48">
-                <ImageWithFallback
-                  src={route.image}
-                  alt={route.name}
-                  className="w-full h-full object-cover"
-                />
-                <div className="absolute top-4 left-4 flex flex-col space-y-2">
-                  {route.featured && (
-                    <Badge className="bg-green-600 text-white">
-                      Destacado
-                    </Badge>
-                  )}
-                  <Badge className={getDifficultyColor(route.difficulty)}>
-                    {route.difficulty}
-                  </Badge>
-                </div>
-                <div className="absolute bottom-4 right-4">
-                  <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1">
-                    <span className="text-lg text-green-600">
-                      ${route.price.toLocaleString()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              
-              <CardContent className="p-6">
-                <h3 className="text-xl mb-2 text-gray-800">{route.name}</h3>
-                <p className="text-gray-600 mb-4 line-clamp-2">
-                  {route.shortDescription}
-                </p>
-                
-                <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
-                  <div className="flex items-center space-x-1 text-gray-500">
-                    <Clock className="w-4 h-4" />
-                    <span>{route.duration}</span>
-                  </div>
-                  <div className="flex items-center space-x-1 text-gray-500">
-                    <Users className="w-4 h-4" />
-                    <span>Máx. {route.maxGroupSize}</span>
-                  </div>
-                  <div className="flex items-center space-x-1 text-gray-500 col-span-2">
-                    <MapPin className="w-4 h-4" />
-                    <span>{route.location}</span>
-                  </div>
-                </div>
-                
-                <Button 
-                  onClick={() => onViewChange('route-detail', route.id)}
-                  className="w-full bg-green-600 hover:bg-green-700"
-                >
-                  Ver Detalles
-                  <ChevronRight className="ml-2 w-4 h-4" />
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        {/* No Results */}
-        {filteredRoutes.length === 0 && (
+        {isLoading && (
           <div className="text-center py-16">
-            <MapPin className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-xl text-gray-600 mb-2">No se encontraron rutas</h3>
-            <p className="text-gray-500 mb-4">
-              Intenta ajustar los filtros para encontrar la ruta perfecta
-            </p>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDifficultyFilter('all');
-                setPriceFilter('all');
-                setLocationFilter('all');
-                setFilteredRoutes(mockRoutes);
-              }}
-            >
-              Limpiar Filtros
+            <p className="text-gray-600">Cargando rutas…</p>
+          </div>
+        )}
+
+        {!isLoading && error && (
+          <div className="text-center py-16">
+            <h3 className="text-xl text-gray-800 mb-2">No se pudieron cargar las rutas</h3>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={loadRoutes} className="bg-green-600 hover:bg-green-700">
+              Reintentar
             </Button>
           </div>
         )}
 
-        {/* CTA Section */}
-        <div className="mt-16 bg-white rounded-lg shadow-sm p-8 text-center">
-          <h2 className="text-2xl mb-4 text-gray-800">¿No encuentras lo que buscas?</h2>
-          <p className="text-gray-600 mb-6">
-            Contáctanos para crear una experiencia personalizada adaptada a tus necesidades
-          </p>
-          <Button 
-            variant="outline"
-            className="border-green-200 text-green-700 hover:bg-green-50"
-          >
-            Contactar Asesor
-          </Button>
-        </div>
+        {!isLoading && !error && (
+          <>
+            {/* Routes Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              {filteredRoutes.map((route) => {
+                const price = route.precio_base != null ? Number(route.precio_base) : null;
+                const location = normalizeString(route.ubicacion) || '—';
+                const difficulty = normalizeString(route.dificultad) || '—';
+                const capacity = route.capacidad_maxima != null ? Number(route.capacidad_maxima) : null;
+
+                return (
+                  <Card
+                    key={route.id_ruta}
+                    className="overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1"
+                  >
+                    <div className="relative h-48">
+                      <ImageWithFallback
+                        src={route.imagen_url || FALLBACK_ROUTE_IMAGE}
+                        alt={route.nombre}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute top-4 left-4 flex flex-col space-y-2">
+                        {route.destacado && <Badge className="bg-green-600 text-white">Destacado</Badge>}
+                        <Badge className={getDifficultyColor(difficulty)}>{difficulty}</Badge>
+                      </div>
+                      <div className="absolute bottom-4 right-4">
+                        <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1">
+                          <span className="text-lg text-green-600">
+                            {price == null ? 'Consultar' : `$${price.toLocaleString()}`}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <CardContent className="p-6">
+                      <h3 className="text-xl mb-2 text-gray-800">{route.nombre}</h3>
+                      <p className="text-gray-600 mb-4 line-clamp-2">
+                        {normalizeString(route.descripcion) || 'Sin descripción'}
+                      </p>
+
+                      <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
+                        <div className="flex items-center space-x-1 text-gray-500">
+                          <Clock className="w-4 h-4" />
+                          <span>{formatDurationDays(route.duracion_dias)}</span>
+                        </div>
+                        <div className="flex items-center space-x-1 text-gray-500">
+                          <Users className="w-4 h-4" />
+                          <span>{capacity == null ? 'Capacidad —' : `Máx. ${capacity}`}</span>
+                        </div>
+                        <div className="flex items-center space-x-1 text-gray-500 col-span-2">
+                          <MapPin className="w-4 h-4" />
+                          <span>{location}</span>
+                        </div>
+                      </div>
+
+                      <Button
+                        onClick={() => onViewChange('route-detail', String(route.id_ruta))}
+                        className="w-full bg-green-600 hover:bg-green-700"
+                      >
+                        Ver Detalles
+                        <ChevronRight className="ml-2 w-4 h-4" />
+                      </Button>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {/* No Results */}
+            {filteredRoutes.length === 0 && (
+              <div className="text-center py-16">
+                <MapPin className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-xl text-gray-600 mb-2">No se encontraron rutas</h3>
+                <p className="text-gray-500 mb-4">Intenta ajustar los filtros para encontrar la ruta perfecta</p>
+                <Button variant="outline" onClick={clearFilters}>
+                  Limpiar Filtros
+                </Button>
+              </div>
+            )}
+
+            {/* CTA Section */}
+            <div className="mt-16 bg-white rounded-lg shadow-sm p-8 text-center">
+              <h2 className="text-2xl mb-4 text-gray-800">¿No encuentras lo que buscas?</h2>
+              <p className="text-gray-600 mb-6">
+                Contáctanos para crear una experiencia personalizada adaptada a tus necesidades
+              </p>
+              <Button variant="outline" className="border-green-200 text-green-700 hover:bg-green-50">
+                Contactar Asesor
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

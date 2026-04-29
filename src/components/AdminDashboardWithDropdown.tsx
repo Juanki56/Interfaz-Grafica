@@ -220,6 +220,13 @@ export function AdminDashboardWithDropdown() {
       description: 'Gestión de reservas',
       badge: mockBookings.length.toString()
     },
+    {
+      id: 'programming',
+      label: 'Programación',
+      icon: CalendarDays,
+      description: 'Salidas y disponibilidad',
+      badge: 'Nuevo',
+    },
     { 
       id: 'farms', 
       label: 'Fincas', 
@@ -3246,6 +3253,17 @@ rol_nombre: payload.rol,
     // Use shared RolesManagement template for roles
     if (activeTab === 'roles') {
       return <RolesManagement />;
+    }
+
+    // Programming management (includes conversion of customized requests)
+    if (activeTab === 'programming') {
+      return (
+        <ProgrammingManagement
+          role={(user?.role as any) || 'admin'}
+          userId={user?.id}
+          userName={user?.name}
+        />
+      );
     }
 
     const filteredData = getFilteredData();
