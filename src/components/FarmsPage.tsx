@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, MapPin, Users, Wifi, Coffee, TreePine, ChevronRight, Filter } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
@@ -7,12 +7,38 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Input } from './ui/input';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { mockFarms, Farm } from '../utils/mockData';
+import { useAuth } from '../App';
+import { fincasAPI, type Finca as BackendFinca } from '../services/api';
 
 interface FarmsPageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
 
+const DEFAULT_FARM_IMAGE = 'https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080';
+const DEFAULT_AMENITIES = ['Wifi', 'Zona verde', 'Cocina', 'Parqueadero'];
+
+function mapBackendFarmToCard(finca: BackendFinca, fallback?: Farm): Farm {
+  const image = finca.imagen_principal || fallback?.image || DEFAULT_FARM_IMAGE;
+  const description = String(finca.descripcion || fallback?.description || 'Hospedaje rural disponible para reserva en OCCITOUR.');
+  return {
+    id: String(finca.id_finca),
+    name: String(finca.nombre || fallback?.name || `Finca #${finca.id_finca}`),
+    description,
+    shortDescription: fallback?.shortDescription || description.slice(0, 140),
+    location: String(finca.ubicacion || finca.direccion || fallback?.location || 'Ubicación por confirmar'),
+    image,
+    gallery: fallback?.gallery?.length ? fallback.gallery : [image],
+    services: fallback?.services || [],
+    activities: fallback?.activities || [],
+    pricePerNight: Number(finca.precio_por_noche || fallback?.pricePerNight || 0),
+    maxGuests: Number(finca.capacidad_personas || fallback?.maxGuests || 1),
+    amenities: fallback?.amenities?.length ? fallback.amenities : DEFAULT_AMENITIES,
+  };
+}
+
 export function FarmsPage({ onViewChange }: FarmsPageProps) {
+  const { user } = useAuth();
+  const [allFarms, setAllFarms] = useState<Farm[]>(mockFarms);
   const [filteredFarms, setFilteredFarms] = useState<Farm[]>(mockFarms);
   const [nameFilter, setNameFilter] = useState<string>('');
   const [priceFilter, setPriceFilter] = useState<string>('all');
@@ -33,8 +59,8 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
     applyFilters(nameFilter, priceFilter, location);
   };
 
-  const applyFilters = (name: string, price: string, location: string) => {
-    let filtered = [...mockFarms];
+  const applyFilters = (name: string, price: string, location: string, sourceFarms: Farm[] = allFarms) => {
+    let filtered = [...sourceFarms];
 
     if (name) {
       filtered = filtered.filter(farm => 
@@ -61,6 +87,41 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
 
     setFilteredFarms(filtered);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!user) {
+      setAllFarms(mockFarms);
+      applyFilters(nameFilter, priceFilter, locationFilter, mockFarms);
+      return;
+    }
+
+    const loadFarms = async () => {
+      try {
+        const backendFarms = await fincasAPI.getAll();
+        if (cancelled || !Array.isArray(backendFarms) || backendFarms.length === 0) return;
+
+        const mapped = backendFarms.map((finca) => {
+          const fallback = mockFarms.find((item) => String(item.id) === String(finca.id_finca));
+          return mapBackendFarmToCard(finca, fallback);
+        });
+
+        setAllFarms(mapped);
+        applyFilters(nameFilter, priceFilter, locationFilter, mapped);
+      } catch {
+        if (cancelled) return;
+        setAllFarms(mockFarms);
+        applyFilters(nameFilter, priceFilter, locationFilter, mockFarms);
+      }
+    };
+
+    void loadFarms();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const getAmenityIcon = (amenity: string) => {
     if (amenity.toLowerCase().includes('wifi')) return <Wifi className="w-4 h-4" />;

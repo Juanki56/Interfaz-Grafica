@@ -12,7 +12,7 @@ import { Checkbox } from './ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Calendar as BookingCalendar } from './ui/calendar';
 import { toast } from 'sonner';
-import { programacionAPI, solicitudesPersonalizadasAPI, type SolicitudPersonalizada } from '../services/api';
+import { programacionAPI, reservasAPI, rutasAPI, solicitudesPersonalizadasAPI, type Ruta, type SolicitudPersonalizada } from '../services/api';
 
 function parseDurationDays(durationLabel: string): number {
   const match = String(durationLabel || '').match(/(\d+)/);
@@ -61,6 +61,15 @@ interface TourBookingModalProps {
   availableRestaurants?: Restaurant[];
 }
 
+interface CompanionDraft {
+  nombre: string;
+  apellido: string;
+  tipo_documento: string;
+  numero_documento: string;
+  telefono: string;
+  fecha_nacimiento: string;
+}
+
 export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availableRestaurants = [] }: TourBookingModalProps) {
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
@@ -83,6 +92,10 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
   const [paymentAmount, setPaymentAmount] = useState<'50' | '100'>('50'); // Nuevo estado para el monto de pago
 
   const [createdSolicitud, setCreatedSolicitud] = useState<SolicitudPersonalizada | null>(null);
+  const [routeDetail, setRouteDetail] = useState<Ruta | null>(null);
+  const [isLoadingRouteDetail, setIsLoadingRouteDetail] = useState(false);
+  const [selectedOptionalServices, setSelectedOptionalServices] = useState<Array<{ id_servicio: number; cantidad: number }>>([]);
+  const [companionDetails, setCompanionDetails] = useState<CompanionDraft[]>([]);
 
   const [paymentData, setPaymentData] = useState({
     monto: '',
@@ -119,6 +132,51 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       .finally(() => {
         if (cancelled) return;
         setIsLoadingAvailability(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, tour.id, type]);
+
+  useEffect(() => {
+    const companionsCount = Math.max(0, Number(bookingData.companions || 0));
+    setCompanionDetails((prev) => {
+      const next = Array.from({ length: companionsCount }, (_, index) => (
+        prev[index] || {
+          nombre: '',
+          apellido: '',
+          tipo_documento: 'CC',
+          numero_documento: '',
+          telefono: '',
+          fecha_nacimiento: '',
+        }
+      ));
+      return next;
+    });
+  }, [bookingData.companions]);
+
+  useEffect(() => {
+    if (!isOpen || type !== 'ruta') return;
+
+    const idRuta = Number(tour.id);
+    if (!Number.isFinite(idRuta) || idRuta <= 0) return;
+
+    let cancelled = false;
+    setIsLoadingRouteDetail(true);
+    rutasAPI
+      .getById(idRuta)
+      .then((detail) => {
+        if (cancelled) return;
+        setRouteDetail(detail);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRouteDetail(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingRouteDetail(false);
       });
 
     return () => {
@@ -220,6 +278,8 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     setBookingStatus(null);
     setBookingId('');
     setCreatedSolicitud(null);
+    setSelectedOptionalServices([]);
+    setCompanionDetails([]);
     setPaymentAmount('50'); // Resetear el monto de pago
     setBookingData({
       date: '',
@@ -243,11 +303,39 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     const value = String(estado ?? '').trim();
     if (!value) return '—';
     const lowered = value.toLowerCase();
-    if (lowered.includes('pend')) return 'Pendiente de cotización';
+    if (lowered.includes('aprobadaparapago') || lowered.includes('aprobada')) return 'Aprobada para pago';
+    if (lowered.includes('pend')) return 'Pendiente de revisión';
     if (lowered.includes('coti')) return 'Cotizada';
     if (lowered.includes('rech')) return 'Rechazada';
     if (lowered.includes('conv') || lowered.includes('program')) return 'Programada';
     return value;
+  };
+
+  const solicitudHabilitadaParaPago = (estado?: string | null) => {
+    const lowered = String(estado ?? '').trim().toLowerCase();
+    return lowered === 'aprobadaparapago' || lowered === 'cotizada';
+  };
+
+  const formatCurrency = (value?: number | string | null) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '$0';
+    return `$${numeric.toLocaleString()}`;
+  };
+
+  const toggleOptionalService = (id_servicio: number, cantidad: number) => {
+    setSelectedOptionalServices((prev) => {
+      const exists = prev.some((item) => item.id_servicio === id_servicio);
+      if (exists) return prev.filter((item) => item.id_servicio !== id_servicio);
+      return [...prev, { id_servicio, cantidad: Math.max(1, cantidad || 1) }];
+    });
+  };
+
+  const updateCompanionField = (index: number, field: keyof CompanionDraft, value: string) => {
+    setCompanionDetails((prev) =>
+      prev.map((companion, companionIndex) =>
+        companionIndex === index ? { ...companion, [field]: value } : companion
+      )
+    );
   };
 
   const submitRutaSolicitud = async () => {
@@ -268,6 +356,14 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       return;
     }
 
+    for (let index = 0; index < companionDetails.length; index += 1) {
+      const companion = companionDetails[index];
+      if (!companion?.nombre.trim() || !companion?.apellido.trim()) {
+        toast.error(`Completa nombre y apellido del acompañante ${index + 1}`);
+        return;
+      }
+    }
+
     setIsSubmitting(true);
     try {
       const created = await solicitudesPersonalizadasAPI.create({
@@ -276,6 +372,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
         hora_deseada: bookingData.time,
         cantidad_personas: cantidadPersonas,
         observaciones: bookingData.specialRequests?.trim() || undefined,
+        servicios_opcionales: selectedOptionalServices,
       });
 
       const createdId: number | undefined =
@@ -285,6 +382,20 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
 
       if (createdId != null) {
         const full = await solicitudesPersonalizadasAPI.getById(Number(createdId));
+        if (full?.id_reserva && companionDetails.length > 0) {
+          await Promise.all(
+            companionDetails.map((companion) =>
+              reservasAPI.agregarAcompanante(full.id_reserva as number, {
+                nombre: companion.nombre.trim(),
+                apellido: companion.apellido.trim(),
+                tipo_documento: companion.tipo_documento || null,
+                numero_documento: companion.numero_documento.trim() || null,
+                telefono: companion.telefono.trim() || null,
+                fecha_nacimiento: companion.fecha_nacimiento || null,
+              })
+            )
+          );
+        }
         setCreatedSolicitud(full);
       } else {
         const fallbackSolicitud = (created as any)?.data?.solicitud as SolicitudPersonalizada | undefined;
@@ -292,7 +403,10 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       }
 
       toast.success('Solicitud enviada', {
-        description: 'Si ya aparece ID de venta, puedes pagar de inmediato (con comprobante).',
+        description:
+          companionDetails.length > 0
+            ? 'Quedó pendiente de revisión y se registraron los acompañantes en la reserva.'
+            : 'Quedó pendiente de revisión. El asesor debe aprobarla antes de habilitar el pago.',
       });
     } catch (e: any) {
       toast.error('No se pudo enviar la solicitud', {
@@ -326,6 +440,22 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     const capacity = Number.isFinite(tour.capacity) ? Number(tour.capacity) : 0;
     const maxCompanions = Math.max(0, Math.min((capacity > 0 ? capacity - 1 : 10), 10));
     const totalPeople = 1 + Number(bookingData.companions || 0);
+    const predefinidos = Array.isArray(routeDetail?.servicios_predefinidos) ? routeDetail.servicios_predefinidos : [];
+    const opcionales = Array.isArray(routeDetail?.servicios_opcionales) ? routeDetail.servicios_opcionales : [];
+    const totalBaseEstimado = Math.max(0, Number(routeDetail?.precio_base ?? tour.price ?? 0)) * totalPeople;
+    const totalPredefinidos = predefinidos.reduce((acc, item) => {
+      const cantidad = Math.max(1, Number(item?.cantidad_default || 1));
+      const precio = Math.max(0, Number(item?.servicio?.precio || 0));
+      return acc + cantidad * precio;
+    }, 0);
+    const totalOpcionales = opcionales.reduce((acc, item) => {
+      const selected = selectedOptionalServices.find((service) => service.id_servicio === item.id_servicio);
+      if (!selected) return acc;
+      const cantidad = Math.max(1, Number(selected.cantidad || item.cantidad_default || 1));
+      const precio = Math.max(0, Number(item?.servicio?.precio || 0));
+      return acc + cantidad * precio;
+    }, 0);
+    const totalEstimado = totalBaseEstimado + totalPredefinidos + totalOpcionales;
 
     const selectedDate = bookingData.date ? new Date(`${bookingData.date}T00:00:00`) : undefined;
     const today = new Date();
@@ -471,6 +601,93 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   </div>
                 </div>
 
+                {companionDetails.length > 0 && (
+                  <div className="space-y-4">
+                    <div>
+                      <h4 className="font-semibold">Datos de acompañantes</h4>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Estos datos se guardan en la reserva para que el equipo vea quiénes integran el grupo.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      {companionDetails.map((companion, index) => (
+                        <div key={`companion-${index}`} className="rounded-xl border border-gray-200 bg-white p-4 space-y-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <h5 className="font-medium text-gray-900">Acompañante {index + 1}</h5>
+                            <Badge variant="outline">Opcional doc/teléfono</Badge>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Nombre *</Label>
+                              <Input
+                                value={companion.nombre}
+                                onChange={(e) => updateCompanionField(index, 'nombre', e.target.value)}
+                                placeholder="Ej: Laura"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Apellido *</Label>
+                              <Input
+                                value={companion.apellido}
+                                onChange={(e) => updateCompanionField(index, 'apellido', e.target.value)}
+                                placeholder="Ej: Gómez"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Tipo de documento</Label>
+                              <Select
+                                value={companion.tipo_documento}
+                                onValueChange={(value) => updateCompanionField(index, 'tipo_documento', value)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Selecciona" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="CC">CC</SelectItem>
+                                  <SelectItem value="TI">TI</SelectItem>
+                                  <SelectItem value="CE">CE</SelectItem>
+                                  <SelectItem value="Pasaporte">Pasaporte</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Número de documento</Label>
+                              <Input
+                                value={companion.numero_documento}
+                                onChange={(e) => updateCompanionField(index, 'numero_documento', e.target.value)}
+                                placeholder="Ej: 123456789"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Teléfono</Label>
+                              <Input
+                                value={companion.telefono}
+                                onChange={(e) => updateCompanionField(index, 'telefono', e.target.value)}
+                                placeholder="Ej: 3001234567"
+                              />
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label>Fecha de nacimiento</Label>
+                              <Input
+                                type="date"
+                                value={companion.fecha_nacimiento}
+                                onChange={(e) => updateCompanionField(index, 'fecha_nacimiento', e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label htmlFor="specialRequests">Observaciones (opcional)</Label>
                   <Textarea
@@ -482,9 +699,111 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   />
                 </div>
 
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-green-200 bg-green-50 p-4">
+                    <h5 className="font-semibold text-green-900">Servicios incluidos en la ruta</h5>
+                    <p className="text-sm text-green-800 mt-1">
+                      Se toman directamente desde la configuración de la ruta para que la solicitud salga coherente desde el inicio.
+                    </p>
+                  </div>
+
+                  {isLoadingRouteDetail ? (
+                    <div className="text-sm text-gray-500">Cargando servicios de la ruta…</div>
+                  ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="space-y-3">
+                        <h6 className="font-medium text-gray-900">Predefinidos</h6>
+                        {predefinidos.length > 0 ? (
+                          predefinidos.map((servicio) => (
+                            <div
+                              key={servicio.id_ruta_servicio_predefinido ?? `${servicio.id_servicio}-pre`}
+                              className="rounded-lg border border-green-100 bg-white p-3"
+                            >
+                              <div className="flex items-center justify-between gap-3">
+                                <div>
+                                  <p className="font-medium text-gray-900">{servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}</p>
+                                  <p className="text-xs text-gray-500">
+                                    Cantidad por defecto: {servicio.cantidad_default}
+                                  </p>
+                                </div>
+                                <Badge className="bg-green-100 text-green-800">Incluido</Badge>
+                              </div>
+                              {servicio.servicio?.precio != null && (
+                                <p className="text-xs text-gray-500 mt-2">
+                                  Referencia: {formatCurrency(servicio.servicio.precio)}
+                                </p>
+                              )}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-3 text-sm text-gray-500">
+                            Esta ruta no tiene servicios predefinidos registrados.
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <h6 className="font-medium text-gray-900">Opcionales</h6>
+                        {opcionales.length > 0 ? (
+                          opcionales.map((servicio) => {
+                            const checked = selectedOptionalServices.some((item) => item.id_servicio === servicio.id_servicio);
+                            return (
+                              <label
+                                key={servicio.id_ruta_servicio_opcional ?? `${servicio.id_servicio}-opc`}
+                                className="flex items-start gap-3 rounded-lg border border-amber-100 bg-white p-3 cursor-pointer"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={() => toggleOptionalService(servicio.id_servicio, servicio.cantidad_default)}
+                                />
+                                <div className="flex-1">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <p className="font-medium text-gray-900">{servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}</p>
+                                    <Badge className="bg-amber-100 text-amber-800">Opcional</Badge>
+                                  </div>
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    Cantidad sugerida: {servicio.cantidad_default} · {formatCurrency(servicio.servicio?.precio)}
+                                  </p>
+                                </div>
+                              </label>
+                            );
+                          })
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-3 text-sm text-gray-500">
+                            Esta ruta no tiene servicios opcionales registrados.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-4">
+                  <h5 className="font-semibold text-blue-900">Resumen estimado</h5>
+                  <div className="mt-3 space-y-2 text-sm text-blue-900">
+                    <div className="flex items-center justify-between">
+                      <span>Base de la ruta</span>
+                      <span>{formatCurrency(totalBaseEstimado)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Servicios predefinidos</span>
+                      <span>{formatCurrency(totalPredefinidos)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>Servicios opcionales seleccionados</span>
+                      <span>{formatCurrency(totalOpcionales)}</span>
+                    </div>
+                    <Separator className="bg-blue-200" />
+                    <div className="flex items-center justify-between font-semibold">
+                      <span>Total estimado</span>
+                      <span>{formatCurrency(totalEstimado)}</span>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg">
                   <p className="text-sm text-blue-800">
-                    Una vez el staff cotice y asigne guía, aparecerá el <strong>ID de venta</strong> para pagar.
+                    Primero el asesor revisa y aprueba la solicitud. Solo después de eso se habilita el pago con comprobante.
                   </p>
                 </div>
               </div>
@@ -540,7 +859,10 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   </div>
                 </div>
 
-                {createdSolicitud.id_solicitud_personalizada && createdSolicitud.id_venta != null && String(createdSolicitud.venta_estado_pago || '') !== 'Pagado' ? (
+                {createdSolicitud.id_solicitud_personalizada &&
+                createdSolicitud.id_venta != null &&
+                solicitudHabilitadaParaPago(createdSolicitud.estado) &&
+                String(createdSolicitud.venta_estado_pago || '') !== 'Pagado' ? (
                   <div className="border border-green-200 rounded-lg p-4 bg-white">
                     <h4 className="font-semibold text-green-800 mb-3">Registrar pago (con comprobante)</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -600,7 +922,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                           placeholder="Pega el link (Drive, Dropbox, etc.)"
                         />
                         <p className="text-xs text-gray-500">
-                          El staff verificará el comprobante y luego programará la ruta.
+                          El asesor verificará el comprobante y, cuando quede aprobado, podrá convertir la solicitud en programación operativa.
                         </p>
                       </div>
 
@@ -655,6 +977,15 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                         {isSubmitting ? 'Enviando…' : 'Registrar pago'}
                       </Button>
                     </div>
+                  </div>
+                ) : null}
+
+                {createdSolicitud.id_solicitud_personalizada && !solicitudHabilitadaParaPago(createdSolicitud.estado) ? (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                    <h4 className="font-semibold text-amber-900">Pago aún no habilitado</h4>
+                    <p className="text-sm text-amber-800 mt-1">
+                      Tu solicitud está en revisión. Cuando el asesor la apruebe y ajuste la cotización, aquí mismo se habilitará el registro del pago.
+                    </p>
                   </div>
                 ) : null}
 

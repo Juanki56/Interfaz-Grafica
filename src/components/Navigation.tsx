@@ -61,6 +61,7 @@ export function Navigation() {
   // Management modules for client role
   const clientManagementModules = [
     { id: 'bookings', label: 'Reservas', icon: Calendar },
+    { id: 'programming', label: 'Programaciones', icon: Route },
     { id: 'sales', label: 'Ventas', icon: DollarSign },
     { id: 'payments', label: 'Abonos', icon: CreditCard }
   ];

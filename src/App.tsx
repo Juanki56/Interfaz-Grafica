@@ -45,8 +45,8 @@ const FORCED_ADMIN_EMAIL = String(import.meta.env.VITE_FORCED_ADMIN_EMAIL || 'ad
   .toLowerCase()
   .trim();
 
-// Duración de sesión en minutos (extensible para mantener sesión activa más tiempo)
-const SESSION_TIMEOUT_MINUTES = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || 120);
+// Duración de sesión en minutos (alineada con la expiración JWT por defecto)
+const SESSION_TIMEOUT_MINUTES = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || 480);
 
 const setSessionExpiry = (minutes: number) => {
   const expiry = Date.now() + minutes * 60 * 1000;

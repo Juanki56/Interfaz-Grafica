@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { X, Calendar, Users, MapPin, DollarSign, User, Phone, Mail, Plus, Trash2, QrCode, CheckCircle2, Clock3, Upload, FileCheck, Music, UtensilsCrossed, UserCheck, Sparkles } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -11,6 +11,8 @@ import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { toast } from 'sonner';
+import { useAuth } from '../App';
+import { pagosAPI, reservasAPI } from '../services/api';
 
 interface Companion {
   id: string;
@@ -44,7 +46,56 @@ interface FarmBookingModalProps {
   selectedServices: string[];
 }
 
+const MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024;
+const ALLOWED_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+
+const PAYMENT_METHOD_MAP = {
+  nequi: 'QR',
+  bancolombia: 'Transferencia',
+} as const;
+
+const OCCITOURS_PAYMENT_INFO = {
+  titular: 'Occitours S.A.S',
+  nequiNumero: '3001234567',
+  bancolombiaTipoCuenta: 'Ahorros',
+  bancolombiaNumeroCuenta: '12345678901',
+};
+
+function splitCompanionName(fullName: string) {
+  const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return {
+      nombre: parts[0] || '',
+      apellido: '',
+    };
+  }
+
+  return {
+    nombre: parts.slice(0, -1).join(' '),
+    apellido: parts.slice(-1).join(' '),
+  };
+}
+
+function buildCompanionBirthdate(age: string): string | null {
+  const numericAge = Number(age);
+  if (!Number.isFinite(numericAge) || numericAge < 0) return null;
+
+  const today = new Date();
+  today.setFullYear(today.getFullYear() - Math.floor(numericAge));
+  return today.toISOString().slice(0, 10);
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('No se pudo leer el comprobante seleccionado.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function FarmBookingModal({ isOpen, onClose, farm, availableServices, selectedServices: initialSelectedServices }: FarmBookingModalProps) {
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
     checkIn: '',
@@ -60,8 +111,25 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [bookingStatus, setBookingStatus] = useState<'pending' | 'confirmed' | null>(null);
   const [bookingId, setBookingId] = useState<string>('');
+  const [paymentAmountMode, setPaymentAmountMode] = useState<'50' | '100'>('50');
+  const [registeredPaymentId, setRegisteredPaymentId] = useState<number | null>(null);
+  const [registeredPaymentAmount, setRegisteredPaymentAmount] = useState<number>(0);
+  const [createdSaleId, setCreatedSaleId] = useState<number | null>(null);
+  const [createdReservationTotal, setCreatedReservationTotal] = useState<number>(0);
 
   const totalSteps = 4; // Servicios y acompañantes, Info médica, Pago, Confirmación
+  const totalGuests = 1 + bookingData.companions.length;
+  const staySubtotal = farm.pricePerNight * bookingData.nights;
+  const selectedServiceItems = useMemo(
+    () => availableServices.filter((service) => bookingData.selectedServices.includes(service.id)),
+    [availableServices, bookingData.selectedServices]
+  );
+  const requestedServicesSummary = selectedServiceItems.map((service) => service.name).join(', ');
+  const amountToPayToday = useMemo(() => {
+    const baseAmount = createdReservationTotal > 0 ? createdReservationTotal : staySubtotal;
+    if (baseAmount <= 0) return 0;
+    return paymentAmountMode === '50' ? Math.ceil(baseAmount / 2) : baseAmount;
+  }, [createdReservationTotal, paymentAmountMode, staySubtotal]);
 
   const handleInputChange = (field: string, value: any) => {
     setBookingData(prev => ({
@@ -126,31 +194,39 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
+      if (file.size > MAX_PROOF_FILE_SIZE) {
+        toast.error('El comprobante no puede superar los 5MB');
+        e.target.value = '';
+        return;
+      }
+
+      if (!ALLOWED_PROOF_TYPES.includes(file.type)) {
+        toast.error('Solo se permiten archivos PDF, JPG o PNG');
+        e.target.value = '';
+        return;
+      }
+
       setBookingData(prev => ({
         ...prev,
-        paymentProof: e.target.files![0]
+        paymentProof: file
       }));
       toast.success('Comprobante cargado correctamente');
     }
   };
 
   const calculateTotal = () => {
-    let total = farm.pricePerNight * bookingData.nights;
-    
-    bookingData.selectedServices.forEach(serviceId => {
-      const service = availableServices.find(s => s.id === serviceId);
-      if (service) {
-        total += service.price;
-      }
-    });
-    
-    return total;
+    return staySubtotal;
   };
 
   const handleNextStep = () => {
     if (step === 1) {
       if (!bookingData.checkIn || !bookingData.checkOut) {
         toast.error('Por favor selecciona las fechas de estadía');
+        return;
+      }
+      if (totalGuests > farm.maxGuests) {
+        toast.error(`La finca permite máximo ${farm.maxGuests} personas en esta reserva`);
         return;
       }
       // Validar acompañantes si hay alguno agregado
@@ -170,33 +246,117 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
   };
 
   const handleSubmit = async () => {
+    if (!user || user.role !== 'client') {
+      toast.error('Debes iniciar sesión como cliente para registrar la reserva de finca');
+      return;
+    }
+
     if (!bookingData.paymentProof) {
       toast.error('Por favor adjunta el comprobante de pago');
       return;
     }
 
+    const clientId = Number(user.id);
+    if (!Number.isFinite(clientId) || clientId <= 0) {
+      toast.error('No se pudo identificar el cliente autenticado');
+      return;
+    }
+
     setIsSubmitting(true);
-    
-    // Simulate booking creation
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate booking ID
-    const newBookingId = `FNC-${Date.now().toString().slice(-8)}`;
-    setBookingId(newBookingId);
-    setBookingStatus('pending');
-    
-    toast.success('¡Reserva registrada exitosamente!', {
-      description: 'Tu reserva está pendiente de revisión del comprobante.'
-    });
-    
-    setIsSubmitting(false);
-    setStep(4);
+    try {
+      const comprobanteUrl = await fileToDataUrl(bookingData.paymentProof);
+      const notes: string[] = [];
+      if (bookingData.medicalIndications.trim()) {
+        notes.push(`Indicaciones médicas: ${bookingData.medicalIndications.trim()}`);
+      }
+      if (bookingData.specialRequests.trim()) {
+        notes.push(`Solicitudes especiales: ${bookingData.specialRequests.trim()}`);
+      }
+      if (requestedServicesSummary) {
+        notes.push(`Servicios solicitados para coordinar: ${requestedServicesSummary}`);
+      }
+
+      const createdReserva = await reservasAPI.create({
+        id_cliente: clientId,
+        notas: notes.join(' | ') || `Reserva web de finca ${farm.name}`,
+      });
+
+      const reservaId = Number((createdReserva as any)?.data?.id_reserva ?? (createdReserva as any)?.id_reserva);
+      if (!Number.isFinite(reservaId) || reservaId <= 0) {
+        throw new Error('Se creó la reserva, pero no se pudo obtener su identificador.');
+      }
+
+      const fincaResponse = await reservasAPI.agregarFinca(reservaId, {
+        id_finca: Number(farm.id),
+        fecha_checkin: bookingData.checkIn,
+        fecha_checkout: bookingData.checkOut,
+        numero_noches: bookingData.nights,
+        precio_por_noche: farm.pricePerNight,
+      });
+
+      for (const companion of bookingData.companions) {
+        const parsedName = splitCompanionName(companion.name);
+        await reservasAPI.agregarAcompanante(reservaId, {
+          id_cliente: null,
+          nombre: parsedName.nombre || companion.name.trim(),
+          apellido: parsedName.apellido || 'Acompañante',
+          tipo_documento: companion.documentType || null,
+          numero_documento: companion.documentNumber.trim() || null,
+          telefono: companion.phone.trim() || null,
+          fecha_nacimiento: buildCompanionBirthdate(companion.age),
+        });
+      }
+
+      const venta = (fincaResponse as any)?.venta ?? (fincaResponse as any)?.data?.venta ?? null;
+      const montoTotalReserva = Number((fincaResponse as any)?.monto_total ?? venta?.monto_total ?? staySubtotal);
+      const montoAbono = paymentAmountMode === '50' ? Math.ceil(montoTotalReserva / 2) : montoTotalReserva;
+
+      if (!venta?.id_venta) {
+        throw new Error('La reserva fue creada, pero no se pudo preparar la venta para el abono.');
+      }
+
+      const pagoResponse = await pagosAPI.create({
+        id_venta: Number(venta.id_venta),
+        id_reserva: reservaId,
+        monto: montoAbono,
+        metodo_pago: PAYMENT_METHOD_MAP[bookingData.paymentMethod],
+        comprobante_url: comprobanteUrl,
+        comprobante_nombre: bookingData.paymentProof.name,
+        comprobante_tipo: bookingData.paymentProof.type || 'application/octet-stream',
+        observaciones: requestedServicesSummary
+          ? `Servicios solicitados por cliente: ${requestedServicesSummary}`
+          : null,
+      });
+
+      const paymentId = Number((pagoResponse as any)?.data?.id_pago ?? (pagoResponse as any)?.id_pago);
+
+      setCreatedReservationTotal(montoTotalReserva);
+      setCreatedSaleId(Number(venta.id_venta));
+      setRegisteredPaymentAmount(montoAbono);
+      setRegisteredPaymentId(Number.isFinite(paymentId) ? paymentId : null);
+      setBookingId(`#${reservaId}`);
+      setBookingStatus('pending');
+      setStep(4);
+
+      toast.success('¡Reserva registrada exitosamente!', {
+        description: 'La reserva y el abono quedaron pendientes de revisión del comprobante.'
+      });
+    } catch (error: any) {
+      toast.error(error?.message || 'No se pudo completar la reserva de finca');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const resetAndClose = () => {
     setStep(1);
     setBookingStatus(null);
     setBookingId('');
+    setPaymentAmountMode('50');
+    setRegisteredPaymentAmount(0);
+    setRegisteredPaymentId(null);
+    setCreatedSaleId(null);
+    setCreatedReservationTotal(0);
     setBookingData({
       checkIn: '',
       checkOut: '',
@@ -538,13 +698,12 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                       
                       {bookingData.selectedServices.length > 0 && (
                         <>
-                          {bookingData.selectedServices.map(serviceId => {
-                            const service = availableServices.find(s => s.id === serviceId);
+                          {selectedServiceItems.map(service => {
                             if (!service) return null;
                             return (
-                              <div key={serviceId} className="flex justify-between">
-                                <span>{service.name}:</span>
-                                <span>${service.price.toLocaleString()}</span>
+                              <div key={service.id} className="flex justify-between text-amber-700">
+                                <span>{service.name} (solicitud):</span>
+                                <span>Se coordina luego</span>
                               </div>
                             );
                           })}
@@ -555,12 +714,58 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                     <Separator className="bg-blue-200" />
                     
                     <div className="flex items-center justify-between">
-                      <span className="font-medium">Total a pagar:</span>
+                      <span className="font-medium">Valor base de la estadía:</span>
                       <span className="text-xl font-bold text-green-600">
                         ${calculateTotal().toLocaleString()}
                       </span>
                     </div>
                   </div>
+                </div>
+
+                <Separator className="my-6" />
+
+                <div className="space-y-4">
+                  <h5 className="font-medium">Monto a consignar ahora</h5>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentAmountMode('50')}
+                      className={`rounded-lg border-2 p-4 text-left transition-all ${
+                        paymentAmountMode === '50'
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200 hover:border-green-300'
+                      }`}
+                    >
+                      <p className="font-medium text-gray-900">Abonar 50%</p>
+                      <p className="text-sm text-gray-600 mt-1">
+                        ${Math.ceil(calculateTotal() / 2).toLocaleString()}
+                      </p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentAmountMode('100')}
+                      className={`rounded-lg border-2 p-4 text-left transition-all ${
+                        paymentAmountMode === '100'
+                          ? 'border-green-500 bg-green-50'
+                          : 'border-gray-200 hover:border-green-300'
+                      }`}
+                    >
+                      <p className="font-medium text-gray-900">Pagar 100%</p>
+                      <p className="text-sm text-gray-600 mt-1">
+                        ${calculateTotal().toLocaleString()}
+                      </p>
+                    </button>
+                  </div>
+
+                  <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">
+                    Monto del comprobante que se registrará en abonos: <strong>${amountToPayToday.toLocaleString()}</strong>
+                  </div>
+
+                  {selectedServiceItems.length > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      Los servicios adicionales seleccionados se guardan como solicitud para coordinación posterior; el abono inicial se registra sobre la estadía de la finca.
+                    </div>
+                  )}
                 </div>
 
                 <Separator className="my-6" />
@@ -654,11 +859,11 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                             </div>
                             <div>
                               <p className="text-xs text-gray-600">Número de cuenta:</p>
-                              <p className="font-medium font-mono">12345678901</p>
+                              <p className="font-medium font-mono">{OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}</p>
                             </div>
                             <div>
                               <p className="text-xs text-gray-600">Titular:</p>
-                              <p className="font-medium">Occitours S.A.S</p>
+                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.titular}</p>
                             </div>
                           </div>
                         )}
@@ -682,13 +887,15 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                           <p className={`text-lg font-mono font-bold ${
                             bookingData.paymentMethod === 'nequi' ? 'text-purple-900' : 'text-red-900'
                           }`}>
-                            {bookingData.paymentMethod === 'nequi' ? '3001234567' : '12345678901'}
+                            {bookingData.paymentMethod === 'nequi'
+                              ? OCCITOURS_PAYMENT_INFO.nequiNumero
+                              : OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}
                           </p>
                         </div>
                         <p className={`text-xs ${
                           bookingData.paymentMethod === 'nequi' ? 'text-purple-600' : 'text-red-600'
                         }`}>
-                          A nombre de: Occitours S.A.S
+                          A nombre de: {OCCITOURS_PAYMENT_INFO.titular}
                         </p>
                       </div>
                     </div>
@@ -729,7 +936,7 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                     
                     <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                       <p className="text-xs text-yellow-800">
-                        <strong>Importante:</strong> Tu reserva quedará en estado "Pendiente" hasta que un asesor o administrador revise y confirme tu comprobante de pago. Te notificaremos por correo cuando sea aprobada.
+                    <strong>Importante:</strong> Al confirmar se creará la reserva, la venta y el abono asociado con este comprobante. Todo quedará pendiente hasta que el staff revise y apruebe el pago.
                       </p>
                     </div>
                   </div>
@@ -776,7 +983,10 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                         <p>• Salida: {bookingData.checkOut}</p>
                         <p>• {bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}</p>
                         <p>• {1 + bookingData.companions.length} persona{1 + bookingData.companions.length > 0 ? 's' : ''}</p>
-                        <p>• Total: ${calculateTotal().toLocaleString()}</p>
+                        <p>• Venta creada: {createdSaleId ? `#${createdSaleId}` : 'Pendiente'}</p>
+                        <p>• Valor reserva: ${createdReservationTotal.toLocaleString()}</p>
+                        <p>• Abono enviado: ${registeredPaymentAmount.toLocaleString()}</p>
+                        {registeredPaymentId ? <p>• Abono registrado: #{registeredPaymentId}</p> : null}
                       </div>
                     </div>
                   </div>
@@ -784,8 +994,8 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                 
                 <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg max-w-md mx-auto mb-4">
                   <p className="text-sm text-blue-800">
-                    <strong>📧 Próximos pasos:</strong><br />
-                    Un asesor o administrador revisará tu comprobante de pago. Recibirás un correo de confirmación cuando tu reserva sea aprobada.
+                    <strong>Próximos pasos:</strong><br />
+                    El staff revisará el comprobante en abonos. Cuando lo aprueben, la venta y la reserva se actualizarán automáticamente.
                   </p>
                 </div>
                 

@@ -12,7 +12,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Separator } from './ui/separator';
 import { useAuth } from '../App';
 import { toast } from 'sonner';
-import { ClientSalesTab, ClientPaymentsTab } from './ClientSalesAndPayments';
+import { ClientPaymentsTab, ClientProgrammingsTab, ClientSalesTab } from './ClientSalesAndPayments';
 import { clientesAPI, empleadosAPI, usersAPI, authAPI } from '../services/api';
 import { decodeJWT } from '../utils/jwtDecoder';
 
@@ -417,6 +417,18 @@ export function UserProfile({ onClose }: UserProfileProps) {
       { id: 'account', label: 'Cuenta', cols: 'grid-cols-4' }
     ];
 
+    if (user?.role === 'client') {
+      return [
+        { id: 'profile', label: 'Perfil', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'bookings', label: 'Reservas', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'programming', label: 'Programaciones', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'sales', label: 'Ventas', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'payments', label: 'Abonos', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'security', label: 'Seguridad', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'notifications', label: 'Notificaciones', cols: 'grid-cols-4 md:grid-cols-7' },
+      ];
+    }
+
     return baseTabs;
   };
 
@@ -621,6 +633,12 @@ export function UserProfile({ onClose }: UserProfileProps) {
           )}
 
           {/* Sales Tab - Only for clients */}
+          {user?.role === 'client' && (
+            <TabsContent value="programming">
+              <ClientProgrammingsTab />
+            </TabsContent>
+          )}
+
           {user?.role === 'client' && (
             <TabsContent value="sales">
               <ClientSalesTab />

@@ -20,7 +20,9 @@ import {
   Home as HomeIcon,
   Utensils,
   Bed,
-  Bus
+  Bus,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { ProgrammingFormImproved } from './ProgrammingFormImproved';
 import { Button } from './ui/button';
@@ -58,6 +60,7 @@ import {
 } from './ui/alert-dialog';
 import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { toast } from 'sonner';
 import {
   empleadosAPI,
@@ -134,6 +137,9 @@ interface Programming {
   notes?: string;
   createdAt: string;
   createdBy: string;
+  totalSeats?: number;
+  availableSeats?: number;
+  occupiedSeats?: number;
 }
 
 interface ProgrammingManagementProps {
@@ -622,6 +628,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
+  const [staffActiveTab, setStaffActiveTab] = useState<'programaciones' | 'solicitudes'>('programaciones');
+  const [expandedSolicitudId, setExpandedSolicitudId] = useState<number | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -690,6 +698,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     >
   >({});
   const [backendConvertingId, setBackendConvertingId] = useState<number | null>(null);
+  const [backendSolicitudSavingId, setBackendSolicitudSavingId] = useState<number | null>(null);
   const [backendViewDetail, setBackendViewDetail] = useState<ProgramacionBackend | null>(null);
   const [backendViewLoading, setBackendViewLoading] = useState(false);
   const [backendViewError, setBackendViewError] = useState<string | null>(null);
@@ -739,6 +748,68 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     ? backendEmpleados.find((guide) => guide.id_empleado === backendViewDetail.id_empleado)
     : undefined;
 
+  const buildSolicitudEditState = (solicitudes: SolicitudPersonalizada[]) => {
+    const nextState: Record<
+      number,
+      {
+        fecha_salida: string;
+        fecha_regreso: string;
+        hora_salida: string;
+        hora_regreso: string;
+        precio_programacion: string;
+      }
+    > = {};
+
+    for (const s of solicitudes) {
+      const id = Number(s?.id_solicitud_personalizada);
+      if (!Number.isFinite(id) || id <= 0) continue;
+
+      nextState[id] = {
+        fecha_salida: normalizeDateInputValue(s.fecha_deseada),
+        fecha_regreso: normalizeDateInputValue((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
+        hora_salida: normalizeTimeInputValue(s.hora_deseada),
+        hora_regreso: normalizeTimeInputValue((s as any).hora_regreso_deseada || ''),
+        precio_programacion:
+          s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
+      };
+    }
+
+    return nextState;
+  };
+
+  const refreshBackendSolicitudes = async () => {
+    const refreshed = await solicitudesPersonalizadasAPI.listAll();
+    setBackendSolicitudes(refreshed);
+    setBackendSolicitudEdits((prev) => {
+      const base = buildSolicitudEditState(refreshed);
+      for (const [rawId, currentEdit] of Object.entries(prev)) {
+        const id = Number(rawId);
+        if (!base[id]) continue;
+        base[id] = {
+          ...base[id],
+          ...currentEdit,
+        };
+      }
+      return base;
+    });
+    return refreshed;
+  };
+
+  const syncBackendProgramaciones = (programaciones: ProgramacionBackend[]) => {
+    setBackendProgramaciones(programaciones);
+    setBackendEdits((prev) => {
+      const next: Record<number, { id_empleado: string; lugar_encuentro: string }> = {};
+      for (const p of programaciones) {
+        if (!p?.id_programacion) continue;
+        next[p.id_programacion] = {
+          id_empleado: prev[p.id_programacion]?.id_empleado ?? (p.id_empleado ? String(p.id_empleado) : ''),
+          lugar_encuentro: prev[p.id_programacion]?.lugar_encuentro ?? (p.lugar_encuentro ? String(p.lugar_encuentro) : ''),
+        };
+      }
+      return next;
+    });
+  };
+
   useEffect(() => {
     backendCreateScrollRef.current?.scrollTo({ top: 0 });
   }, [backendCreateStep]);
@@ -762,45 +833,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         if (cancelled) return;
 
         setBackendEmpleados(empleados);
-        setBackendProgramaciones(programaciones);
+        syncBackendProgramaciones(programaciones);
         setBackendSolicitudes(solicitudes);
         setBackendRutas(rutas);
 
-        const initialEdits: Record<number, { id_empleado: string; lugar_encuentro: string }> = {};
-        for (const p of programaciones) {
-          if (!p?.id_programacion) continue;
-          initialEdits[p.id_programacion] = {
-            id_empleado: p.id_empleado ? String(p.id_empleado) : '',
-            lugar_encuentro: p.lugar_encuentro ? String(p.lugar_encuentro) : '',
-          };
-        }
-        setBackendEdits(initialEdits);
-
-        const initialSolicitudEdits: Record<
-          number,
-          {
-            fecha_salida: string;
-            fecha_regreso: string;
-            hora_salida: string;
-            hora_regreso: string;
-            precio_programacion: string;
-          }
-        > = {};
-
-        for (const s of solicitudes) {
-          const id = Number(s?.id_solicitud_personalizada);
-          if (!Number.isFinite(id) || id <= 0) continue;
-
-          initialSolicitudEdits[id] = {
-            fecha_salida: String(s.fecha_deseada || ''),
-            fecha_regreso: String((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
-            hora_salida: String(s.hora_deseada || ''),
-            hora_regreso: String((s as any).hora_regreso_deseada || ''),
-            precio_programacion: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
-          };
-        }
-
-        setBackendSolicitudEdits(initialSolicitudEdits);
+        setBackendSolicitudEdits(buildSolicitudEditState(solicitudes));
       } catch (e: any) {
         if (cancelled) return;
         setBackendError(e?.message || 'No se pudo cargar programación desde el backend');
@@ -814,6 +851,21 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       cancelled = true;
     };
   }, [isStaff]);
+
+  useEffect(() => {
+    if (!isStaff || staffActiveTab !== 'programaciones') return;
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const programaciones = await programacionAPI.getAll();
+        syncBackendProgramaciones(programaciones);
+      } catch {
+        // Ignore silent refresh errors; the manual state/error already covers initial load.
+      }
+    }, 15000);
+
+    return () => window.clearInterval(intervalId);
+  }, [isStaff, staffActiveTab]);
   
   const itemsPerPage = 4; // Paginación de 4 items
 
@@ -843,6 +895,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
         const guideName = [p.empleado_nombre, p.empleado_apellido].filter(Boolean).join(' ').trim() || '—';
         const routeName = p.ruta_nombre || `Ruta ${p.id_ruta}`;
+        const totalSeats = Math.max(0, Number(p.cupos_totales ?? 0));
+        const availableSeats = Math.max(0, Number(p.cupos_disponibles ?? 0));
+        const occupiedSeats = Math.max(0, totalSeats - availableSeats);
 
         return {
           id,
@@ -864,6 +919,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           notes: p.lugar_encuentro ? `Punto de encuentro: ${p.lugar_encuentro}` : undefined,
           createdAt: (p as any).fecha_creacion ? String((p as any).fecha_creacion).slice(0, 10) : String(p.fecha_salida || ''),
           createdBy: 'Backend',
+          totalSeats,
+          availableSeats,
+          occupiedSeats,
         };
       });
 
@@ -1302,6 +1360,24 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     return `${dateLabel} · ${time}`;
   };
 
+  const normalizeDateInputValue = (value?: string | null) => {
+    if (!value) return '';
+    const normalized = String(value).trim();
+    const match = normalized.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+    const parsed = new Date(normalized);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  };
+
+  const normalizeTimeInputValue = (value?: string | null) => {
+    if (!value) return '';
+    const normalized = String(value).trim();
+    const match = normalized.match(/^(\d{2}:\d{2})/);
+    if (match) return match[1];
+    return '';
+  };
+
   const renderGuideAssignmentCard = (
     guide: EmpleadoBackend | undefined,
     selectedGuideValue: string,
@@ -1435,6 +1511,56 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     
     const config = statusConfig[status] || statusConfig.scheduled;
     return <Badge className={config.className}>{config.label}</Badge>;
+  };
+
+  const normalizeSolicitudStatus = (status?: string | null) => {
+    const raw = String(status || '').trim().toLowerCase();
+    if (!raw) return 'Pendiente de revisión';
+    if (raw.includes('aprobadaparapago') || raw.includes('aprobada')) return 'Aprobada para pago';
+    if (raw.includes('convert')) return 'Convertida';
+    if (raw.includes('coti')) return 'Cotizada';
+    if (raw.includes('rech')) return 'Rechazada';
+    if (raw.includes('cancel')) return 'Cancelada';
+    if (raw.includes('pend')) return 'Pendiente de revisión';
+    return String(status);
+  };
+
+  const getSolicitudStatusBadge = (status?: string | null) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized.includes('aprobadaparapago') || normalized.includes('aprobada')) {
+      return <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">Aprobada para pago</Badge>;
+    }
+    if (normalized.includes('convert')) {
+      return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">Convertida</Badge>;
+    }
+    if (normalized.includes('coti')) {
+      return <Badge className="bg-sky-100 text-sky-800 hover:bg-sky-100">Cotizada</Badge>;
+    }
+    if (normalized.includes('rech')) {
+      return <Badge className="bg-red-100 text-red-800 hover:bg-red-100">Rechazada</Badge>;
+    }
+    if (normalized.includes('cancel')) {
+      return <Badge className="bg-gray-100 text-gray-800 hover:bg-gray-100">Cancelada</Badge>;
+    }
+    return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Pendiente de revisión</Badge>;
+  };
+
+  const solicitudHabilitadaParaPago = (status?: string | null) => {
+    const normalized = String(status || '').trim().toLowerCase();
+    return normalized === 'aprobadaparapago' || normalized === 'cotizada';
+  };
+
+  const formatRequestedOptionalServices = (value: unknown) => {
+    if (!Array.isArray(value) || value.length === 0) return 'Sin servicios opcionales seleccionados.';
+    const items = value
+      .map((item: any) => {
+        const idServicio = Number(item?.id_servicio ?? item?.idServicio ?? item?.id);
+        const cantidad = Math.max(1, Number(item?.cantidad ?? item?.cantidad_default ?? item?.cantidadDefault ?? 1));
+        if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+        return `Servicio #${idServicio} x${cantidad}`;
+      })
+      .filter(Boolean);
+    return items.length > 0 ? items.join(', ') : 'Sin servicios opcionales seleccionados.';
   };
 
   // Componente de formulario (simplificado para los props)
@@ -1849,557 +1975,941 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         </div>
       </motion.div>
 
-      {/* Tabla Compacta */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.1 }}
-      >
-        <Card className="shadow-lg border-green-200">
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
-                  <TableHead className="w-24">ID</TableHead>
-                  <TableHead className="w-32">Ruta Principal</TableHead>
-                  <TableHead className="w-28">Fecha</TableHead>
-                  <TableHead className="w-32">Guía</TableHead>
-                  <TableHead className="w-24 text-center">Clientes</TableHead>
-                  <TableHead className="w-24 text-center">Particip.</TableHead>
-                  <TableHead className="w-32">Estado</TableHead>
-                  <TableHead className="w-36 text-center">Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {currentProgrammings.length > 0 ? (
-                  currentProgrammings.map((prog) => (
-                    <TableRow key={prog.id} className="hover:bg-green-50/50">
-                      <TableCell className="font-semibold text-green-700">
-                        {prog.programId}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Route className="w-3 h-3 text-green-600 flex-shrink-0" />
-                          <span className="text-sm truncate">{prog.routes[0]?.routeName}</span>
-                        </div>
-                        {prog.routes.length > 1 && (
-                          <span className="text-xs text-gray-500">+{prog.routes.length - 1} más</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {prog.routes.length > 0 && (
-                          <div className="text-sm">
-                            {new Date(prog.routes[0].date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm truncate">{prog.guideName}</div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <Badge variant="outline" className="text-xs">
-                          {prog.clients.length}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex items-center justify-center gap-1">
-                          <Users className="w-3 h-3 text-gray-500" />
-                          <span className="text-sm">{getTotalParticipants(prog.clients)}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {canChangeStatus ? (
-                          <Select
-                            value={prog.status}
-                            onValueChange={(value: any) => handleStatusChange(prog.id, value)}
-                          >
-                            <SelectTrigger className="h-8 text-xs">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="scheduled">Programado</SelectItem>
-                              <SelectItem value="in-progress">En Progreso</SelectItem>
-                              <SelectItem value="completed">Completado</SelectItem>
-                              <SelectItem value="cancelled">Cancelado</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          getStatusBadge(prog.status)
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-center gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleView(prog)}
-                            className="h-8 w-8 p-0 hover:bg-blue-50"
-                            title="Ver detalles"
-                          >
-                            <Eye className="w-4 h-4 text-blue-600" />
-                          </Button>
-                          {canEdit && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                if (!isStaff) {
-                                  handleEdit(prog);
-                                  return;
-                                }
-                                const id = Number(prog.id);
-                                if (!Number.isFinite(id) || id <= 0) {
-                                  toast.error('ID inválido');
-                                  return;
-                                }
-                                openBackendEdit(id);
-                              }}
-                              className="h-8 w-8 p-0 hover:bg-green-50"
-                              title="Editar"
-                            >
-                              <Edit className="w-4 h-4 text-green-600" />
-                            </Button>
-                          )}
-                          {canDelete && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setSelectedProgramming(prog);
-                                setIsDeleteDialogOpen(true);
-                              }}
-                              className="h-8 w-8 p-0 hover:bg-red-50"
-                              title="Eliminar"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableRow>
-                    <TableCell colSpan={8} className="text-center py-12">
-                      <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                      <p className="text-gray-500">
-                        {role === 'guide' ? 'No tienes programaciones asignadas' : 
-                         role === 'client' ? 'No tienes programaciones registradas' : 
-                         'No se encontraron programaciones'}
-                      </p>
-                      {(role === 'guide' || role === 'client') && (
-                        <p className="text-sm text-gray-400 mt-2">
-                          Contacta con el administrador para más información
-                        </p>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      {/* Paginación */}
-      {totalPages > 1 && (
-        <motion.div
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-          className="flex items-center justify-center gap-2"
+      {isStaff ? (
+        <Tabs
+          value={staffActiveTab}
+          onValueChange={(value) => setStaffActiveTab(value as 'programaciones' | 'solicitudes')}
+          className="space-y-6"
         >
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(currentPage - 1)}
-            disabled={currentPage === 1}
-            className="border-green-300"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Button>
-
-          <div className="flex gap-1">
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-              <Button
-                key={page}
-                variant={currentPage === page ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setCurrentPage(page)}
-                className={currentPage === page ? 'bg-green-700 hover:bg-green-800' : 'border-green-300'}
-              >
-                {page}
-              </Button>
-            ))}
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <TabsList className="grid w-full max-w-2xl grid-cols-2">
+              <TabsTrigger value="programaciones">Programación operativa</TabsTrigger>
+              <TabsTrigger value="solicitudes">Solicitudes personalizadas</TabsTrigger>
+            </TabsList>
+            <div className="flex flex-wrap gap-2 text-xs">
+              <Badge variant="outline" className="border-green-300 text-green-700">
+                {(backendProgramaciones || []).filter((p) => !p?.es_personalizada).length} salidas operativas
+              </Badge>
+              <Badge variant="outline" className="border-amber-300 text-amber-700">
+                {backendSolicitudes.filter((s) => !s?.id_programacion).length} solicitudes activas
+              </Badge>
+              <Badge variant="outline" className="border-blue-300 text-blue-700">
+                {backendProgramaciones.filter((p) => Boolean(p?.es_personalizada)).length} personalizadas convertidas
+              </Badge>
+            </div>
           </div>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(currentPage + 1)}
-            disabled={currentPage === totalPages}
-            className="border-green-300"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        </motion.div>
-      )}
-
-      {isStaff && (
-      <>
-      <Card className="shadow-lg border-green-200">
-        <CardHeader>
-              <CardTitle className="text-green-800">Solicitudes personalizadas (BD)</CardTitle>
-              <p className="text-sm text-gray-600">
-                Primero el cliente registra el pago con comprobante (venta en estado <strong>Pagado</strong>), luego se convierte a programación.
-              </p>
-            </CardHeader>
-            <CardContent className="p-0">
-              {backendLoading ? (
-                <div className="p-6 text-sm text-gray-600">Cargando solicitudes…</div>
-              ) : backendError ? (
-                <div className="p-6 text-sm text-red-600">{backendError}</div>
-              ) : (() => {
-                const pendientes = backendSolicitudes.filter((s) => !s?.id_programacion);
-                if (pendientes.length === 0) {
-                  return (
-                    <div className="p-6 text-sm text-gray-600">
-                      No hay solicitudes pendientes por convertir.
-                    </div>
-                  );
-                }
-
-                return (
+          <TabsContent value="programaciones" className="space-y-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.1 }}
+            >
+              <Card className="shadow-lg border-green-200">
+                <CardContent className="p-0">
                   <Table>
                     <TableHeader>
                       <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
-                        <TableHead className="w-20">ID</TableHead>
-                        <TableHead>Ruta</TableHead>
-                        <TableHead className="w-28 text-center">Personas</TableHead>
-                        <TableHead className="w-44">Fecha/Hora</TableHead>
-                        <TableHead className="w-56">Punto encuentro (cliente)</TableHead>
-                        <TableHead className="w-40">Precio</TableHead>
-                        <TableHead className="w-44">Pago</TableHead>
-                        <TableHead className="w-40 text-center">Convertir</TableHead>
+                        <TableHead className="w-24">ID</TableHead>
+                        <TableHead className="w-32">Ruta Principal</TableHead>
+                        <TableHead className="w-28">Fecha</TableHead>
+                        <TableHead className="w-32">Guía</TableHead>
+                        <TableHead className="w-24 text-center">Ocupados</TableHead>
+                        <TableHead className="w-28 text-center">Disponibles</TableHead>
+                        <TableHead className="w-32">Estado</TableHead>
+                        <TableHead className="w-36 text-center">Acciones</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {pendientes.map((s) => {
-                        const id = Number(s.id_solicitud_personalizada);
-                        const edit = backendSolicitudEdits[id] || {
-                          fecha_salida: String(s.fecha_deseada || ''),
-                          fecha_regreso: String((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
-                          hora_salida: String(s.hora_deseada || ''),
-                          hora_regreso: String((s as any).hora_regreso_deseada || ''),
-                          precio_programacion: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
-                        };
-
-                        return (
-                          <TableRow key={id} className="hover:bg-green-50/50">
-                            <TableCell className="font-semibold text-green-700">#{id}</TableCell>
+                      {currentProgrammings.length > 0 ? (
+                        currentProgrammings.map((prog) => (
+                          <TableRow key={prog.id} className="hover:bg-green-50/50">
+                            <TableCell className="font-semibold text-green-700">
+                              {prog.programId}
+                            </TableCell>
                             <TableCell>
-                              <div className="text-sm font-medium text-gray-900">{s.ruta_nombre || `Ruta ${s.id_ruta}`}</div>
-                              <div className="text-xs text-gray-500">Estado: {s.estado || '—'} • Cliente: #{s.id_cliente}</div>
+                              <div className="flex items-center gap-1">
+                                <Route className="w-3 h-3 text-green-600 flex-shrink-0" />
+                                <span className="text-sm truncate">{prog.routes[0]?.routeName}</span>
+                              </div>
+                              {prog.routes.length > 1 && (
+                                <span className="text-xs text-gray-500">+{prog.routes.length - 1} más</span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {prog.routes.length > 0 && (
+                                <div className="text-sm">
+                                  {new Date(prog.routes[0].date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="text-sm truncate">{prog.guideName}</div>
                             </TableCell>
                             <TableCell className="text-center">
-                              <Badge variant="outline" className="text-xs">{s.cantidad_personas}</Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="grid grid-cols-2 gap-2">
-                                <Input
-                                  type="date"
-                                  value={edit.fecha_salida}
-                                  onChange={(e) =>
-                                    setBackendSolicitudEdits((prev) => ({
-                                      ...prev,
-                                      [id]: { ...edit, fecha_salida: e.target.value },
-                                    }))
-                                  }
-                                />
-                                <Input
-                                  type="time"
-                                  value={edit.hora_salida}
-                                  onChange={(e) =>
-                                    setBackendSolicitudEdits((prev) => ({
-                                      ...prev,
-                                      [id]: { ...edit, hora_salida: e.target.value },
-                                    }))
-                                  }
-                                />
-                                <Input
-                                  type="date"
-                                  value={edit.fecha_regreso}
-                                  onChange={(e) =>
-                                    setBackendSolicitudEdits((prev) => ({
-                                      ...prev,
-                                      [id]: { ...edit, fecha_regreso: e.target.value },
-                                    }))
-                                  }
-                                />
-                                <Input
-                                  type="time"
-                                  value={edit.hora_regreso}
-                                  onChange={(e) =>
-                                    setBackendSolicitudEdits((prev) => ({
-                                      ...prev,
-                                      [id]: { ...edit, hora_regreso: e.target.value },
-                                    }))
-                                  }
-                                />
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="text-sm">{s.lugar_encuentro || '—'}</div>
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                type="number"
-                                inputMode="decimal"
-                                value={edit.precio_programacion}
-                                onChange={(e) =>
-                                  setBackendSolicitudEdits((prev) => ({
-                                    ...prev,
-                                    [id]: { ...edit, precio_programacion: e.target.value },
-                                  }))
-                                }
-                                placeholder="Ej: 120000"
-                              />
-                            </TableCell>
-                            <TableCell>
-                              <div className="text-sm font-medium">
-                                {s.id_venta != null ? `Venta #${s.id_venta}` : 'Sin venta'}
-                              </div>
-                              <div className="text-xs text-gray-500">
-                                Estado: {s.venta_estado_pago || '—'}
-                              </div>
+                              <Badge variant="outline" className="text-xs">
+                                {prog.occupiedSeats ?? getTotalParticipants(prog.clients)}
+                              </Badge>
                             </TableCell>
                             <TableCell className="text-center">
-                              <Button
-                                size="sm"
-                                className="bg-green-700 hover:bg-green-800"
-                                disabled={backendConvertingId === id || String(s.venta_estado_pago || '') !== 'Pagado'}
-                                onClick={async () => {
-                                  try {
-                                    if (String(s.venta_estado_pago || '') !== 'Pagado') {
-                                      toast.error('No puedes convertir aún', {
-                                        description: 'La venta debe estar en estado Pagado (pago aprobado).',
-                                      });
-                                      return;
-                                    }
-
-                                    if (!edit.fecha_salida || !edit.fecha_regreso) {
-                                      toast.error('Fechas incompletas');
-                                      return;
-                                    }
-
-                                    const precio = Number(edit.precio_programacion);
-                                    if (!Number.isFinite(precio) || precio < 0) {
-                                      toast.error('Precio inválido');
-                                      return;
-                                    }
-
-                                    setBackendConvertingId(id);
-
-                                    const resp: any = await solicitudesPersonalizadasAPI.convertirAProgramacion(id, {
-                                      fecha_salida: edit.fecha_salida,
-                                      fecha_regreso: edit.fecha_regreso,
-                                      hora_salida: edit.hora_salida || null,
-                                      hora_regreso: edit.hora_regreso || null,
-                                      cupos_totales: Number(s.cantidad_personas || 1),
-                                      precio_programacion: precio,
-                                      precio_cotizado: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? Number(s.precio_cotizado) : null,
-                                    });
-
-                                    const programacionNueva = resp?.data?.programacion as ProgramacionBackend | undefined;
-                                    const solicitudNueva = resp?.data?.solicitud as SolicitudPersonalizada | undefined;
-
-                                    if (programacionNueva?.id_programacion) {
-                                      setBackendProgramaciones((prev) => [programacionNueva, ...prev]);
-                                      setBackendEdits((prev) => ({
-                                        ...prev,
-                                        [programacionNueva.id_programacion]: {
-                                          id_empleado: programacionNueva.id_empleado ? String(programacionNueva.id_empleado) : '',
-                                          lugar_encuentro: programacionNueva.lugar_encuentro ? String(programacionNueva.lugar_encuentro) : '',
-                                        },
-                                      }));
-                                    }
-
-                                    setBackendSolicitudes((prev) =>
-                                      prev.map((row) =>
-                                        row.id_solicitud_personalizada === id && solicitudNueva
-                                          ? solicitudNueva
-                                          : row
-                                      )
-                                    );
-
-                                    toast.success('Solicitud convertida a programación');
-                                  } catch (e: any) {
-                                    toast.error('No se pudo convertir la solicitud', {
-                                      description: e?.message || 'Error desconocido',
-                                    });
-                                  } finally {
-                                    setBackendConvertingId(null);
-                                  }
-                                }}
-                              >
-                                {backendConvertingId === id ? 'Convirtiendo…' : 'Convertir'}
-                              </Button>
+                              <div className="flex flex-col items-center gap-1">
+                                <div className="flex items-center justify-center gap-1">
+                                  <Users className="w-3 h-3 text-gray-500" />
+                                  <span className="text-sm">{prog.availableSeats ?? '—'}</span>
+                                </div>
+                                <span className="text-[11px] text-gray-500">
+                                  de {prog.totalSeats ?? '—'}
+                                </span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              {canChangeStatus ? (
+                                <Select
+                                  value={prog.status}
+                                  onValueChange={(value: any) => handleStatusChange(prog.id, value)}
+                                >
+                                  <SelectTrigger className="h-8 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="scheduled">Programado</SelectItem>
+                                    <SelectItem value="in-progress">En Progreso</SelectItem>
+                                    <SelectItem value="completed">Completado</SelectItem>
+                                    <SelectItem value="cancelled">Cancelado</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                getStatusBadge(prog.status)
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center justify-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleView(prog)}
+                                  className="h-8 w-8 p-0 hover:bg-blue-50"
+                                  title="Ver detalles"
+                                >
+                                  <Eye className="w-4 h-4 text-blue-600" />
+                                </Button>
+                                {canEdit && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      const id = Number(prog.id);
+                                      if (!Number.isFinite(id) || id <= 0) {
+                                        toast.error('ID inválido');
+                                        return;
+                                      }
+                                      openBackendEdit(id);
+                                    }}
+                                    className="h-8 w-8 p-0 hover:bg-green-50"
+                                    title="Editar"
+                                  >
+                                    <Edit className="w-4 h-4 text-green-600" />
+                                  </Button>
+                                )}
+                                {canDelete && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => {
+                                      setSelectedProgramming(prog);
+                                      setIsDeleteDialogOpen(true);
+                                    }}
+                                    className="h-8 w-8 p-0 hover:bg-red-50"
+                                    title="Eliminar"
+                                  >
+                                    <Trash2 className="w-4 h-4 text-red-600" />
+                                  </Button>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
-                        );
-                      })}
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={8} className="text-center py-12">
+                            <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                            <p className="text-gray-500">No se encontraron programaciones</p>
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
-                );
-              })()}
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </motion.div>
 
-          <Card className="shadow-lg border-green-200">
-            <CardHeader>
-              <CardTitle className="text-green-800">Programaciones personalizadas (BD)</CardTitle>
-              <p className="text-sm text-gray-600">
-                Asigna/actualiza guía y punto de encuentro de las programaciones generadas desde solicitudes personalizadas.
-              </p>
-            </CardHeader>
-            <CardContent className="p-0">
-              {backendLoading ? (
-                <div className="p-6 text-sm text-gray-600">Cargando programaciones desde el backend…</div>
-              ) : backendError ? (
-                <div className="p-6 text-sm text-red-600">{backendError}</div>
-              ) : (() => {
-                const personalizadas = backendProgramaciones.filter((p) => Boolean(p?.es_personalizada));
-                if (personalizadas.length === 0) {
+            {totalPages > 1 && (
+              <motion.div
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.2 }}
+                className="flex items-center justify-center gap-2"
+              >
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="border-green-300"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+
+                <div className="flex gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    <Button
+                      key={page}
+                      variant={currentPage === page ? 'default' : 'outline'}
+                      size="sm"
+                      onClick={() => setCurrentPage(page)}
+                      className={currentPage === page ? 'bg-green-700 hover:bg-green-800' : 'border-green-300'}
+                    >
+                      {page}
+                    </Button>
+                  ))}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="border-green-300"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </motion.div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="solicitudes" className="space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <Card className="border-amber-200 bg-amber-50/70">
+                <CardContent className="p-4">
+                  <p className="text-xs uppercase tracking-wide text-amber-700 font-semibold">Por revisar</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-2">
+                    {backendSolicitudes.filter((s) => !s?.id_programacion && !solicitudHabilitadaParaPago(s.estado)).length}
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">Solicitudes que aún no tienen pago habilitado.</p>
+                </CardContent>
+              </Card>
+              <Card className="border-emerald-200 bg-emerald-50/70">
+                <CardContent className="p-4">
+                  <p className="text-xs uppercase tracking-wide text-emerald-700 font-semibold">Pago habilitado</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-2">
+                    {backendSolicitudes.filter((s) => !s?.id_programacion && solicitudHabilitadaParaPago(s.estado)).length}
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">Solicitudes aprobadas para que el cliente suba el comprobante.</p>
+                </CardContent>
+              </Card>
+              <Card className="border-blue-200 bg-blue-50/70">
+                <CardContent className="p-4">
+                  <p className="text-xs uppercase tracking-wide text-blue-700 font-semibold">Listas para convertir</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-2">
+                    {backendSolicitudes.filter((s) => !s?.id_programacion && String(s.venta_estado_pago || '') === 'Pagado').length}
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">Ya pagadas y listas para pasar a programación operativa.</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="shadow-lg border-green-200">
+              <CardHeader>
+                <CardTitle className="text-green-800">Solicitudes personalizadas</CardTitle>
+                <p className="text-sm text-gray-600">
+                  Aquí revisas la solicitud, ajustas la cotización, apruebas/habilitas el pago y, cuando el comprobante quede aprobado, la conviertes en salida operativa.
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                {backendLoading ? (
+                  <div className="p-6 text-sm text-gray-600">Cargando solicitudes…</div>
+                ) : backendError ? (
+                  <div className="p-6 text-sm text-red-600">{backendError}</div>
+                ) : (() => {
+                  const pendientes = backendSolicitudes.filter((s) => !s?.id_programacion);
+                  if (pendientes.length === 0) {
+                    return (
+                      <div className="p-6 text-sm text-gray-600">
+                        No hay solicitudes pendientes por revisar.
+                      </div>
+                    );
+                  }
+
                   return (
-                    <div className="p-6 text-sm text-gray-600">
-                      No hay programaciones personalizadas todavía.
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
+                            <TableHead className="w-20">ID</TableHead>
+                            <TableHead>Cliente / Ruta</TableHead>
+                            <TableHead className="w-32">Estado</TableHead>
+                            <TableHead className="w-40">Pago</TableHead>
+                            <TableHead className="w-32 text-center">Pedido</TableHead>
+                            <TableHead className="w-[260px] text-center">Acciones</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {pendientes.map((s) => {
+                            const id = Number(s.id_solicitud_personalizada);
+                            const edit = backendSolicitudEdits[id] || {
+                              fecha_salida: normalizeDateInputValue(s.fecha_deseada),
+                              fecha_regreso: normalizeDateInputValue((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
+                              hora_salida: normalizeTimeInputValue(s.hora_deseada),
+                              hora_regreso: normalizeTimeInputValue((s as any).hora_regreso_deseada || ''),
+                              precio_programacion: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
+                            };
+                            const solicitudAprobada = solicitudHabilitadaParaPago(s.estado);
+                            const pagoAprobado = String(s.venta_estado_pago || '') === 'Pagado';
+                            const isExpanded = expandedSolicitudId === id;
+
+                            const validarPrecio = () => {
+                              const precio = Number(edit.precio_programacion);
+                              if (!Number.isFinite(precio) || precio < 0) {
+                                toast.error('Precio inválido');
+                                return null;
+                              }
+                              return precio;
+                            };
+
+                            return (
+                              <React.Fragment key={id}>
+                                <TableRow className="hover:bg-green-50/50 align-top">
+                                  <TableCell className="font-semibold text-green-700">#{id}</TableCell>
+                                  <TableCell>
+                                    <div className="text-sm font-medium text-gray-900">{s.ruta_nombre || `Ruta ${s.id_ruta}`}</div>
+                                    <div className="text-xs text-gray-500">
+                                      Cliente #{s.id_cliente}
+                                      {s.cliente_nombre ? ` · ${s.cliente_nombre}${s.cliente_apellido ? ` ${s.cliente_apellido}` : ''}` : ''}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      Solicitud: {formatDisplayDateTime(s.fecha_deseada, s.hora_deseada || null)}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      {s.cantidad_personas} persona{s.cantidad_personas === 1 ? '' : 's'} · {Math.max(0, Number(s.cantidad_personas || 1) - 1)} acompañante{Number(s.cantidad_personas || 1) - 1 === 1 ? '' : 's'}
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="space-y-2">
+                                      {getSolicitudStatusBadge(s.estado)}
+                                      <p className="text-xs text-gray-500">{normalizeSolicitudStatus(s.estado)}</p>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="text-sm font-medium">
+                                      {s.id_venta != null ? `Venta #${s.id_venta}` : 'Sin venta'}
+                                    </div>
+                                    <div className="text-xs text-gray-500">
+                                      Estado: {s.venta_estado_pago || '—'}
+                                    </div>
+                                    {s.reserva_monto_total != null && (
+                                      <div className="text-xs text-gray-500 mt-1">
+                                        Total actual: {formatCurrency(s.reserva_monto_total)}
+                                      </div>
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="text-center">
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="inline-flex items-center gap-1"
+                                      onClick={() => setExpandedSolicitudId((prev) => (prev === id ? null : id))}
+                                    >
+                                      {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                      {isExpanded ? 'Ocultar' : 'Ver pedido'}
+                                    </Button>
+                                  </TableCell>
+                                  <TableCell>
+                                    <div className="flex flex-col gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        disabled={backendSolicitudSavingId === id}
+                                        onClick={async () => {
+                                          try {
+                                            const precio = validarPrecio();
+                                            if (precio === null) return;
+                                            setBackendSolicitudSavingId(id);
+                                        await solicitudesPersonalizadasAPI.cotizar(id, {
+                                              precio_cotizado: precio,
+                                              estado: s.estado || 'PendienteRevision',
+                                            });
+                                        await refreshBackendSolicitudes();
+                                            toast.success('Revisión guardada', {
+                                              description: 'Se actualizó la cotización de la solicitud y, si hacía falta, se dejó lista la venta asociada.',
+                                            });
+                                          } catch (e: any) {
+                                            toast.error('No se pudo guardar la revisión', {
+                                              description: e?.message || 'Error desconocido',
+                                            });
+                                          } finally {
+                                            setBackendSolicitudSavingId(null);
+                                          }
+                                        }}
+                                      >
+                                        {backendSolicitudSavingId === id ? 'Guardando…' : 'Guardar revisión'}
+                                      </Button>
+
+                                      <Button
+                                        size="sm"
+                                        className="bg-emerald-700 hover:bg-emerald-800"
+                                        disabled={backendSolicitudSavingId === id}
+                                        onClick={async () => {
+                                          try {
+                                            const precio = validarPrecio();
+                                            if (precio === null) return;
+                                            setBackendSolicitudSavingId(id);
+                                        await solicitudesPersonalizadasAPI.cotizar(id, {
+                                              precio_cotizado: precio,
+                                              estado: 'AprobadaParaPago',
+                                            });
+                                        await refreshBackendSolicitudes();
+                                            toast.success('Pago habilitado para el cliente');
+                                          } catch (e: any) {
+                                            toast.error('No se pudo habilitar el pago', {
+                                              description: e?.message || 'Error desconocido',
+                                            });
+                                          } finally {
+                                            setBackendSolicitudSavingId(null);
+                                          }
+                                        }}
+                                      >
+                                        Aprobar y habilitar pago
+                                      </Button>
+
+                                      <Button
+                                        size="sm"
+                                        className="bg-green-700 hover:bg-green-800"
+                                        disabled={backendConvertingId === id || !solicitudAprobada || !pagoAprobado}
+                                        onClick={async () => {
+                                          try {
+                                            if (!solicitudAprobada) {
+                                              toast.error('Primero aprueba la solicitud y habilita el pago');
+                                              return;
+                                            }
+                                            if (!pagoAprobado) {
+                                              toast.error('No puedes convertir aún', {
+                                                description: 'La venta debe estar en estado Pagado (pago aprobado).',
+                                              });
+                                              return;
+                                            }
+                                            if (!edit.fecha_salida || !edit.fecha_regreso) {
+                                              toast.error('Completa las fechas operativas antes de convertir la solicitud');
+                                              return;
+                                            }
+
+                                            const precio = validarPrecio();
+                                            if (precio === null) return;
+
+                                            setBackendConvertingId(id);
+
+                                            const resp: any = await solicitudesPersonalizadasAPI.convertirAProgramacion(id, {
+                                              fecha_salida: edit.fecha_salida,
+                                              fecha_regreso: edit.fecha_regreso,
+                                              hora_salida: edit.hora_salida || null,
+                                              hora_regreso: edit.hora_regreso || null,
+                                              cupos_totales: Number(s.cantidad_personas || 1),
+                                              precio_programacion: precio,
+                                              precio_cotizado: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? Number(s.precio_cotizado) : precio,
+                                            });
+
+                                            const programacionNueva = resp?.data?.programacion as ProgramacionBackend | undefined;
+                                            const solicitudNueva = resp?.data?.solicitud as SolicitudPersonalizada | undefined;
+
+                                            if (programacionNueva?.id_programacion) {
+                                              setBackendProgramaciones((prev) => [programacionNueva, ...prev]);
+                                              setBackendEdits((prev) => ({
+                                                ...prev,
+                                                [programacionNueva.id_programacion]: {
+                                                  id_empleado: programacionNueva.id_empleado ? String(programacionNueva.id_empleado) : '',
+                                                  lugar_encuentro: programacionNueva.lugar_encuentro ? String(programacionNueva.lugar_encuentro) : '',
+                                                },
+                                              }));
+                                            }
+
+                                            setBackendSolicitudes((prev) =>
+                                              prev.map((row) =>
+                                                row.id_solicitud_personalizada === id && solicitudNueva
+                                                  ? solicitudNueva
+                                                  : row
+                                              )
+                                            );
+
+                                            toast.success('Solicitud convertida a programación');
+                                          } catch (e: any) {
+                                            toast.error('No se pudo convertir la solicitud', {
+                                              description: e?.message || 'Error desconocido',
+                                            });
+                                          } finally {
+                                            setBackendConvertingId(null);
+                                          }
+                                        }}
+                                      >
+                                        {backendConvertingId === id ? 'Convirtiendo…' : 'Convertir a programación'}
+                                      </Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+
+                                {isExpanded && (
+                                  <TableRow className="bg-green-50/30">
+                                    <TableCell colSpan={6} className="p-0">
+                                      <div className="p-4 md:p-5">
+                                        <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-5">
+                                          <div className="space-y-4">
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                              <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-2">
+                                                <p className="text-xs uppercase tracking-wide text-gray-500 font-semibold">Lo que pidió el cliente</p>
+                                                <p className="text-sm text-gray-900">
+                                                  Fecha/hora solicitada: {formatDisplayDateTime(s.fecha_deseada, s.hora_deseada || null)}
+                                                </p>
+                                                {(s as any).fecha_regreso_deseada && (
+                                                  <p className="text-sm text-gray-900">
+                                                    Regreso sugerido: {formatDisplayDateTime((s as any).fecha_regreso_deseada, (s as any).hora_regreso_deseada || null)}
+                                                  </p>
+                                                )}
+                                                <p className="text-sm text-gray-900">
+                                                  Participantes: {s.cantidad_personas} en total
+                                                </p>
+                                                <p className="text-sm text-gray-900">
+                                                  Observaciones: {s.observaciones?.trim() || 'Sin observaciones registradas.'}
+                                                </p>
+                                              </div>
+
+                                              <div className="rounded-lg border border-gray-200 bg-white p-4 space-y-2">
+                                                <p className="text-xs uppercase tracking-wide text-gray-500 font-semibold">Servicios opcionales elegidos</p>
+                                                <p className="text-sm text-gray-900">
+                                                  {formatRequestedOptionalServices((s as any).servicios_opcionales)}
+                                                </p>
+                                                <p className="text-xs text-gray-500">
+                                                  Los acompañantes se registran en la reserva asociada y el punto de encuentro se define al convertir a programación.
+                                                </p>
+                                              </div>
+                                            </div>
+
+                                            <div className="rounded-xl border border-green-200 bg-white p-4 space-y-4">
+                                              <div>
+                                                <p className="text-xs uppercase tracking-wide text-green-700 font-semibold">Revisión operativa</p>
+                                                <p className="text-sm text-gray-600 mt-1">
+                                                  `Guardar revisión` actualiza la cotización sin habilitar pago todavía. `Aprobar y habilitar pago` deja lista la solicitud para que el cliente suba el comprobante.
+                                                </p>
+                                              </div>
+
+                                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div>
+                                                  <Label>Fecha salida operativa</Label>
+                                                  <Input
+                                                    type="date"
+                                                    value={edit.fecha_salida}
+                                                    onChange={(e) =>
+                                                      setBackendSolicitudEdits((prev) => ({
+                                                        ...prev,
+                                                        [id]: { ...edit, fecha_salida: e.target.value },
+                                                      }))
+                                                    }
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <Label>Hora salida operativa</Label>
+                                                  <Input
+                                                    type="time"
+                                                    value={edit.hora_salida}
+                                                    onChange={(e) =>
+                                                      setBackendSolicitudEdits((prev) => ({
+                                                        ...prev,
+                                                        [id]: { ...edit, hora_salida: e.target.value },
+                                                      }))
+                                                    }
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <Label>Fecha regreso operativa</Label>
+                                                  <Input
+                                                    type="date"
+                                                    value={edit.fecha_regreso}
+                                                    onChange={(e) =>
+                                                      setBackendSolicitudEdits((prev) => ({
+                                                        ...prev,
+                                                        [id]: { ...edit, fecha_regreso: e.target.value },
+                                                      }))
+                                                    }
+                                                  />
+                                                </div>
+                                                <div>
+                                                  <Label>Hora regreso operativa</Label>
+                                                  <Input
+                                                    type="time"
+                                                    value={edit.hora_regreso}
+                                                    onChange={(e) =>
+                                                      setBackendSolicitudEdits((prev) => ({
+                                                        ...prev,
+                                                        [id]: { ...edit, hora_regreso: e.target.value },
+                                                      }))
+                                                    }
+                                                  />
+                                                </div>
+                                              </div>
+                                            </div>
+                                          </div>
+
+                                          <div className="space-y-4">
+                                            <div className="rounded-xl border border-green-200 bg-white p-4 space-y-3">
+                                              <div>
+                                                <p className="text-xs uppercase tracking-wide text-green-700 font-semibold">Cotización final</p>
+                                                <p className="text-sm text-gray-600 mt-1">
+                                                  Este valor se guarda en la solicitud y se refleja en la venta/reserva asociada.
+                                                </p>
+                                              </div>
+                                              <div>
+                                                <Label>Precio cotizado</Label>
+                                                <Input
+                                                  type="number"
+                                                  inputMode="decimal"
+                                                  value={edit.precio_programacion}
+                                                  onChange={(e) =>
+                                                    setBackendSolicitudEdits((prev) => ({
+                                                      ...prev,
+                                                      [id]: { ...edit, precio_programacion: e.target.value },
+                                                    }))
+                                                  }
+                                                  placeholder="Ej: 120000"
+                                                />
+                                              </div>
+                                              <p className="text-xs text-gray-500">
+                                                Si aquí no completas fechas válidas, no se podrá convertir la solicitud a programación.
+                                              </p>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </TableCell>
+                                  </TableRow>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
                     </div>
                   );
-                }
+                })()}
+              </CardContent>
+            </Card>
 
-                return (
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
-                        <TableHead className="w-20">ID</TableHead>
-                        <TableHead>Ruta</TableHead>
-                        <TableHead className="w-40">Fecha/Hora</TableHead>
-                        <TableHead className="w-64">Guía</TableHead>
-                        <TableHead>Punto de encuentro</TableHead>
-                        <TableHead className="w-32 text-center">Acción</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {personalizadas.map((p) => {
-                        const edit = backendEdits[p.id_programacion] || { id_empleado: '', lugar_encuentro: '' };
-                        const currentGuideLabel =
-                          p.empleado_nombre || p.empleado_apellido
-                            ? `${p.empleado_nombre || ''} ${p.empleado_apellido || ''}`.trim()
-                            : '—';
+            <Card className="shadow-lg border-green-200">
+              <CardHeader>
+                <CardTitle className="text-green-800">Programaciones personalizadas</CardTitle>
+                <p className="text-sm text-gray-600">
+                  Cuando la solicitud ya fue pagada y convertida, aquí dejas lista la salida final con guía y punto de encuentro.
+                </p>
+              </CardHeader>
+              <CardContent className="p-0">
+                {backendLoading ? (
+                  <div className="p-6 text-sm text-gray-600">Cargando programaciones desde el backend…</div>
+                ) : backendError ? (
+                  <div className="p-6 text-sm text-red-600">{backendError}</div>
+                ) : (() => {
+                  const personalizadas = backendProgramaciones.filter((p) => Boolean(p?.es_personalizada));
+                  if (personalizadas.length === 0) {
+                    return (
+                      <div className="p-6 text-sm text-gray-600">
+                        No hay programaciones personalizadas todavía.
+                      </div>
+                    );
+                  }
 
-                        return (
-                          <TableRow key={p.id_programacion} className="hover:bg-green-50/50">
-                            <TableCell className="font-semibold text-green-700">#{p.id_programacion}</TableCell>
-                            <TableCell>
-                              <div className="text-sm font-medium text-gray-900">{p.ruta_nombre || `Ruta ${p.id_ruta}`}</div>
-                              <div className="text-xs text-gray-500">Estado: {p.estado || '—'}</div>
-                            </TableCell>
-                            <TableCell>
+                  return (
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
+                          <TableHead className="w-20">ID</TableHead>
+                          <TableHead>Ruta</TableHead>
+                          <TableHead className="w-40">Fecha/Hora</TableHead>
+                          <TableHead className="w-64">Guía</TableHead>
+                          <TableHead>Punto de encuentro</TableHead>
+                          <TableHead className="w-32 text-center">Acción</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {personalizadas.map((p) => {
+                          const edit = backendEdits[p.id_programacion] || { id_empleado: '', lugar_encuentro: '' };
+                          const currentGuideLabel =
+                            p.empleado_nombre || p.empleado_apellido
+                              ? `${p.empleado_nombre || ''} ${p.empleado_apellido || ''}`.trim()
+                              : '—';
+
+                          return (
+                            <TableRow key={p.id_programacion} className="hover:bg-green-50/50">
+                              <TableCell className="font-semibold text-green-700">#{p.id_programacion}</TableCell>
+                              <TableCell>
+                                <div className="text-sm font-medium text-gray-900">{p.ruta_nombre || `Ruta ${p.id_ruta}`}</div>
+                                <div className="text-xs text-gray-500">Estado: {p.estado || '—'}</div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="text-sm">
+                                  {p.fecha_salida ? new Date(p.fecha_salida).toLocaleDateString('es-ES') : '—'}
+                                </div>
+                                <div className="text-xs text-gray-500">{p.hora_salida || '—'}</div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="text-xs text-gray-500 mb-1">Actual: {currentGuideLabel}</div>
+                                <Select
+                                  value={edit.id_empleado || '__none__'}
+                                  onValueChange={(value) =>
+                                    setBackendEdits((prev) => ({
+                                      ...prev,
+                                      [p.id_programacion]: { ...edit, id_empleado: value },
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger className="h-9">
+                                    <SelectValue placeholder="Selecciona guía" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="__none__">Sin asignar</SelectItem>
+                                    {backendEmpleados.map((emp) => (
+                                      <SelectItem key={emp.id_empleado} value={String(emp.id_empleado)}>
+                                        {`${emp.nombre} ${emp.apellido}`.trim()} ({emp.cargo})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </TableCell>
+                              <TableCell>
+                                <Input
+                                  value={edit.lugar_encuentro}
+                                  onChange={(e) =>
+                                    setBackendEdits((prev) => ({
+                                      ...prev,
+                                      [p.id_programacion]: { ...edit, lugar_encuentro: e.target.value },
+                                    }))
+                                  }
+                                  placeholder="Ej: Parque principal / Entrada finca…"
+                                />
+                              </TableCell>
+                              <TableCell className="text-center">
+                                <Button
+                                  size="sm"
+                                  className="bg-green-700 hover:bg-green-800"
+                                  disabled={backendSavingId === p.id_programacion}
+                                  onClick={async () => {
+                                    try {
+                                      setBackendSavingId(p.id_programacion);
+
+                                      const idEmpleado = Number(edit.id_empleado);
+                                      const payload: any = {
+                                        id_empleado: Number.isFinite(idEmpleado) && idEmpleado > 0 ? idEmpleado : null,
+                                        lugar_encuentro: edit.lugar_encuentro?.trim() ? edit.lugar_encuentro.trim() : null,
+                                      };
+
+                                      await programacionAPI.update(p.id_programacion, payload);
+
+                                      const empleado = backendEmpleados.find((emp) => emp.id_empleado === payload.id_empleado);
+                                      setBackendProgramaciones((prev) =>
+                                        prev.map((row) =>
+                                          row.id_programacion === p.id_programacion
+                                            ? {
+                                                ...row,
+                                                id_empleado: payload.id_empleado,
+                                                lugar_encuentro: payload.lugar_encuentro,
+                                                empleado_nombre: empleado?.nombre ?? row.empleado_nombre,
+                                                empleado_apellido: empleado?.apellido ?? row.empleado_apellido,
+                                              }
+                                            : row
+                                        )
+                                      );
+
+                                      toast.success('Programación actualizada');
+                                    } catch (e: any) {
+                                      toast.error('No se pudo actualizar programación', {
+                                        description: e?.message || 'Error desconocido',
+                                      });
+                                    } finally {
+                                      setBackendSavingId(null);
+                                    }
+                                  }}
+                                >
+                                  {backendSavingId === p.id_programacion ? 'Guardando…' : 'Guardar'}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.1 }}
+          >
+            <Card className="shadow-lg border-green-200">
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
+                      <TableHead className="w-24">ID</TableHead>
+                      <TableHead className="w-32">Ruta Principal</TableHead>
+                      <TableHead className="w-28">Fecha</TableHead>
+                      <TableHead className="w-32">Guía</TableHead>
+                      <TableHead className="w-24 text-center">Ocupados</TableHead>
+                      <TableHead className="w-28 text-center">Disponibles</TableHead>
+                      <TableHead className="w-32">Estado</TableHead>
+                      <TableHead className="w-36 text-center">Acciones</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {currentProgrammings.length > 0 ? (
+                      currentProgrammings.map((prog) => (
+                        <TableRow key={prog.id} className="hover:bg-green-50/50">
+                          <TableCell className="font-semibold text-green-700">
+                            {prog.programId}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Route className="w-3 h-3 text-green-600 flex-shrink-0" />
+                              <span className="text-sm truncate">{prog.routes[0]?.routeName}</span>
+                            </div>
+                            {prog.routes.length > 1 && (
+                              <span className="text-xs text-gray-500">+{prog.routes.length - 1} más</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {prog.routes.length > 0 && (
                               <div className="text-sm">
-                                {p.fecha_salida ? new Date(p.fecha_salida).toLocaleDateString('es-ES') : '—'}
+                                {new Date(prog.routes[0].date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
                               </div>
-                              <div className="text-xs text-gray-500">{p.hora_salida || '—'}</div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="text-xs text-gray-500 mb-1">Actual: {currentGuideLabel}</div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm truncate">{prog.guideName}</div>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="outline" className="text-xs">
+                              {prog.occupiedSeats ?? getTotalParticipants(prog.clients)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <div className="flex flex-col items-center gap-1">
+                              <div className="flex items-center justify-center gap-1">
+                                <Users className="w-3 h-3 text-gray-500" />
+                                <span className="text-sm">{prog.availableSeats ?? '—'}</span>
+                              </div>
+                              <span className="text-[11px] text-gray-500">
+                                de {prog.totalSeats ?? '—'}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {canChangeStatus ? (
                               <Select
-                                value={edit.id_empleado || '__none__'}
-                                onValueChange={(value) =>
-                                  setBackendEdits((prev) => ({
-                                    ...prev,
-                                    [p.id_programacion]: { ...edit, id_empleado: value },
-                                  }))
-                                }
+                                value={prog.status}
+                                onValueChange={(value: any) => handleStatusChange(prog.id, value)}
                               >
-                                <SelectTrigger className="h-9">
-                                  <SelectValue placeholder="Selecciona guía" />
+                                <SelectTrigger className="h-8 text-xs">
+                                  <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                  <SelectItem value="__none__">Sin asignar</SelectItem>
-                                  {backendEmpleados.map((emp) => (
-                                    <SelectItem key={emp.id_empleado} value={String(emp.id_empleado)}>
-                                      {`${emp.nombre} ${emp.apellido}`.trim()} ({emp.cargo})
-                                    </SelectItem>
-                                  ))}
+                                  <SelectItem value="scheduled">Programado</SelectItem>
+                                  <SelectItem value="in-progress">En Progreso</SelectItem>
+                                  <SelectItem value="completed">Completado</SelectItem>
+                                  <SelectItem value="cancelled">Cancelado</SelectItem>
                                 </SelectContent>
                               </Select>
-                            </TableCell>
-                            <TableCell>
-                              <Input
-                                value={edit.lugar_encuentro}
-                                onChange={(e) =>
-                                  setBackendEdits((prev) => ({
-                                    ...prev,
-                                    [p.id_programacion]: { ...edit, lugar_encuentro: e.target.value },
-                                  }))
-                                }
-                                placeholder="Ej: Parque principal / Entrada finca…"
-                              />
-                            </TableCell>
-                            <TableCell className="text-center">
+                            ) : (
+                              getStatusBadge(prog.status)
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-center gap-1">
                               <Button
                                 size="sm"
-                                className="bg-green-700 hover:bg-green-800"
-                                disabled={backendSavingId === p.id_programacion}
-                                onClick={async () => {
-                                  try {
-                                    setBackendSavingId(p.id_programacion);
-
-                                    const idEmpleado = Number(edit.id_empleado);
-                                    const payload: any = {
-                                      id_empleado: Number.isFinite(idEmpleado) && idEmpleado > 0 ? idEmpleado : null,
-                                      lugar_encuentro: edit.lugar_encuentro?.trim() ? edit.lugar_encuentro.trim() : null,
-                                    };
-
-                                    await programacionAPI.update(p.id_programacion, payload);
-
-                                    const empleado = backendEmpleados.find((emp) => emp.id_empleado === payload.id_empleado);
-                                    setBackendProgramaciones((prev) =>
-                                      prev.map((row) =>
-                                        row.id_programacion === p.id_programacion
-                                          ? {
-                                              ...row,
-                                              id_empleado: payload.id_empleado,
-                                              lugar_encuentro: payload.lugar_encuentro,
-                                              empleado_nombre: empleado?.nombre ?? row.empleado_nombre,
-                                              empleado_apellido: empleado?.apellido ?? row.empleado_apellido,
-                                            }
-                                          : row
-                                      )
-                                    );
-
-                                    toast.success('Programación actualizada');
-                                  } catch (e: any) {
-                                    toast.error('No se pudo actualizar programación', {
-                                      description: e?.message || 'Error desconocido',
-                                    });
-                                  } finally {
-                                    setBackendSavingId(null);
-                                  }
-                                }}
+                                variant="ghost"
+                                onClick={() => handleView(prog)}
+                                className="h-8 w-8 p-0 hover:bg-blue-50"
+                                title="Ver detalles"
                               >
-                                {backendSavingId === p.id_programacion ? 'Guardando…' : 'Guardar'}
+                                <Eye className="w-4 h-4 text-blue-600" />
                               </Button>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                );
-              })()}
-            </CardContent>
-          </Card>
-      </>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={8} className="text-center py-12">
+                          <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                          <p className="text-gray-500">
+                            {role === 'guide' ? 'No tienes programaciones asignadas' :
+                             role === 'client' ? 'No tienes programaciones registradas' :
+                             'No se encontraron programaciones'}
+                          </p>
+                          {(role === 'guide' || role === 'client') && (
+                            <p className="text-sm text-gray-400 mt-2">
+                              Contacta con el administrador para más información
+                            </p>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {totalPages > 1 && (
+            <motion.div
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.2 }}
+              className="flex items-center justify-center gap-2"
+            >
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                className="border-green-300"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+
+              <div className="flex gap-1">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                  <Button
+                    key={page}
+                    variant={currentPage === page ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setCurrentPage(page)}
+                    className={currentPage === page ? 'bg-green-700 hover:bg-green-800' : 'border-green-300'}
+                  >
+                    {page}
+                  </Button>
+                ))}
+              </div>
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                className="border-green-300"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </Button>
+            </motion.div>
+          )}
+        </>
       )}
 
       {/* Modal Crear */}

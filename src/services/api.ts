@@ -710,12 +710,32 @@ export const reservasAPI = {
     });
   },
 
+  agregarFinca: async (
+    idReserva: number,
+    payload: {
+      id_finca: number;
+      fecha_checkin: string;
+      fecha_checkout: string;
+      numero_noches: number;
+      precio_por_noche: number | string;
+    }
+  ) => {
+    return fetchAPI(`/api/reservas/${idReserva}/finca`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   // Agrega un servicio adicional a la reserva (por ejemplo, uno opcional de la ruta)
   agregarServicio: async (
     idReserva: number,
-    payload: { id_servicio: number; cantidad: number }
+    payload: {
+      id_servicio: number;
+      cantidad: number;
+      precio_unitario?: number | string | null;
+    }
   ) => {
-    return fetchAPI(`/api/reservas/${idReserva}/servicios`, {
+    return fetchAPI(`/api/reservas/${idReserva}/servicio`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });

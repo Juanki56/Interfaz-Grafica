@@ -1,19 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  Filter,
-  Search,
-  Eye,
-  Edit,
-  Trash2,
-  Plus,
-  FileText,
-  UserPlus,
+  ArrowLeft,
+  CalendarDays,
   CheckCircle,
+  DollarSign,
   Download,
-  AlertCircle,
-  Upload,
-  X
+  Edit,
+  Eye,
+  FileText,
+  Filter,
+  MapPin,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  Users,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -29,13 +31,6 @@ import {
   TableHeader,
   TableRow,
 } from './ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,28 +51,144 @@ import {
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
-import { reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
+import { programacionAPI, reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 
+type StaffView = 'list' | 'create' | 'edit' | 'detail';
+
+type BookingRecord = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  clientEmail: string;
+  clientPhone: string;
+  packageName: string;
+  serviceTypeForm: 'ruta' | 'finca';
+  date: string;
+  participants: number;
+  adults: number;
+  children: number;
+  status: string;
+  paymentStatus: string;
+  paymentMethod: string;
+  total: number;
+  paidAmount: number;
+  pendingAmount: number;
+  specialRequests: string;
+};
+
+type ClientSummary = {
+  id: string;
+  name: string;
+  document: string;
+  email?: string;
+  phone?: string;
+};
+
+type ServiceOption = {
+  id: string;
+  name: string;
+  price?: number;
+};
+
+type CompanionDraft = {
+  nombre: string;
+  apellido: string;
+  tipo_documento: string;
+  numero_documento: string;
+  telefono: string;
+  fecha_nacimiento: string;
+};
+
+type ProgramacionOption = {
+  id: string;
+  routeId: string;
+  routeName: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  meetingPoint: string;
+  availableSeats: number;
+  totalSeats: number;
+  price: number;
+  status: string;
+};
+
 const normalizeReservationStatus = (status?: string | null) => {
   const normalized = String(status || '').trim();
-  if (['Pendiente', 'Confirmada', 'Cancelada', 'Completada'].includes(normalized)) {
-    return normalized;
-  }
-  return 'Pendiente';
+  return ['Pendiente', 'Confirmada', 'Cancelada', 'Completada'].includes(normalized)
+    ? normalized
+    : 'Pendiente';
 };
 
 const normalizePaymentStatus = (status?: string | null) => {
   const normalized = String(status || '').trim();
-  if (['Pendiente', 'Parcial', 'Pagado', 'Cancelado'].includes(normalized)) {
-    return normalized;
-  }
-  return 'Pendiente';
+  return ['Pendiente', 'Parcial', 'Pagado', 'Cancelado'].includes(normalized)
+    ? normalized
+    : 'Pendiente';
 };
 
 const canReservationBeConfirmed = (paymentStatus?: string | null) =>
   ['Parcial', 'Pagado'].includes(normalizePaymentStatus(paymentStatus));
+
+const formatCurrency = (value?: number | string | null) =>
+  `$${Number(value || 0).toLocaleString('es-CO')}`;
+
+const formatDate = (value?: string | null) => {
+  if (!value) return '—';
+  return String(value).split('T')[0] || '—';
+};
+
+const getStatusBadge = (status: string) => {
+  const normalized = normalizeReservationStatus(status);
+  const classes: Record<string, string> = {
+    Confirmada: 'bg-green-600 text-white',
+    Pendiente: 'bg-amber-500 text-white',
+    Cancelada: 'bg-red-600 text-white',
+    Completada: 'bg-blue-600 text-white',
+  };
+
+  return (
+    <Badge className={classes[normalized] || 'bg-slate-500 text-white'}>
+      {normalized}
+    </Badge>
+  );
+};
+
+const getPaymentStatusBadge = (status: string) => {
+  const normalized = normalizePaymentStatus(status);
+  const classes: Record<string, string> = {
+    Pagado: 'bg-green-600 text-white',
+    Parcial: 'bg-blue-600 text-white',
+    Pendiente: 'bg-amber-500 text-white',
+    Cancelado: 'bg-red-600 text-white',
+  };
+
+  return (
+    <Badge className={classes[normalized] || 'bg-slate-500 text-white'}>
+      {normalized}
+    </Badge>
+  );
+};
+
+const EMPTY_FORM = {
+  clientId: '',
+  clientName: '',
+  bookingDate: '',
+  routeId: '',
+  farmId: '',
+  serviceType: 'ruta' as 'ruta' | 'finca',
+  programacionId: '',
+  companions: 0,
+  total: 0,
+  status: 'Pendiente',
+  specialRequests: '',
+  checkIn: '',
+  checkOut: '',
+  nights: 1,
+  nightlyPrice: 0,
+};
 
 export function BookingsManagement() {
   const permisos = usePermissions();
@@ -89,164 +200,79 @@ export function BookingsManagement() {
   const canDeleteReservas = reservasPerms.canDelete();
   const canViewClientes = clientesPerms.canView();
 
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [activeView, setActiveView] = useState<StaffView>('list');
+  const [bookings, setBookings] = useState<BookingRecord[]>([]);
+  const [clientes, setClientes] = useState<ClientSummary[]>([]);
+  const [rutas, setRutas] = useState<ServiceOption[]>([]);
+  const [fincas, setFincas] = useState<ServiceOption[]>([]);
+  const [programacionesRuta, setProgramacionesRuta] = useState<ProgramacionOption[]>([]);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('');
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [selectedBooking, setSelectedBooking] = useState<any>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
-  const [clientes, setClientes] = useState<
-    Array<{ id: string; name: string; document: string; email?: string; phone?: string }>
-  >([]);
-  const [rutas, setRutas] = useState<Array<{ id: string; name: string }>>([]);
-  const [fincas, setFincas] = useState<Array<{ id: string; name: string }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingRouteDetail, setIsLoadingRouteDetail] = useState(false);
+  const [isLoadingProgramacionesRuta, setIsLoadingProgramacionesRuta] = useState(false);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
-  // Cargar datos del backend al montar el componente
-  useEffect(() => {
-    if (permisos.loadingRoles) return;
-
-    if (canViewReservas) {
-      cargarReservas();
-    } else {
-      setBookings([]);
-      setIsLoading(false);
-    }
-
-    if (canViewClientes) {
-      cargarClientes();
-    }
-
-    // Para el formulario de reservas (rutas/fincas)
-    if (canViewReservas) {
-      cargarRutas();
-      cargarFincas();
-    }
-  }, [permisos.loadingRoles, canViewReservas, canViewClientes]);
-
-  const cargarReservas = async () => {
-    try {
-      setIsLoading(true);
-      console.log('📥 Cargando reservas del servidor...');
-      const data = await reservasAPI.getAll();
-      console.log('✅ Reservas cargadas:', data);
-      
-      // Mapear datos del backend al formato del componente
-      const reservasMapeadas = data.map((r: any) => ({
-        id: (r.id_reserva ?? r.id)?.toString(),
-        clientId: r.id_cliente?.toString(),
-        clientName: `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim(),
-        clientEmail: r.cliente_email || r.correo || '',
-        clientPhone: r.cliente_telefono || r.telefono || '',
-        packageName: r.tipo_servicio || 'Reserva',
-        date: r.fecha_reserva?.split('T')[0] || '',
-        participants: Number(r.numero_participantes ?? 1),
-        adults: Number(r.numero_participantes ?? 1),
-        children: 0,
-        status: normalizeReservationStatus(r.estado),
-        paymentStatus: normalizePaymentStatus(r.estado_pago),
-        paymentMethod: r.metodo_pago || 'Por definir',
-        total: Number(r.total ?? r.monto_total ?? 0),
-        totalAmount: Number(r.total ?? r.monto_total ?? 0),
-        paidAmount: Number(r.monto_pagado ?? 0),
-        pendingAmount: Number(r.saldo_pendiente ?? r.total ?? r.monto_total ?? 0),
-        subtotal: Number(r.total ?? r.monto_total ?? 0),
-        discount: 0,
-        checkIn: '08:00',
-        checkOut: '17:00',
-        guide: 'Por asignar',
-        advisor: 'Administrador',
-        emergency: 'Por definir',
-        specialRequests: r.notas || ''
-      }));
-      
-      setBookings(reservasMapeadas);
-    } catch (error) {
-      console.error('❌ Error al cargar reservas:', error);
-      toast.error('Error al cargar reservas. Verifica que el backend esté corriendo.');
-      setBookings([]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const cargarClientes = async () => {
-    try {
-      const data = await clientesAPI.getAll();
-      const clientesMapeados = data.map((c: any) => ({
-        id: c.id_cliente?.toString(),
-        name: `${c.nombre} ${c.apellido}`,
-        document: c.numero_documento || '',
-        email: c.correo || '',
-        phone: c.telefono || ''
-      }));
-      setClientes(clientesMapeados);
-    } catch (error) {
-      console.error('Error al cargar clientes:', error);
-    }
-  };
-
-  const cargarRutas = async () => {
-    try {
-      const data = await rutasAPI.getAll();
-      setRutas(
-        (data || []).map((r: any) => ({
-          id: String(r.id_ruta),
-          name: r.nombre,
-        }))
-      );
-    } catch (error) {
-      console.error('Error al cargar rutas:', error);
-    }
-  };
-
-  const cargarFincas = async () => {
-    try {
-      const data = await fincasAPI.getAll();
-      setFincas(
-        (data || []).map((f: any) => ({
-          id: String(f.id_finca),
-          name: f.nombre,
-        }))
-      );
-    } catch (error) {
-      console.error('Error al cargar fincas:', error);
-    }
-  };
-
-  // Form state para crear/editar reserva
-  const [formData, setFormData] = useState({
-    clientId: '',
-    clientName: '',
-    bookingDate: '',
-    routeId: '',
-    farmId: '',
-    serviceType: 'ruta' as 'ruta' | 'finca',
-    programacionId: '',
-    services: [] as string[],
-    participants: 1,
-    adults: 1,
-    children: 0,
-    total: 0,
-    status: 'Pendiente',
-    specialRequests: ''
-  });
-
-  const [formRutaDetalle, setFormRutaDetalle] = useState<any>(null);
-  const [formRutaOpcionalesSeleccion, setFormRutaOpcionalesSeleccion] = useState<Record<number, number>>({});
-  const [isLoadingRutaDetalle, setIsLoadingRutaDetalle] = useState(false);
-
+  const [selectedBooking, setSelectedBooking] = useState<BookingRecord | null>(null);
   const [reservaDetalle, setReservaDetalle] = useState<any>(null);
   const [detalleRuta, setDetalleRuta] = useState<any>(null);
-  const [detalleOpcionalesSeleccion, setDetalleOpcionalesSeleccion] = useState<Record<number, number>>({});
   const [detalleProgramacionId, setDetalleProgramacionId] = useState('');
-  const [isLoadingDetalle, setIsLoadingDetalle] = useState(false);
+  const [detalleOpcionalesSeleccion, setDetalleOpcionalesSeleccion] = useState<Record<number, number>>({});
+
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [formRutaDetalle, setFormRutaDetalle] = useState<any>(null);
+  const [formRutaOpcionalesSeleccion, setFormRutaOpcionalesSeleccion] = useState<Record<number, number>>({});
+  const [companionDetails, setCompanionDetails] = useState<CompanionDraft[]>([]);
+
+  const participantTotal = Math.max(
+    1,
+    1 + Number(formData.companions || 0)
+  );
+
+  const selectedClient = useMemo(
+    () => clientes.find((cliente) => cliente.id === formData.clientId) || null,
+    [clientes, formData.clientId]
+  );
+
+  const filteredProgramacionesRuta = useMemo(() => {
+    if (formData.serviceType !== 'ruta' || !formData.routeId) return [];
+    return programacionesRuta.filter((programacion) => {
+      if (programacion.routeId !== formData.routeId) return false;
+      return true;
+    });
+  }, [programacionesRuta, formData.serviceType, formData.routeId]);
+
+  const selectedProgramacion = useMemo(
+    () => filteredProgramacionesRuta.find((item) => item.id === formData.programacionId) || null,
+    [filteredProgramacionesRuta, formData.programacionId]
+  );
+
+  const formOptionalServicesTotal = useMemo(() => {
+    if (!formRutaDetalle) return 0;
+    return Object.entries(formRutaOpcionalesSeleccion).reduce((sum, [rawId, cantidadRaw]) => {
+      const idServicio = Number(rawId);
+      const cantidad = Number(cantidadRaw || 0);
+      if (!Number.isFinite(idServicio) || idServicio <= 0 || cantidad <= 0) return sum;
+      const optional = Array.isArray(formRutaDetalle?.servicios_opcionales)
+        ? formRutaDetalle.servicios_opcionales.find((item: any) => Number(item?.id_servicio) === idServicio)
+        : null;
+      const precio = Number(optional?.servicio?.precio ?? optional?.precio_unitario ?? optional?.precio ?? 0);
+      return sum + Math.max(0, precio) * cantidad;
+    }, 0);
+  }, [formRutaDetalle, formRutaOpcionalesSeleccion]);
+
+  const resetForm = () => {
+    setFormData(EMPTY_FORM);
+    setFormRutaDetalle(null);
+    setFormRutaOpcionalesSeleccion({});
+    setCompanionDetails([]);
+  };
 
   const resolveRouteIdFromReservaDetalle = (payload: any): number | null => {
     const candidates = [
@@ -295,10 +321,125 @@ export function BookingsManagement() {
     return null;
   };
 
-  const cargarRutaDetalleParaFormulario = async (idRuta: number) => {
+  const loadReservas = async () => {
     try {
-      setIsLoadingRutaDetalle(true);
-      const ruta = await rutasAPI.getById(idRuta);
+      setIsLoading(true);
+      const data = await reservasAPI.getAll();
+      const reservasMapeadas: BookingRecord[] = data.map((r: any) => {
+        const tipoServicio = String(r.tipo_servicio || 'Reserva');
+        const serviceTypeForm = tipoServicio.toLowerCase().includes('finca') ? 'finca' : 'ruta';
+        const total = Number(r.total ?? r.monto_total ?? 0);
+        return {
+          id: String(r.id_reserva ?? r.id ?? ''),
+          clientId: String(r.id_cliente ?? ''),
+          clientName: `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim() || 'Cliente',
+          clientEmail: r.cliente_email || r.correo || '',
+          clientPhone: r.cliente_telefono || r.telefono || '',
+          packageName: tipoServicio,
+          serviceTypeForm,
+          date: formatDate(r.fecha_reserva),
+          participants: Number(r.numero_participantes ?? 1),
+          adults: 1,
+          children: Math.max(0, Number(r.numero_participantes ?? 1) - 1),
+          status: normalizeReservationStatus(r.estado),
+          paymentStatus: normalizePaymentStatus(r.estado_pago),
+          paymentMethod: r.metodo_pago || 'Por definir',
+          total,
+          paidAmount: Number(r.monto_pagado ?? 0),
+          pendingAmount: Number(r.saldo_pendiente ?? total),
+          specialRequests: r.notas || '',
+        };
+      });
+      setBookings(reservasMapeadas);
+    } catch (error) {
+      console.error('Error al cargar reservas:', error);
+      toast.error('No se pudieron cargar las reservas.');
+      setBookings([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadClientes = async () => {
+    try {
+      const data = await clientesAPI.getAll();
+      setClientes(
+        data.map((cliente: any) => ({
+          id: String(cliente.id_cliente ?? ''),
+          name: `${cliente.nombre || ''} ${cliente.apellido || ''}`.trim(),
+          document: cliente.numero_documento || '',
+          email: cliente.correo || '',
+          phone: cliente.telefono || '',
+        }))
+      );
+    } catch (error) {
+      console.error('Error al cargar clientes:', error);
+    }
+  };
+
+  const loadRutas = async () => {
+    try {
+      const data = await rutasAPI.getAll();
+      setRutas(
+        (data || []).map((ruta: any) => ({
+          id: String(ruta.id_ruta),
+          name: ruta.nombre,
+          price: Number(ruta.precio || ruta.precio_base || 0),
+        }))
+      );
+    } catch (error) {
+      console.error('Error al cargar rutas:', error);
+    }
+  };
+
+  const loadFincas = async () => {
+    try {
+      const data = await fincasAPI.getAll();
+      setFincas(
+        (data || []).map((finca: any) => ({
+          id: String(finca.id_finca),
+          name: finca.nombre,
+          price: Number(finca.precio_por_noche || 0),
+        }))
+      );
+    } catch (error) {
+      console.error('Error al cargar fincas:', error);
+    }
+  };
+
+  const loadProgramacionesRuta = async () => {
+    try {
+      setIsLoadingProgramacionesRuta(true);
+      const data = await programacionAPI.getAll();
+      const mapped = (data || [])
+        .filter((programacion: any) => !programacion?.es_personalizada)
+        .map((programacion: any) => ({
+          id: String(programacion.id_programacion),
+          routeId: String(programacion.id_ruta),
+          routeName: programacion.ruta_nombre || `Ruta ${programacion.id_ruta}`,
+          date: formatDate(programacion.fecha_salida),
+          startTime: String(programacion.hora_salida || '').slice(0, 5),
+          endTime: String(programacion.hora_regreso || '').slice(0, 5),
+          meetingPoint: programacion.lugar_encuentro || 'Por confirmar',
+          availableSeats: Math.max(0, Number(programacion.cupos_disponibles ?? 0)),
+          totalSeats: Math.max(0, Number(programacion.cupos_totales ?? 0)),
+          price: Math.max(0, Number(programacion.precio_programacion ?? 0)),
+          status: String(programacion.estado || 'Programado'),
+        }))
+        .filter((programacion) => !String(programacion.status).toLowerCase().includes('cancel'));
+      setProgramacionesRuta(mapped);
+    } catch (error) {
+      console.error('Error al cargar programaciones para reservas manuales:', error);
+      setProgramacionesRuta([]);
+    } finally {
+      setIsLoadingProgramacionesRuta(false);
+    }
+  };
+
+  const loadRouteDetailForForm = async (routeId: number) => {
+    try {
+      setIsLoadingRouteDetail(true);
+      const ruta = await rutasAPI.getById(routeId);
       setFormRutaDetalle(ruta);
       setFormRutaOpcionalesSeleccion((prev) => {
         const next: Record<number, number> = {};
@@ -311,17 +452,17 @@ export function BookingsManagement() {
         return next;
       });
     } catch (error) {
-      console.error('Error al cargar detalle de ruta:', error);
+      console.error('Error al cargar la ruta:', error);
       setFormRutaDetalle(null);
       setFormRutaOpcionalesSeleccion({});
     } finally {
-      setIsLoadingRutaDetalle(false);
+      setIsLoadingRouteDetail(false);
     }
   };
 
-  const cargarDetalleReserva = async (idReserva: number) => {
+  const loadReservaDetail = async (idReserva: number) => {
     try {
-      setIsLoadingDetalle(true);
+      setIsLoadingDetail(true);
       const detalle = await reservasAPI.getById(idReserva);
       setReservaDetalle(detalle);
 
@@ -349,367 +490,586 @@ export function BookingsManagement() {
       });
     } catch (error) {
       console.error('Error al cargar detalle de reserva:', error);
+      toast.error('No se pudo cargar el detalle completo de la reserva.');
       setReservaDetalle(null);
       setDetalleRuta(null);
       setDetalleOpcionalesSeleccion({});
     } finally {
-      setIsLoadingDetalle(false);
+      setIsLoadingDetail(false);
     }
   };
 
   useEffect(() => {
-    const shouldLoadRoute = formData.serviceType === 'ruta' && Number(formData.routeId) > 0;
-    if (!shouldLoadRoute) {
+    if (permisos.loadingRoles) return;
+    if (!canViewReservas) {
+      setBookings([]);
+      return;
+    }
+
+    void loadReservas();
+    void loadRutas();
+    void loadFincas();
+    void loadProgramacionesRuta();
+    if (canViewClientes) {
+      void loadClientes();
+    }
+  }, [permisos.loadingRoles, canViewReservas, canViewClientes]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta' || Number(formData.routeId) <= 0) {
       setFormRutaDetalle(null);
       setFormRutaOpcionalesSeleccion({});
       return;
     }
-
-    void cargarRutaDetalleParaFormulario(Number(formData.routeId));
+    void loadRouteDetailForForm(Number(formData.routeId));
   }, [formData.serviceType, formData.routeId]);
 
   useEffect(() => {
-    if (!isDetailModalOpen) return;
+    if (activeView !== 'detail') return;
     const idReserva = Number(selectedBooking?.id);
     if (!Number.isFinite(idReserva) || idReserva <= 0) return;
-    void cargarDetalleReserva(idReserva);
-  }, [isDetailModalOpen, selectedBooking?.id]);
+    void loadReservaDetail(idReserva);
+  }, [activeView, selectedBooking?.id]);
 
-  const [, setProofFile] = useState<File | null>(null);
-  const [proofFileName, setProofFileName] = useState('');
+  useEffect(() => {
+    if (formData.serviceType !== 'finca') return;
+    const finca = fincas.find((item) => item.id === formData.farmId);
+    if (finca && Number(finca.price || 0) > 0 && Number(formData.nightlyPrice || 0) <= 0) {
+      setFormData((prev) => ({
+        ...prev,
+        nightlyPrice: Number(finca.price || 0),
+      }));
+    }
+  }, [fincas, formData.serviceType, formData.farmId, formData.nightlyPrice]);
 
-  // Filtrar reservas
-  const filteredBookings = bookings.filter(booking => {
-    const matchesSearch = booking.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         booking.packageName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
-    const matchesDate = !dateFilter || booking.date === dateFilter;
-    return matchesSearch && matchesStatus && matchesDate;
-  });
+  useEffect(() => {
+    const companionCount = Math.max(0, participantTotal - 1);
+    setCompanionDetails((prev) =>
+      Array.from({ length: companionCount }, (_, index) => (
+        prev[index] || {
+          nombre: '',
+          apellido: '',
+          tipo_documento: 'CC',
+          numero_documento: '',
+          telefono: '',
+          fecha_nacimiento: '',
+        }
+      ))
+    );
+  }, [participantTotal]);
 
-  // Paginación
-  const totalPages = Math.ceil(filteredBookings.length / itemsPerPage);
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta') return;
+    const totalCalculado = Math.max(0, Number(selectedProgramacion?.price || 0)) * participantTotal + formOptionalServicesTotal;
+    if (Number(formData.total || 0) === totalCalculado) return;
+    setFormData((prev) => ({ ...prev, total: totalCalculado }));
+  }, [formData.serviceType, selectedProgramacion?.price, participantTotal, formOptionalServicesTotal]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta') return;
+    if (!formData.programacionId) return;
+    const stillValid = filteredProgramacionesRuta.some((programacion) => programacion.id === formData.programacionId);
+    if (stillValid) return;
+    setFormData((prev) => ({ ...prev, programacionId: '' }));
+  }, [filteredProgramacionesRuta, formData.serviceType, formData.programacionId]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'finca') return;
+    if (!formData.checkIn || !formData.checkOut) return;
+    const start = new Date(formData.checkIn);
+    const end = new Date(formData.checkOut);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return;
+    const nights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (nights > 0 && nights !== formData.nights) {
+      setFormData((prev) => ({
+        ...prev,
+        nights,
+        total: Number(prev.nightlyPrice || 0) * nights,
+      }));
+    }
+  }, [formData.serviceType, formData.checkIn, formData.checkOut, formData.nights]);
+
+  const filteredBookings = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    return bookings.filter((booking) => {
+      const matchesSearch =
+        !query ||
+        booking.clientName.toLowerCase().includes(query) ||
+        booking.packageName.toLowerCase().includes(query) ||
+        booking.id.toLowerCase().includes(query);
+      const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
+      const matchesDate = !dateFilter || booking.date === dateFilter;
+      return matchesSearch && matchesStatus && matchesDate;
+    });
+  }, [bookings, searchTerm, statusFilter, dateFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredBookings.length / itemsPerPage));
   const paginatedBookings = filteredBookings.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
 
-  // Badge de estado
-  const getStatusBadge = (status: string) => {
-    const variants: { [key: string]: 'default' | 'secondary' | 'destructive' | 'outline' } = {
-      'Confirmada': 'default',
-      'Pendiente': 'outline',
-      'Cancelada': 'destructive',
-      'Completada': 'secondary',
+  const dashboardStats = useMemo(() => {
+    return {
+      total: bookings.length,
+      confirmed: bookings.filter((booking) => booking.status === 'Confirmada').length,
+      pending: bookings.filter((booking) => booking.status === 'Pendiente').length,
+      totalAmount: bookings.reduce((sum, booking) => sum + booking.total, 0),
+      pendingAmount: bookings.reduce((sum, booking) => sum + booking.pendingAmount, 0),
     };
-    const colors: { [key: string]: string } = {
-      'Confirmada': 'bg-green-500',
-      'Pendiente': 'bg-yellow-500',
-      'Cancelada': 'bg-red-500',
-      'Completada': 'bg-blue-500',
-    };
-    return (
-      <Badge variant={variants[status] || 'secondary'} className={`${colors[status]} text-white`}>
-        {status}
-      </Badge>
-    );
+  }, [bookings]);
+
+  const goBackToList = () => {
+    setActiveView('list');
+    setSelectedBooking(null);
+    setReservaDetalle(null);
+    setDetalleRuta(null);
+    setDetalleProgramacionId('');
+    setDetalleOpcionalesSeleccion({});
+    resetForm();
   };
 
-  const getPaymentStatusBadge = (status: string) => {
-    const normalized = normalizePaymentStatus(status);
-    const variants: { [key: string]: 'default' | 'secondary' | 'destructive' | 'outline' } = {
-      'Pagado': 'default',
-      'Parcial': 'secondary',
-      'Pendiente': 'outline',
-      'Cancelado': 'destructive',
-    };
-    const colors: { [key: string]: string } = {
-      'Pagado': 'bg-green-500',
-      'Parcial': 'bg-blue-500',
-      'Pendiente': 'bg-yellow-500',
-      'Cancelado': 'bg-red-500',
-    };
-    return (
-      <Badge variant={variants[normalized] || 'outline'} className={`${colors[normalized]} text-white`}>
-        {normalized}
-      </Badge>
-    );
+  const openCreateView = () => {
+    resetForm();
+    setSelectedBooking(null);
+    setActiveView('create');
   };
 
-  // Manejar cambio de archivo de comprobante
-  const handleProofFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Validar tamaño (máximo 5MB)
-      if (file.size > 5 * 1024 * 1024) {
-        toast.error('El archivo no debe exceder 5MB');
-        return;
-      }
+  const openDetailView = (booking: BookingRecord) => {
+    setSelectedBooking(booking);
+    setActiveView('detail');
+  };
 
-      // Validar tipo de archivo
-      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
-      if (!allowedTypes.includes(file.type)) {
-        toast.error('Solo se permiten PDF, JPG o PNG');
-        return;
-      }
+  const openEditView = (booking: BookingRecord) => {
+    setSelectedBooking(booking);
+    setFormData({
+      ...EMPTY_FORM,
+      clientId: booking.clientId,
+      clientName: booking.clientName,
+      bookingDate: booking.date,
+      serviceType: booking.serviceTypeForm,
+      companions: Math.max(0, Number(booking.participants || 1) - 1),
+      total: booking.total,
+      status: booking.status,
+      specialRequests: booking.specialRequests || '',
+    });
+    setActiveView('edit');
+  };
 
-      setProofFile(file);
-      setProofFileName(file.name);
-      toast.success('Comprobante cargado correctamente');
+  const applySelectedServices = async (idReserva: number, map: Record<number, number>, rutaDetalle: any) => {
+    const servicios = Object.entries(map)
+      .map(([id_servicio, cantidad]) => {
+        const optional = Array.isArray(rutaDetalle?.servicios_opcionales)
+          ? rutaDetalle.servicios_opcionales.find(
+              (item: any) => Number(item?.id_servicio) === Number(id_servicio)
+            )
+          : null;
+
+        return {
+          id_servicio: Number(id_servicio),
+          cantidad: Number(cantidad),
+          precio_unitario: Number(
+            optional?.servicio?.precio ?? optional?.precio_unitario ?? optional?.precio ?? 0
+          ),
+        };
+      })
+      .filter((item) => Number.isFinite(item.id_servicio) && item.id_servicio > 0 && item.cantidad > 0);
+
+    for (const servicio of servicios) {
+      await reservasAPI.agregarServicio(idReserva, servicio);
     }
   };
 
-  // Eliminar archivo de comprobante
-  const removeProofFile = () => {
-    setProofFile(null);
-    setProofFileName('');
+  const updateCompanionField = (index: number, field: keyof CompanionDraft, value: string) => {
+    setCompanionDetails((prev) =>
+      prev.map((companion, companionIndex) =>
+        companionIndex === index ? { ...companion, [field]: value } : companion
+      )
+    );
   };
 
-  // Crear reserva
   const handleCreateBooking = async () => {
     if (!canCreateReservas) {
-      toast.error('No tienes permiso para crear reservas');
+      toast.error('No tienes permiso para crear reservas.');
       return;
     }
 
     if (!formData.clientId || !formData.bookingDate) {
-      toast.error('Por favor complete todos los campos requeridos');
+      toast.error('Selecciona el cliente y la fecha de la reserva.');
       return;
     }
 
-    if (formData.serviceType === 'ruta') {
-      if (!formData.routeId) {
-        toast.error('Selecciona una ruta');
-        return;
-      }
-
-      const idProgramacion = Number(formData.programacionId);
-      if (!Number.isFinite(idProgramacion) || idProgramacion <= 0) {
-        toast.error('Ingresa un ID de programación válido para asociar la ruta');
-        return;
-      }
+    if (participantTotal <= 0) {
+      toast.error('La reserva debe tener al menos un participante.');
+      return;
     }
 
-    if (formData.serviceType === 'finca' && !formData.farmId) {
-      toast.error('Selecciona una finca');
+    if (Number(formData.total || 0) <= 0) {
+      toast.error('Ingresa un valor total válido.');
       return;
     }
 
     try {
       setIsLoading(true);
-      console.log('➕ Creando reserva:', formData);
-      
-      const numeroParticipantes = Number(formData.adults + formData.children) || 1;
-      const nuevaReserva = await reservasAPI.create({
-        id_cliente: parseInt(formData.clientId),
+
+      const created = await reservasAPI.create({
+        id_cliente: Number(formData.clientId),
         fecha_reserva: formData.bookingDate,
         estado: 'Pendiente',
         total: Number(formData.total) || 0,
         notas: formData.specialRequests || '',
-        numero_participantes: numeroParticipantes,
+        numero_participantes: participantTotal,
         tipo_servicio: formData.serviceType === 'ruta' ? 'Ruta' : 'Finca',
       });
-      
-      console.log('✅ Reserva creada:', nuevaReserva);
 
-      const idReservaCreada = obtenerIdReservaDesdeRespuesta(nuevaReserva);
-      if (!idReservaCreada) {
-        toast.warning('Reserva creada, pero no se pudo obtener el ID para completar la asociación de ruta/servicios.');
-      } else if (formData.serviceType === 'ruta') {
-        try {
-          await reservasAPI.agregarProgramacion(idReservaCreada, Number(formData.programacionId));
+      const idReserva = obtenerIdReservaDesdeRespuesta(created);
+      if (!idReserva) {
+        throw new Error('La reserva se creó, pero no se pudo recuperar su identificador.');
+      }
 
-          const opcionalesSeleccionados = Object.entries(formRutaOpcionalesSeleccion)
-            .map(([id_servicio, cantidad]) => ({
-              id_servicio: Number(id_servicio),
-              cantidad: Number(cantidad),
-            }))
-            .filter((item) => Number.isFinite(item.id_servicio) && item.id_servicio > 0 && item.cantidad > 0);
+      if (formData.serviceType === 'ruta') {
+        if (!formData.routeId) {
+          throw new Error('Selecciona una ruta.');
+        }
 
-          for (const item of opcionalesSeleccionados) {
-            await reservasAPI.agregarServicio(idReservaCreada, {
-              id_servicio: item.id_servicio,
-              cantidad: item.cantidad,
-            });
-          }
-        } catch (error: any) {
-          console.error('❌ Error al asociar programación/servicios a la reserva:', error);
-          toast.error(error?.message || 'Reserva creada, pero falló la asociación de la ruta/servicios.');
-          toast.info('Puedes abrir la reserva y asignar la programación desde el detalle.');
+        if (!selectedProgramacion) {
+          throw new Error('Selecciona una programación disponible para esa ruta.');
+        }
+        if (Number(selectedProgramacion.availableSeats || 0) < participantTotal) {
+          throw new Error('La programación seleccionada no tiene cupos suficientes para esa cantidad de personas.');
+        }
+
+        const idProgramacion = Number(selectedProgramacion.id);
+
+        await reservasAPI.agregarProgramacion(idReserva, {
+          id_programacion: idProgramacion,
+          cantidad_personas: participantTotal,
+          precio_unitario: Number(selectedProgramacion.price || 0),
+        });
+
+        await applySelectedServices(idReserva, formRutaOpcionalesSeleccion, formRutaDetalle);
+      } else {
+        const idFinca = Number(formData.farmId);
+        const numeroNoches = Number(formData.nights);
+        const precioPorNoche = Number(formData.nightlyPrice);
+
+        if (!Number.isFinite(idFinca) || idFinca <= 0) {
+          throw new Error('Selecciona una finca válida.');
+        }
+        if (!formData.checkIn || !formData.checkOut) {
+          throw new Error('Debes registrar check-in y check-out.');
+        }
+        if (!Number.isFinite(numeroNoches) || numeroNoches <= 0) {
+          throw new Error('El número de noches debe ser mayor a cero.');
+        }
+        if (!Number.isFinite(precioPorNoche) || precioPorNoche <= 0) {
+          throw new Error('El precio por noche debe ser mayor a cero.');
+        }
+
+        await reservasAPI.agregarFinca(idReserva, {
+          id_finca: idFinca,
+          fecha_checkin: formData.checkIn,
+          fecha_checkout: formData.checkOut,
+          numero_noches: numeroNoches,
+          precio_por_noche: precioPorNoche,
+        });
+      }
+
+      for (let index = 0; index < companionDetails.length; index += 1) {
+        const companion = companionDetails[index];
+        if (!companion?.nombre.trim() || !companion?.apellido.trim()) {
+          throw new Error(`Completa nombre y apellido del acompañante ${index + 1}.`);
         }
       }
 
-      toast.success('Reserva creada correctamente');
-      setIsCreateModalOpen(false);
-      
-      // Limpiar formulario
-      setFormData({
-        clientId: '',
-        clientName: '',
-        bookingDate: '',
-        routeId: '',
-        farmId: '',
-        serviceType: 'ruta',
-        programacionId: '',
-        services: [],
-        participants: 1,
+      if (companionDetails.length > 0) {
+        await Promise.all(
+          companionDetails.map((companion) =>
+            reservasAPI.agregarAcompanante(idReserva, {
+              nombre: companion.nombre.trim(),
+              apellido: companion.apellido.trim(),
+              tipo_documento: companion.tipo_documento || null,
+              numero_documento: companion.numero_documento.trim() || null,
+              telefono: companion.telefono.trim() || null,
+              fecha_nacimiento: companion.fecha_nacimiento || null,
+            })
+          )
+        );
+      }
+
+      toast.success('Reserva creada correctamente.');
+      await loadReservas();
+      setSelectedBooking({
+        id: String(idReserva),
+        clientId: formData.clientId,
+        clientName: selectedClient?.name || formData.clientName || 'Cliente',
+        clientEmail: selectedClient?.email || '',
+        clientPhone: selectedClient?.phone || '',
+        packageName: formData.serviceType === 'ruta' ? 'Ruta' : 'Finca',
+        serviceTypeForm: formData.serviceType,
+        date: formData.bookingDate,
+        participants: participantTotal,
         adults: 1,
-        children: 0,
-        total: 0,
+        children: Math.max(0, Number(formData.companions || 0)),
         status: 'Pendiente',
-        specialRequests: ''
+        paymentStatus: 'Pendiente',
+        paymentMethod: 'Por definir',
+        total: Number(formData.total || 0),
+        paidAmount: 0,
+        pendingAmount: Number(formData.total || 0),
+        specialRequests: formData.specialRequests || '',
       });
-      setFormRutaDetalle(null);
-      setFormRutaOpcionalesSeleccion({});
-      setProofFile(null);
-      setProofFileName('');
-      
-      // Recargar lista de reservas
-      await cargarReservas();
-      
+      resetForm();
+      setActiveView('detail');
     } catch (error: any) {
-      console.error('❌ Error al crear reserva:', error);
-      toast.error(error.message || 'Error al crear la reserva. Verifica que el backend esté corriendo.');
+      console.error('Error al crear reserva:', error);
+      toast.error(error?.message || 'No se pudo crear la reserva.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Editar reserva
   const handleEditBooking = async () => {
-    if (!canEditReservas) {
-      toast.error('No tienes permiso para editar reservas');
+    if (!canEditReservas || !selectedBooking?.id) {
+      toast.error('No tienes permiso para editar reservas.');
       return;
     }
 
     if (!formData.clientId || !formData.bookingDate) {
-      toast.error('Por favor complete todos los campos requeridos');
+      toast.error('Completa los datos principales de la reserva.');
+      return;
+    }
+
+    if (formData.status === 'Confirmada' && !canReservationBeConfirmed(selectedBooking.paymentStatus)) {
+      toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado.');
       return;
     }
 
     try {
       setIsLoading(true);
-      const reservaId = selectedBooking?.id?.toString();
-      console.log('🔄 Actualizando reserva:', reservaId, formData);
-
-      if (formData.status === 'Confirmada' && !canReservationBeConfirmed(selectedBooking?.paymentStatus)) {
-        toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
-        return;
-      }
-      
-      await reservasAPI.update(parseInt(reservaId), {
-        id_cliente: parseInt(formData.clientId),
+      await reservasAPI.update(Number(selectedBooking.id), {
+        id_cliente: Number(formData.clientId),
         fecha_reserva: formData.bookingDate,
         estado: formData.status,
         total: Number(formData.total) || 0,
-        notas: formData.specialRequests
+        notas: formData.specialRequests || '',
       });
-      
-      console.log('✅ Reserva actualizada');
-      toast.success('Reserva actualizada correctamente');
-      setIsEditModalOpen(false);
-      
-      // Recargar lista
-      await cargarReservas();
-      
-      // Limpiar formulario
-      setFormData({
-        clientId: '',
-        clientName: '',
-        bookingDate: '',
-        routeId: '',
-        farmId: '',
-        serviceType: 'ruta',
-        programacionId: '',
-        services: [],
-        participants: 1,
-        adults: 1,
-        children: 0,
-        total: 0,
-        status: 'Pendiente',
-        specialRequests: ''
-      });
-      
+
+      toast.success('Reserva actualizada correctamente.');
+      setSelectedBooking((prev) =>
+        prev
+          ? {
+              ...prev,
+              clientId: formData.clientId,
+              clientName: selectedClient?.name || prev.clientName,
+              clientEmail: selectedClient?.email || prev.clientEmail,
+              clientPhone: selectedClient?.phone || prev.clientPhone,
+              date: formData.bookingDate,
+              participants: participantTotal,
+              adults: 1,
+              children: Math.max(0, Number(formData.companions || 0)),
+              total: Number(formData.total || 0),
+              pendingAmount:
+                prev.paymentStatus === 'Pagado'
+                  ? 0
+                  : Math.max(0, Number(formData.total || 0) - Number(prev.paidAmount || 0)),
+              status: formData.status,
+              specialRequests: formData.specialRequests || '',
+            }
+          : prev
+      );
+      await loadReservas();
+      setActiveView('detail');
     } catch (error: any) {
-      console.error('❌ Error al editar reserva:', error);
-      toast.error(error.message || 'Error al actualizar la reserva');
+      console.error('Error al editar reserva:', error);
+      toast.error(error?.message || 'No se pudo actualizar la reserva.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Ver detalle
-  const handleViewDetail = (booking: any) => {
-    setSelectedBooking(booking);
-    setIsDetailModalOpen(true);
-  };
-
-  // Cambiar estado  
   const handleChangeStatus = async (bookingId: string, newStatus: string) => {
     if (!canEditReservas) {
-      toast.error('No tienes permiso para editar reservas');
+      toast.error('No tienes permiso para editar reservas.');
+      return;
+    }
+
+    const current = bookings.find((booking) => booking.id === bookingId);
+    if (!current) {
+      toast.error('Reserva no encontrada.');
+      return;
+    }
+
+    if (newStatus === 'Confirmada' && !canReservationBeConfirmed(current.paymentStatus)) {
+      toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado.');
       return;
     }
 
     try {
-      const reservaId = bookingId.toString();
-      const bookingActual = bookings.find((booking) => String(booking.id) === reservaId);
-
-      if (newStatus === 'Confirmada' && !canReservationBeConfirmed(bookingActual?.paymentStatus)) {
-        toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
-        return;
-      }
-      
-      // Si el nuevo estado es "Cancelada", llamar al endpoint de cancelar
       if (newStatus === 'Cancelada') {
-        console.log('❌ Cancelando reserva:', reservaId);
-        await reservasAPI.cancelar(parseInt(reservaId), 'Cancelación solicitada por usuario');
+        await reservasAPI.cancelar(Number(bookingId), 'Cancelación solicitada desde gestión de reservas');
       } else {
-        // Para otros estados, actualizar
-        console.log('🔄 Cambiando estado de reserva:', reservaId, newStatus);
-        await reservasAPI.update(parseInt(reservaId), {
-          estado: newStatus
-        });
+        await reservasAPI.update(Number(bookingId), { estado: newStatus });
       }
-      
-      toast.success(`Estado actualizado a ${newStatus}`);
-      
-      // Recargar lista
-      await cargarReservas();
+      toast.success(`Estado actualizado a ${newStatus}.`);
+      await loadReservas();
+      if (selectedBooking?.id === bookingId) {
+        setSelectedBooking((prev) => (prev ? { ...prev, status: newStatus } : prev));
+      }
     } catch (error: any) {
-      console.error('❌ Error al cambiar estado:', error);
-      toast.error(error.message || 'Error al cambiar el estado');
+      console.error('Error al cambiar estado:', error);
+      toast.error(error?.message || 'No se pudo actualizar el estado.');
     }
   };
 
-  // Generar PDF
-  const handleGeneratePDF = (_booking: any) => {
-    toast.success('PDF generado correctamente');
-  };
-
   const handleDeleteBooking = async () => {
-    if (!canDeleteReservas) {
-      toast.error('No tienes permiso para eliminar reservas');
+    if (!canDeleteReservas || !selectedBooking?.id) {
+      toast.error('No tienes permiso para eliminar reservas.');
       return;
     }
 
     try {
       setIsLoading(true);
-      const reservaId = selectedBooking?.id?.toString();
-      if (!reservaId) {
-        toast.error('Reserva inválida');
-        return;
-      }
-      await reservasAPI.delete(parseInt(reservaId));
-      toast.success('Reserva eliminada correctamente');
+      await reservasAPI.delete(Number(selectedBooking.id));
+      toast.success('Reserva eliminada correctamente.');
       setIsDeleteDialogOpen(false);
-      await cargarReservas();
+      await loadReservas();
+      goBackToList();
     } catch (error: any) {
-      console.error('❌ Error al eliminar reserva:', error);
-      toast.error(error.message || 'Error al eliminar la reserva');
+      console.error('Error al eliminar reserva:', error);
+      toast.error(error?.message || 'No se pudo eliminar la reserva.');
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleAssociateProgramacion = async () => {
+    const idReserva = Number(selectedBooking?.id);
+    const idProgramacion = Number(detalleProgramacionId);
+
+    if (!Number.isFinite(idReserva) || idReserva <= 0) {
+      toast.error('Reserva inválida.');
+      return;
+    }
+    if (!Number.isFinite(idProgramacion) || idProgramacion <= 0) {
+      toast.error('Ingresa un ID de programación válido.');
+      return;
+    }
+
+    try {
+      await reservasAPI.agregarProgramacion(idReserva, {
+        id_programacion: idProgramacion,
+        cantidad_personas: Number(reservaDetalle?.numero_participantes ?? selectedBooking?.participants ?? 1),
+      });
+      toast.success('Programación asociada correctamente.');
+      await loadReservaDetail(idReserva);
+      await loadReservas();
+    } catch (error: any) {
+      toast.error(error?.message || 'No se pudo asociar la programación.');
+    }
+  };
+
+  const handleSaveOptionalServicesFromDetail = async () => {
+    const idReserva = Number(selectedBooking?.id);
+    if (!Number.isFinite(idReserva) || idReserva <= 0) {
+      toast.error('Reserva inválida.');
+      return;
+    }
+
+    const hasAnySelection = Object.values(detalleOpcionalesSeleccion).some((qty) => Number(qty) > 0);
+    if (!hasAnySelection) {
+      toast.info('Selecciona al menos un servicio opcional.');
+      return;
+    }
+
+    try {
+      await applySelectedServices(idReserva, detalleOpcionalesSeleccion, detalleRuta);
+      toast.success('Servicios opcionales agregados correctamente.');
+      await loadReservaDetail(idReserva);
+      await loadReservas();
+    } catch (error: any) {
+      toast.error(error?.message || 'No se pudieron guardar los servicios opcionales.');
+    }
+  };
+
+  const handleGeneratePDF = () => {
+    toast.success('La exportación PDF queda lista para conectarse al flujo real.');
+  };
+
+  const renderServiceOptionList = (
+    source: 'form' | 'detail',
+    routeDetail: any,
+    selectionMap: Record<number, number>,
+    setSelectionMap: React.Dispatch<React.SetStateAction<Record<number, number>>>
+  ) => {
+    if (source === 'form' && isLoadingRouteDetail) {
+      return <p className="text-sm text-gray-500">Cargando servicios opcionales...</p>;
+    }
+
+    const opcionales = Array.isArray(routeDetail?.servicios_opcionales)
+      ? routeDetail.servicios_opcionales
+      : [];
+
+    if (!opcionales.length) {
+      return <p className="text-sm text-gray-500">Esta ruta no tiene servicios opcionales configurados.</p>;
+    }
+
+    return (
+      <div className="space-y-3">
+        {opcionales.map((so: any) => {
+          const idServicio = Number(so?.id_servicio);
+          if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+
+          const checked = Number(selectionMap[idServicio] ?? 0) > 0;
+          const cantidadDefault = Number(so?.cantidad_default ?? 1) || 1;
+          const nombreServicio = so?.servicio?.nombre ?? `Servicio #${idServicio}`;
+          const precio = Number(
+            so?.servicio?.precio ?? so?.precio_unitario ?? so?.precio ?? 0
+          );
+
+          return (
+            <div
+              key={String(so?.id_ruta_servicio_opcional ?? idServicio)}
+              className="flex flex-col gap-3 rounded-lg border bg-gray-50 p-4 md:flex-row md:items-center md:justify-between"
+            >
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  checked={checked}
+                  onCheckedChange={(value) => {
+                    const willCheck = Boolean(value);
+                    setSelectionMap((prev) => ({
+                      ...prev,
+                      [idServicio]: willCheck ? (prev[idServicio] > 0 ? prev[idServicio] : cantidadDefault) : 0,
+                    }));
+                  }}
+                />
+                <div>
+                  <p className="font-medium text-gray-900">{nombreServicio}</p>
+                  <p className="text-xs text-gray-500">
+                    ID: {idServicio} {precio > 0 ? `• ${formatCurrency(precio)}` : '• Precio por definir'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Label className="text-xs text-gray-600">Cantidad</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={checked ? Number(selectionMap[idServicio] ?? cantidadDefault) : ''}
+                  disabled={!checked}
+                  onChange={(e) => {
+                    const nextQty = Math.max(1, Number(e.target.value) || 1);
+                    setSelectionMap((prev) => ({ ...prev, [idServicio]: nextQty }));
+                  }}
+                  className="w-24 bg-white"
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   if (!permisos.loadingRoles && !canViewReservas) {
@@ -729,1488 +1089,1311 @@ export function BookingsManagement() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
+        className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between"
       >
         <div>
-          <h2 className="text-green-800">Gestión de Reservas</h2>
-          <p className="text-gray-600">Administra todas las reservas del sistema</p>
+          <h2 className="text-2xl font-semibold text-green-800">Gestión de Reservas</h2>
+          <p className="text-gray-600">
+            Vista completa para staff, con estados reales de reserva, venta y pago.
+          </p>
         </div>
-        {canCreateReservas && (
-          <Button
-            onClick={() => setIsCreateModalOpen(true)}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Nueva Reserva
+        <div className="flex flex-wrap gap-2">
+          {activeView !== 'list' && (
+            <Button variant="outline" onClick={goBackToList}>
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Volver al listado
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => void loadReservas()} disabled={isLoading}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Actualizar
           </Button>
-        )}
+          {canCreateReservas && activeView === 'list' && (
+            <Button onClick={openCreateView} className="bg-green-600 hover:bg-green-700">
+              <Plus className="mr-2 h-4 w-4" />
+              Nueva Reserva
+            </Button>
+          )}
+        </div>
       </motion.div>
 
-      {/* Filtros */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-      >
-        <Card className="border-green-200">
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <Label>Buscar</Label>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+      {activeView === 'list' && (
+        <>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Reservas registradas</p>
+                  <p className="text-2xl font-semibold text-green-800">{dashboardStats.total}</p>
+                </div>
+                <FileText className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Confirmadas</p>
+                  <p className="text-2xl font-semibold text-green-800">{dashboardStats.confirmed}</p>
+                </div>
+                <CheckCircle className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Pendientes</p>
+                  <p className="text-2xl font-semibold text-amber-700">{dashboardStats.pending}</p>
+                </div>
+                <CalendarDays className="h-8 w-8 text-amber-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Saldo pendiente</p>
+                  <p className="text-xl font-semibold text-blue-800">
+                    {formatCurrency(dashboardStats.pendingAmount)}
+                  </p>
+                </div>
+                <DollarSign className="h-8 w-8 text-blue-600" />
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="border-green-200">
+            <CardContent className="pt-6">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <div>
+                  <Label>Buscar</Label>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <Input
+                      placeholder="Cliente, servicio o ID..."
+                      value={searchTerm}
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      className="pl-10"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label>Estado</Label>
+                  <Select
+                    value={statusFilter}
+                    onValueChange={(value) => {
+                      setStatusFilter(value);
+                      setCurrentPage(1);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Todos los estados" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos</SelectItem>
+                      <SelectItem value="Confirmada">Confirmada</SelectItem>
+                      <SelectItem value="Pendiente">Pendiente</SelectItem>
+                      <SelectItem value="Cancelada">Cancelada</SelectItem>
+                      <SelectItem value="Completada">Completada</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Fecha</Label>
                   <Input
-                    placeholder="Cliente o tipo de reserva..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
+                    type="date"
+                    value={dateFilter}
+                    onChange={(e) => {
+                      setDateFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
                   />
                 </div>
+                <div className="flex items-end">
+                  <Button
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
+                    onClick={() => {
+                      setSearchTerm('');
+                      setStatusFilter('all');
+                      setDateFilter('');
+                      setCurrentPage(1);
+                    }}
+                  >
+                    <Filter className="mr-2 h-4 w-4" />
+                    Limpiar filtros
+                  </Button>
+                </div>
               </div>
-              <div>
-                <Label>Estado</Label>
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Todos los estados" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Todos</SelectItem>
-                    <SelectItem value="Confirmada">Confirmada</SelectItem>
-                    <SelectItem value="Pendiente">Pendiente</SelectItem>
-                    <SelectItem value="Cancelada">Cancelada</SelectItem>
-                    <SelectItem value="Completada">Completada</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Fecha</Label>
-                <Input
-                  type="date"
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                />
-              </div>
-              <div className="flex items-end">
-                <Button
-                  variant="outline"
-                  className="w-full border-green-600 text-green-600 hover:bg-green-50"
-                  onClick={() => {
-                    setSearchTerm('');
-                    setStatusFilter('all');
-                    setDateFilter('');
-                  }}
-                >
-                  <Filter className="w-4 h-4 mr-2" />
-                  Limpiar Filtros
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
+            </CardContent>
+          </Card>
 
-      {/* Tabla de Reservas */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
-      >
+          <Card className="border-green-200">
+            <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+              <CardTitle className="text-green-800">
+                Reservas ({filteredBookings.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-6">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Cliente</TableHead>
+                      <TableHead>Servicio</TableHead>
+                      <TableHead>Fecha</TableHead>
+                      <TableHead>Participantes</TableHead>
+                      <TableHead>Total</TableHead>
+                      <TableHead>Estado</TableHead>
+                      <TableHead>Pago</TableHead>
+                      <TableHead className="w-[230px]">Acciones</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedBookings.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={8} className="py-10 text-center text-gray-500">
+                          {isLoading ? 'Cargando reservas...' : 'No hay reservas para mostrar.'}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      paginatedBookings.map((booking) => (
+                        <TableRow key={booking.id}>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-gray-900">{booking.clientName}</p>
+                              <p className="text-xs text-gray-500">{booking.clientEmail || 'Sin correo'}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="font-medium text-gray-900">{booking.packageName}</p>
+                              <p className="text-xs text-gray-500">Reserva #{booking.id}</p>
+                            </div>
+                          </TableCell>
+                          <TableCell>{booking.date}</TableCell>
+                          <TableCell>{booking.participants}</TableCell>
+                          <TableCell>{formatCurrency(booking.total)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={booking.status === 'Confirmada'}
+                                onCheckedChange={(checked) => {
+                                  const nextStatus = checked ? 'Confirmada' : 'Pendiente';
+                                  void handleChangeStatus(booking.id, nextStatus);
+                                }}
+                                disabled={
+                                  !canEditReservas ||
+                                  (booking.status !== 'Confirmada' &&
+                                    !canReservationBeConfirmed(booking.paymentStatus))
+                                }
+                                className={booking.status === 'Confirmada' ? 'bg-green-600' : 'bg-gray-300'}
+                              />
+                              {getStatusBadge(booking.status)}
+                            </div>
+                          </TableCell>
+                          <TableCell>{getPaymentStatusBadge(booking.paymentStatus)}</TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => openDetailView(booking)}
+                                className="border-green-600 text-green-700 hover:bg-green-50"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </Button>
+                              {canEditReservas && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openEditView(booking)}
+                                  className="border-blue-600 text-blue-700 hover:bg-blue-50"
+                                >
+                                  <Edit className="h-4 w-4" />
+                                </Button>
+                              )}
+                              {canDeleteReservas && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setSelectedBooking(booking);
+                                    setIsDeleteDialogOpen(true);
+                                  }}
+                                  className="border-red-600 text-red-700 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={handleGeneratePDF}
+                                className="border-green-600 text-green-700 hover:bg-green-50"
+                              >
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <p className="text-sm text-gray-600">
+                  Mostrando {filteredBookings.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} a{' '}
+                  {Math.min(currentPage * itemsPerPage, filteredBookings.length)} de {filteredBookings.length} reservas
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Anterior
+                  </Button>
+                  <span className="px-3 text-sm text-gray-600">
+                    Página {currentPage} de {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Siguiente
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
+
+      {(activeView === 'create' || activeView === 'edit') && (
         <Card className="border-green-200">
           <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
             <CardTitle className="text-green-800">
-              Reservas ({filteredBookings.length})
+              {activeView === 'create' ? 'Nueva Reserva' : 'Editar Reserva'}
             </CardTitle>
           </CardHeader>
-          <CardContent className="pt-6">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead>Tipo de reserva</TableHead>
-                  <TableHead>Fecha</TableHead>
-                  <TableHead>Participantes</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>Pago</TableHead>
-                  <TableHead>Acciones</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedBookings.map((booking) => (
-                  <TableRow key={booking.id}>
-                    <TableCell className="font-medium">{booking.clientName}</TableCell>
-                    <TableCell>{booking.packageName}</TableCell>
-                    <TableCell>{booking.date}</TableCell>
-                    <TableCell>
-                      <div className="space-y-1">
-                        <div>{booking.participants} total</div>
-                        <div className="text-xs text-gray-600">
-                          {booking.adults}A / {booking.children}N
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>${booking.total.toLocaleString()}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          checked={booking.status === 'Confirmada'}
-                          onCheckedChange={(checked: boolean) => {
-                            if (!canEditReservas) {
-                              toast.error('No tienes permiso para editar reservas');
-                              return;
-                            }
-                            const newStatus = checked ? 'Confirmada' : 'Pendiente';
-                            void handleChangeStatus(String(booking.id), newStatus);
-                          }}
-                          disabled={!canEditReservas || (booking.status !== 'Confirmada' && !canReservationBeConfirmed(booking.paymentStatus))}
-                          className={booking.status === 'Confirmada' ? 'bg-green-600' : 'bg-gray-300'}
-                        />
-                        {getStatusBadge(booking.status)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {getPaymentStatusBadge(booking.paymentStatus)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleViewDetail(booking)}
-                          className="border-green-600 text-green-600 hover:bg-green-50"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        {canEditReservas && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setSelectedBooking(booking);
-                              setFormData({
-                                clientId: booking.clientId || '',
-                                clientName: booking.clientName || '',
-                                bookingDate: booking.date || '',
+          <CardContent className="space-y-6 pt-6">
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+              <div className="space-y-6 xl:col-span-2">
+                <Card className="border-green-100">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">1. Cliente y datos base</CardTitle>
+                  </CardHeader>
+                  <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    <div className="md:col-span-2">
+                      <Label>Cliente *</Label>
+                      <Select
+                        value={formData.clientId}
+                        onValueChange={(value) => {
+                          const client = clientes.find((item) => item.id === value);
+                          setFormData((prev) => ({
+                            ...prev,
+                            clientId: value,
+                            clientName: client?.name || '',
+                          }));
+                        }}
+                      >
+                        <SelectTrigger className="bg-gray-50">
+                          <SelectValue placeholder="Seleccione un cliente" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {clientes.map((client) => (
+                            <SelectItem key={client.id} value={client.id}>
+                              {client.name} {client.document ? `- ${client.document}` : ''}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Fecha de reserva *</Label>
+                      <Input
+                        type="date"
+                        value={formData.bookingDate}
+                        onChange={(e) => setFormData((prev) => ({ ...prev, bookingDate: e.target.value }))}
+                        className="bg-gray-50"
+                      />
+                    </div>
+                    <div>
+                      <Label>Estado</Label>
+                      <Select
+                        value={activeView === 'edit' ? formData.status : 'Pendiente'}
+                        onValueChange={(value) => {
+                          if (value === 'Confirmada' && !canReservationBeConfirmed(selectedBooking?.paymentStatus)) {
+                            toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado.');
+                            return;
+                          }
+                          setFormData((prev) => ({ ...prev, status: value }));
+                        }}
+                        disabled={activeView === 'create'}
+                      >
+                        <SelectTrigger className="bg-gray-50">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Pendiente">Pendiente</SelectItem>
+                          <SelectItem value="Confirmada">Confirmada</SelectItem>
+                          <SelectItem value="Cancelada">Cancelada</SelectItem>
+                          <SelectItem value="Completada">Completada</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label>Acompañantes</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={formData.companions}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            companions: Math.max(0, Number(e.target.value) || 0),
+                          }))
+                        }
+                        className="bg-gray-50"
+                      />
+                    </div>
+                    <div>
+                      <Label>Total participantes</Label>
+                      <Input value={participantTotal} disabled className="bg-gray-100" />
+                    </div>
+                    <div>
+                      <Label>Total reserva *</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={formData.total}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            total: Math.max(0, Number(e.target.value) || 0),
+                          }))
+                        }
+                        className="bg-gray-50"
+                      />
+                    </div>
+                    <div className="md:col-span-2">
+                      <Label>Observaciones</Label>
+                      <Textarea
+                        rows={4}
+                        value={formData.specialRequests}
+                        onChange={(e) =>
+                          setFormData((prev) => ({ ...prev, specialRequests: e.target.value }))
+                        }
+                        className="bg-gray-50"
+                        placeholder="Notas internas u observaciones de la reserva"
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {activeView === 'create' && (
+                  <Card className="border-green-100">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base text-green-800">2. Servicio asociado</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div>
+                          <Label>Tipo de servicio *</Label>
+                          <Select
+                            value={formData.serviceType}
+                            onValueChange={(value) => {
+                              const next = value === 'finca' ? 'finca' : 'ruta';
+                              setFormData((prev) => ({
+                                ...prev,
+                                serviceType: next,
                                 routeId: '',
                                 farmId: '',
-                                serviceType: 'ruta',
                                 programacionId: '',
-                                services: [],
-                                participants: booking.participants || 1,
-                                adults: booking.adults || 1,
-                                children: booking.children || 0,
-                                total: booking.total || 0,
-                                status: booking.status || 'Pendiente',
-                                specialRequests: booking.specialRequests || ''
-                              });
-                              setIsEditModalOpen(true);
+                                checkIn: '',
+                                checkOut: '',
+                                nights: 1,
+                                nightlyPrice: 0,
+                              }));
+                              setFormRutaDetalle(null);
+                              setFormRutaOpcionalesSeleccion({});
                             }}
-                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
                           >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {canDeleteReservas && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setSelectedBooking(booking);
-                              setIsDeleteDialogOpen(true);
-                            }}
-                            className="border-red-600 text-red-600 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleGeneratePDF(booking)}
-                          className="border-green-600 text-green-600 hover:bg-green-50"
-                        >
-                          <Download className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            {/* Paginación */}
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-gray-600">
-                Mostrando {((currentPage - 1) * itemsPerPage) + 1} a{' '}
-                {Math.min(currentPage * itemsPerPage, filteredBookings.length)} de{' '}
-                {filteredBookings.length} reservas
-              </p>
-              <div className="flex space-x-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Anterior
-                </Button>
-                <span className="flex items-center px-4">
-                  Página {currentPage} de {totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Siguiente
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      {/* Modal Crear Reserva */}
-      <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-green-800">Nueva Reserva</DialogTitle>
-            <DialogDescription>
-              Complete los campos necesarios para crear una nueva reserva
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-6 py-4">
-            {/* Bloque 1: Cliente */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">1. Cliente</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="create-clientSearch">Buscar cliente (por nombre o cédula) *</Label>
-                    <Select 
-                      value={formData.clientId} 
-                      onValueChange={(value: string) => {
-                        const client = clientes.find(c => c.id === value);
-                        setFormData({ 
-                          ...formData, 
-                          clientId: value, 
-                          clientName: client?.name || '' 
-                        });
-                      }}
-                    >
-                      <SelectTrigger id="create-clientSearch" className="bg-gray-50">
-                        <SelectValue placeholder="Seleccione un cliente" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {clientes.map(client => (
-                          <SelectItem key={client.id} value={client.id}>
-                            {client.name} - {client.document}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  
-                  {/* Cliente seleccionado */}
-                  {formData.clientName && (
-                    <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                      <p className="text-green-900 mb-2"><strong>Cliente seleccionado:</strong></p>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-                        <div>
-                          <span className="text-gray-600">Nombre:</span>
-                          <p className="text-gray-900">{formData.clientName}</p>
+                            <SelectTrigger className="bg-gray-50">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="ruta">Ruta turística</SelectItem>
+                              <SelectItem value="finca">Finca</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <div>
-                          <span className="text-gray-600">Cédula:</span>
-                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.document || 'N/A'}</p>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">Correo:</span>
-                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.email || 'N/A'}</p>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">Teléfono:</span>
-                          <p className="text-gray-900">{clientes.find(c => c.id === formData.clientId)?.phone || 'N/A'}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
 
-            {/* Bloque 2: Servicio */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">2. Servicio</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="create-serviceType">Tipo de servicio *</Label>
-                    <Select
-                      value={formData.serviceType}
-                      onValueChange={(value: string) => {
-                        const next = value === 'finca' ? 'finca' : 'ruta';
-                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '', programacionId: '' });
-                      }}
-                    >
-                      <SelectTrigger id="create-serviceType" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ruta">Ruta turística</SelectItem>
-                        <SelectItem value="finca">Finca en alquiler</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="create-tourName">Nombre del tour o finca *</Label>
-                    <Select value={formData.routeId || formData.farmId} onValueChange={(value: string) => {
-                      if (formData.serviceType === 'ruta') {
-                        setFormData({ ...formData, routeId: value, farmId: '' });
-                        return;
-                      }
-                      setFormData({ ...formData, farmId: value, routeId: '' });
-                    }}>
-                      <SelectTrigger id="create-tourName" className="bg-gray-50">
-                        <SelectValue placeholder="Seleccione un servicio" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {formData.serviceType === 'ruta' && rutas.map(route => (
-                          <SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>
-                        ))}
-                        {formData.serviceType === 'finca' && fincas.map(farm => (
-                          <SelectItem key={farm.id} value={farm.id}>{farm.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {formData.serviceType === 'ruta' && (
-                    <div>
-                      <Label htmlFor="create-programacionId">ID de programación *</Label>
-                      <Input
-                        id="create-programacionId"
-                        type="number"
-                        min="1"
-                        value={formData.programacionId}
-                        onChange={(e) => setFormData({ ...formData, programacionId: e.target.value })}
-                        className="bg-gray-50"
-                        placeholder="Ej: 12"
-                      />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Se usa para asociar la ruta real y cargar los servicios predefinidos automáticamente.
-                      </p>
-                    </div>
-                  )}
-                  <div>
-                    <Label htmlFor="create-bookingDate">Fecha de reserva *</Label>
-                    <Input
-                      id="create-bookingDate"
-                      type="date"
-                      value={formData.bookingDate}
-                      onChange={(e) => setFormData({ ...formData, bookingDate: e.target.value })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="create-tourDate">Fecha del tour / entrada</Label>
-                    <Input
-                      id="create-tourDate"
-                      type="date"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="create-exitDate">Fecha de salida (si aplica)</Label>
-                    <Input
-                      id="create-exitDate"
-                      type="date"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                </div>
-
-                {formData.serviceType === 'ruta' && (
-                  <div className="mt-4">
-                    <Label className="text-gray-700">Servicios opcionales disponibles (según ruta)</Label>
-                    {isLoadingRutaDetalle ? (
-                      <p className="text-sm text-gray-500 mt-2">Cargando servicios opcionales...</p>
-                    ) : Array.isArray(formRutaDetalle?.servicios_opcionales) && formRutaDetalle.servicios_opcionales.length > 0 ? (
-                      <div className="space-y-2 mt-2">
-                        {formRutaDetalle.servicios_opcionales.map((so: any) => {
-                          const idServicio = Number(so?.id_servicio);
-                          if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
-                          const cantidadSeleccionada = Number(formRutaOpcionalesSeleccion[idServicio] ?? 0);
-                          const checked = cantidadSeleccionada > 0;
-                          const cantidadDefault = Number(so?.cantidad_default ?? 1) || 1;
-                          const nombreServicio = so?.servicio?.nombre ?? `Servicio #${idServicio}`;
-                          const precio = so?.servicio?.precio;
-
-                          return (
-                            <div key={String(so?.id_ruta_servicio_opcional ?? idServicio)} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-gray-50 p-3 rounded-lg">
-                              <div className="flex items-start gap-3">
-                                <Checkbox
-                                  checked={checked}
-                                  onCheckedChange={(nextChecked) => {
-                                    const willCheck = Boolean(nextChecked);
-                                    setFormRutaOpcionalesSeleccion((prev) => ({
-                                      ...prev,
-                                      [idServicio]: willCheck ? (prev[idServicio] > 0 ? prev[idServicio] : cantidadDefault) : 0,
-                                    }));
-                                  }}
-                                />
-                                <div>
-                                  <p className="font-medium text-gray-900">{nombreServicio}</p>
-                                  <p className="text-xs text-gray-500">
-                                    ID: {idServicio}{typeof precio === 'number' ? ` • $${precio.toLocaleString()}` : ''}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-2">
-                                <Label className="text-xs text-gray-600">Cantidad</Label>
-                                <Input
-                                  type="number"
-                                  min="1"
-                                  value={checked ? cantidadSeleccionada : ''}
-                                  disabled={!checked}
-                                  onChange={(e) => {
-                                    const nextQty = Math.max(1, Number(e.target.value) || 1);
-                                    setFormRutaOpcionalesSeleccion((prev) => ({ ...prev, [idServicio]: nextQty }));
-                                  }}
-                                  className="w-24 bg-white"
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-sm text-gray-500 mt-2">Esta ruta no tiene servicios opcionales configurados.</p>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Bloque 3: Participantes */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">3. Participantes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="create-adults">Adultos *</Label>
-                    <Input
-                      id="create-adults"
-                      type="number"
-                      min="0"
-                      value={formData.adults}
-                      onChange={(e) => setFormData({ ...formData, adults: parseInt(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="create-children">Niños</Label>
-                    <Input
-                      id="create-children"
-                      type="number"
-                      min="0"
-                      value={formData.children}
-                      onChange={(e) => setFormData({ ...formData, children: parseInt(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="create-totalParticipants">Total de personas</Label>
-                    <Input
-                      id="create-totalParticipants"
-                      type="number"
-                      value={formData.adults + formData.children}
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="border-green-600 text-green-600 hover:bg-green-50"
-                    onClick={() => toast.info('Funcionalidad de agregar cliente adicional en desarrollo')}
-                  >
-                    <UserPlus className="w-4 h-4 mr-2" />
-                    Agregar Cliente Adicional
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 4: Información financiera */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">4. Información Financiera</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="create-total">Total estimado *</Label>
-                    <Input
-                      id="create-total"
-                      type="number"
-                      placeholder="$0"
-                      value={formData.total}
-                      onChange={(e) => setFormData({ ...formData, total: Number(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="create-paymentStatus">Estado de pago *</Label>
-                    <Select value="Pendiente" disabled>
-                      <SelectTrigger id="create-paymentStatus" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Pendiente">Pendiente</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Se actualiza desde ventas y abonos cuando exista la venta asociada.
-                    </p>
-                  </div>
-                  <div>
-                    <Label htmlFor="create-paymentMethod">Método de pago</Label>
-                    <Select defaultValue="efectivo">
-                      <SelectTrigger id="create-paymentMethod" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="efectivo">Efectivo</SelectItem>
-                        <SelectItem value="transferencia">Transferencia</SelectItem>
-                        <SelectItem value="tarjeta">Tarjeta</SelectItem>
-                        <SelectItem value="otro">Otro</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 5: Comprobante de Pago */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">5. Comprobante de Pago</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="create-proofFile">Adjuntar Comprobante (PDF, JPG, PNG)</Label>
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-500 transition mt-2">
-                      <input
-                        id="create-proofFile"
-                        type="file"
-                        className="hidden"
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        onChange={handleProofFileChange}
-                      />
-                      <label htmlFor="create-proofFile" className="cursor-pointer flex flex-col items-center space-y-2">
-                        <Upload className="w-8 h-8 text-gray-400" />
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">
-                            Haz clic para seleccionar o arrastra un archivo
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Máximo 5MB - PDF, JPG o PNG
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-
-                    {proofFileName && (
-                      <div className="flex items-center justify-between bg-green-50 p-3 rounded-lg border border-green-200 mt-3">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">✓</span>
+                        {formData.serviceType === 'ruta' ? (
+                          <div>
+                            <Label>Ruta *</Label>
+                            <Select
+                              value={formData.routeId}
+                              onValueChange={(value) => {
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  routeId: value,
+                                  farmId: '',
+                                  programacionId: '',
+                                }));
+                              }}
+                            >
+                              <SelectTrigger className="bg-gray-50">
+                                <SelectValue placeholder="Seleccione una ruta" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {rutas.map((route) => (
+                                  <SelectItem key={route.id} value={route.id}>
+                                    {route.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <span className="text-sm text-gray-700 font-medium">{proofFileName}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={removeProofFile}
-                          className="text-red-500 hover:text-red-700 transition"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 6: Estado de la reserva */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">6. Estado de la Reserva</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <Label htmlFor="create-status">Estado actual *</Label>
-                    <Select value="Pendiente" disabled>
-                      <SelectTrigger id="create-status" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Pendiente">Pendiente</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Toda reserva nueva inicia en pendiente y se confirma cuando el pago respaldado lo permita.
-                    </p>
-                  </div>
-                  <div>
-                    <Label htmlFor="create-observations">Observaciones internas</Label>
-                    <Textarea
-                      id="create-observations"
-                      placeholder="Escriba aquí notas adicionales o comentarios internos sobre la reserva..."
-                      rows={4}
-                      value={formData.specialRequests}
-                      onChange={(e) => setFormData({ ...formData, specialRequests: e.target.value })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 7: Control y acciones */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">7. Control y Acciones</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label>Creado por</Label>
-                    <Input
-                      value="Administrador"
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                  <div>
-                    <Label>Fecha de creación</Label>
-                    <Input
-                      value={new Date().toLocaleString('es-CO')}
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end items-center mt-6 pt-4 border-t">
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => setIsCreateModalOpen(false)}
-                    >
-                      Cancelar
-                    </Button>
-                    <Button
-                      onClick={handleCreateBooking}
-                      disabled={!canCreateReservas}
-                      className="bg-green-600 hover:bg-green-700"
-                    >
-                      <Plus className="w-4 h-4 mr-2" />
-                      Crear Reserva
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal Editar Reserva */}
-      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-green-800">Editar Reserva</DialogTitle>
-            <DialogDescription>
-              Modifica los campos necesarios para actualizar la reserva
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-6 py-4">
-            {/* Bloque 1: Identificación del cliente */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">1. Identificación del Cliente</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="edit-fullName">Nombre completo *</Label>
-                    <Input
-                      id="edit-fullName"
-                      value={formData.clientName}
-                      onChange={(e) => setFormData({ ...formData, clientName: e.target.value })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-document">Cédula / Documento *</Label>
-                    <Input
-                      id="edit-document"
-                      value={selectedBooking?.clientId || ''}
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-email">Correo electrónico</Label>
-                    <Input
-                      id="edit-email"
-                      type="email"
-                      placeholder="ejemplo@correo.com"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-phone">Teléfono</Label>
-                    <Input
-                      id="edit-phone"
-                      type="tel"
-                      placeholder="+57 300 123 4567"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 2: Servicio reservado */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">2. Servicio Reservado</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label htmlFor="edit-serviceType">Tipo de servicio *</Label>
-                    <Select
-                      value={formData.serviceType}
-                      onValueChange={(value: string) => {
-                        const next = value === 'finca' ? 'finca' : 'ruta';
-                        setFormData({ ...formData, serviceType: next, routeId: '', farmId: '' });
-                      }}
-                    >
-                      <SelectTrigger id="edit-serviceType" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="ruta">Ruta turística</SelectItem>
-                        <SelectItem value="finca">Finca en alquiler</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-packageName">Nombre del paquete / tour / finca *</Label>
-                    <Select value={formData.routeId || formData.farmId} onValueChange={(value: string) => {
-                      if (formData.serviceType === 'ruta') {
-                        setFormData({ ...formData, routeId: value, farmId: '' });
-                        return;
-                      }
-                      setFormData({ ...formData, farmId: value, routeId: '' });
-                    }}>
-                      <SelectTrigger id="edit-packageName" className="bg-gray-50">
-                        <SelectValue placeholder="Seleccione un servicio" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {formData.serviceType === 'ruta' && rutas.map(route => (
-                          <SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>
-                        ))}
-                        {formData.serviceType === 'finca' && fincas.map(farm => (
-                          <SelectItem key={farm.id} value={farm.id}>{farm.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-bookingDate">Fecha de reserva</Label>
-                    <Input
-                      id="edit-bookingDate"
-                      type="date"
-                      value={formData.bookingDate}
-                      onChange={(e) => setFormData({ ...formData, bookingDate: e.target.value })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-tourDate">Fecha del tour / entrada</Label>
-                    <Input
-                      id="edit-tourDate"
-                      type="date"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-exitDate">Fecha de salida (si aplica)</Label>
-                    <Input
-                      id="edit-exitDate"
-                      type="date"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-duration">Duración del servicio</Label>
-                    <Input
-                      id="edit-duration"
-                      placeholder="Ej: 1 día, 2 noches"
-                      className="bg-gray-50"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 3: Participantes */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">3. Participantes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="edit-adults">Adultos *</Label>
-                    <Input
-                      id="edit-adults"
-                      type="number"
-                      min="0"
-                      value={formData.adults}
-                      onChange={(e) => setFormData({ ...formData, adults: parseInt(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-children">Niños</Label>
-                    <Input
-                      id="edit-children"
-                      type="number"
-                      min="0"
-                      value={formData.children}
-                      onChange={(e) => setFormData({ ...formData, children: parseInt(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-totalParticipants">Total de personas</Label>
-                    <Input
-                      id="edit-totalParticipants"
-                      type="number"
-                      value={formData.adults + formData.children}
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                </div>
-                <div className="mt-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="border-green-600 text-green-600 hover:bg-green-50"
-                    onClick={() => toast.info('Funcionalidad de agregar cliente adicional en desarrollo')}
-                  >
-                    <UserPlus className="w-4 h-4 mr-2" />
-                    Agregar Cliente Adicional
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 4: Información financiera */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">4. Información Financiera</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <Label htmlFor="edit-total">Total de la reserva *</Label>
-                    <Input
-                      id="edit-total"
-                      type="number"
-                      placeholder="$0"
-                      value={formData.total}
-                      onChange={(e) => setFormData({ ...formData, total: Number(e.target.value) || 0 })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-paymentStatus">Estado de pago *</Label>
-                    <Select 
-                      value={normalizePaymentStatus(selectedBooking?.paymentStatus)}
-                      disabled
-                    >
-                      <SelectTrigger id="edit-paymentStatus" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Pagado">
-                          <span className="text-green-600 font-medium">Pagado</span>
-                        </SelectItem>
-                        <SelectItem value="Parcial">
-                          <span className="text-blue-600 font-medium">Parcial</span>
-                        </SelectItem>
-                        <SelectItem value="Pendiente">
-                          <span className="text-yellow-600 font-medium">Pendiente</span>
-                        </SelectItem>
-                        <SelectItem value="Cancelado">
-                          <span className="text-red-600 font-medium">Cancelado</span>
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Este estado se administra desde ventas y abonos, no desde reservas.
-                    </p>
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-paymentMethod">Método de pago</Label>
-                    <Select defaultValue="efectivo">
-                      <SelectTrigger id="edit-paymentMethod" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="efectivo">Efectivo</SelectItem>
-                        <SelectItem value="transferencia">Transferencia</SelectItem>
-                        <SelectItem value="tarjeta">Tarjeta</SelectItem>
-                        <SelectItem value="otro">Otro</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Bloque 5: Comprobante de Pago */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">5. Comprobante de Pago</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="edit-proofFile">Adjuntar Comprobante (PDF, JPG, PNG)</Label>
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-500 transition mt-2">
-                      <input
-                        id="edit-proofFile"
-                        type="file"
-                        className="hidden"
-                        accept=".pdf,.jpg,.jpeg,.png"
-                        onChange={handleProofFileChange}
-                      />
-                      <label htmlFor="edit-proofFile" className="cursor-pointer flex flex-col items-center space-y-2">
-                        <Upload className="w-8 h-8 text-gray-400" />
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">
-                            Haz clic para seleccionar o arrastra un archivo
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">
-                            Máximo 5MB - PDF, JPG o PNG
-                          </p>
-                        </div>
-                      </label>
-                    </div>
-
-                    {proofFileName && (
-                      <div className="flex items-center justify-between bg-green-50 p-3 rounded-lg border border-green-200 mt-3">
-                        <div className="flex items-center space-x-2">
-                          <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center">
-                            <span className="text-white text-xs font-bold">✓</span>
+                        ) : (
+                          <div>
+                            <Label>Finca *</Label>
+                            <Select
+                              value={formData.farmId}
+                              onValueChange={(value) => {
+                                const finca = fincas.find((item) => item.id === value);
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  farmId: value,
+                                  routeId: '',
+                                  nightlyPrice: Number(finca?.price || 0),
+                                  total: Number(finca?.price || 0) * Number(prev.nights || 1),
+                                }));
+                              }}
+                            >
+                              <SelectTrigger className="bg-gray-50">
+                                <SelectValue placeholder="Seleccione una finca" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {fincas.map((farm) => (
+                                  <SelectItem key={farm.id} value={farm.id}>
+                                    {farm.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <span className="text-sm text-gray-700 font-medium">{proofFileName}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={removeProofFile}
-                          className="text-red-500 hover:text-red-700 transition"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
 
-            {/* Bloque 6: Estado de la reserva */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">6. Estado de la Reserva</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 gap-4">
-                  <div>
-                    <Label htmlFor="edit-status">Estado actual *</Label>
-                    <Select
-                      value={formData.status}
-                      onValueChange={(value: string) => {
-                        if (value === 'Confirmada' && !canReservationBeConfirmed(selectedBooking?.paymentStatus)) {
-                          toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado');
-                          return;
-                        }
-                        setFormData({ ...formData, status: value });
-                      }}
-                    >
-                      <SelectTrigger id="edit-status" className="bg-gray-50">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Confirmada">Confirmada</SelectItem>
-                        <SelectItem value="Pendiente">Pendiente</SelectItem>
-                        <SelectItem value="Cancelada">Cancelada</SelectItem>
-                        <SelectItem value="Completada">Completada</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="edit-observations">Observaciones internas</Label>
-                    <Textarea
-                      id="edit-observations"
-                      placeholder="Escriba aquí notas adicionales o comentarios internos sobre la reserva..."
-                      rows={4}
-                      value={formData.specialRequests}
-                      onChange={(e) => setFormData({ ...formData, specialRequests: e.target.value })}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                      {formData.serviceType === 'ruta' ? (
+                        <>
+                          <div>
+                            <Label>Salida programada *</Label>
+                            <Select
+                              value={formData.programacionId}
+                              onValueChange={(value) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  programacionId: value,
+                                }))
+                              }
+                            >
+                              <SelectTrigger className="bg-gray-50">
+                                <SelectValue placeholder="Selecciona una programación disponible" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {filteredProgramacionesRuta.map((programacion) => (
+                                  <SelectItem key={programacion.id} value={programacion.id}>
+                                    {`${programacion.routeName} • ${programacion.date}${programacion.startTime ? ` ${programacion.startTime}` : ''} • ${programacion.availableSeats}/${programacion.totalSeats} cupos${programacion.availableSeats < participantTotal ? ' • Cupo insuficiente' : ''}`}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <p className="mt-1 text-xs text-gray-500">
+                              {isLoadingProgramacionesRuta
+                                ? 'Cargando salidas operativas...'
+                                : filteredProgramacionesRuta.length > 0
+                                  ? 'Elige la salida operativa real donde quedará registrada la reserva.'
+                                  : 'No hay programaciones operativas registradas para esta ruta.'}
+                            </p>
+                          </div>
 
-            {/* Bloque 7: Control y acciones */}
-            <Card className="border-green-200">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-green-800">7. Control y Acciones</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <Label>Creado por</Label>
-                    <Input
-                      value="Administrador"
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                  <div>
-                    <Label>Última modificación</Label>
-                    <Input
-                      value={new Date().toLocaleString('es-CO')}
-                      disabled
-                      className="bg-gray-100"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-between items-center mt-6 pt-4 border-t">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="border-gray-400 text-gray-600"
-                    onClick={() => toast.info('Historial de cambios en desarrollo')}
-                  >
-                    <FileText className="w-4 h-4 mr-2" />
-                    Ver historial
-                  </Button>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => setIsEditModalOpen(false)}
-                    >
-                      Cancelar
-                    </Button>
-                    <Button
-                      onClick={handleEditBooking}
-                      disabled={!canEditReservas}
-                      className="bg-green-600 hover:bg-green-700"
-                    >
-                      <CheckCircle className="w-4 h-4 mr-2" />
-                      Guardar cambios
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal Detalle de Reserva */}
-      <Dialog open={isDetailModalOpen} onOpenChange={setIsDetailModalOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="text-green-800">Detalle de Reserva</DialogTitle>
-            <DialogDescription>
-              Información completa de la reserva seleccionada
-            </DialogDescription>
-          </DialogHeader>
-          {selectedBooking && (
-            <div className="space-y-6">
-              <div className="bg-white border border-green-200 p-4 rounded-lg">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h4 className="font-medium text-green-800">Ruta / Programación</h4>
-                    <p className="text-sm text-gray-600">
-                      {detalleRuta?.nombre ? `Ruta: ${detalleRuta.nombre}` : 'Ruta: (sin asignar / no disponible)'}
-                    </p>
-                  </div>
-                  <Button
-                    variant="outline"
-                    className="border-green-600 text-green-700 hover:bg-green-50"
-                    onClick={() => {
-                      const idReserva = Number(selectedBooking?.id);
-                      if (!Number.isFinite(idReserva) || idReserva <= 0) return;
-                      void cargarDetalleReserva(idReserva);
-                    }}
-                    disabled={isLoadingDetalle}
-                  >
-                    {isLoadingDetalle ? 'Actualizando...' : 'Actualizar'}
-                  </Button>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                  <div>
-                    <p className="text-sm text-gray-600">ID Reserva</p>
-                    <p className="font-medium">{selectedBooking.id}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">ID Programación</p>
-                    <p className="font-medium">{detalleProgramacionId || '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">ID Ruta</p>
-                    <p className="font-medium">{String(resolveRouteIdFromReservaDetalle(reservaDetalle) || '—')}</p>
-                  </div>
-                </div>
-
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="md:col-span-2">
-                    <Label htmlFor="detalle-programacionId">Asignar/Actualizar programación</Label>
-                    <Input
-                      id="detalle-programacionId"
-                      type="number"
-                      min="1"
-                      placeholder="Ej: 12"
-                      value={detalleProgramacionId}
-                      onChange={(e) => setDetalleProgramacionId(e.target.value)}
-                      className="bg-gray-50"
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <Button
-                      className="w-full bg-green-600 hover:bg-green-700"
-                      onClick={async () => {
-                        const idReserva = Number(selectedBooking?.id);
-                        const idProgramacion = Number(detalleProgramacionId);
-                        if (!Number.isFinite(idReserva) || idReserva <= 0) {
-                          toast.error('Reserva inválida');
-                          return;
-                        }
-                        if (!Number.isFinite(idProgramacion) || idProgramacion <= 0) {
-                          toast.error('ID de programación inválido');
-                          return;
-                        }
-                        try {
-                          await reservasAPI.agregarProgramacion(idReserva, idProgramacion);
-                          toast.success('Programación asignada correctamente');
-                          await cargarDetalleReserva(idReserva);
-                        } catch (error: any) {
-                          toast.error(error?.message || 'No se pudo asignar la programación');
-                        }
-                      }}
-                      disabled={isLoadingDetalle}
-                    >
-                      Asociar
-                    </Button>
-                  </div>
-                </div>
-
-                {Array.isArray(detalleRuta?.servicios_opcionales) && detalleRuta.servicios_opcionales.length > 0 && (
-                  <div className="mt-6">
-                    <Label className="text-gray-700">Servicios opcionales disponibles</Label>
-                    <div className="space-y-2 mt-2">
-                      {detalleRuta.servicios_opcionales.map((so: any) => {
-                        const idServicio = Number(so?.id_servicio);
-                        if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
-                        const cantidadSeleccionada = Number(detalleOpcionalesSeleccion[idServicio] ?? 0);
-                        const checked = cantidadSeleccionada > 0;
-                        const cantidadDefault = Number(so?.cantidad_default ?? 1) || 1;
-                        const nombreServicio = so?.servicio?.nombre ?? `Servicio #${idServicio}`;
-                        const precio = so?.servicio?.precio;
-
-                        return (
-                          <div key={String(so?.id_ruta_servicio_opcional ?? idServicio)} className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-gray-50 p-3 rounded-lg">
-                            <div className="flex items-start gap-3">
-                              <Checkbox
-                                checked={checked}
-                                onCheckedChange={(nextChecked) => {
-                                  const willCheck = Boolean(nextChecked);
-                                  setDetalleOpcionalesSeleccion((prev) => ({
-                                    ...prev,
-                                    [idServicio]: willCheck ? (prev[idServicio] > 0 ? prev[idServicio] : cantidadDefault) : 0,
-                                  }));
-                                }}
-                              />
+                          {selectedProgramacion && (
+                            <div className="grid grid-cols-1 gap-4 rounded-lg border bg-green-50 p-4 md:grid-cols-4">
                               <div>
-                                <p className="font-medium text-gray-900">{nombreServicio}</p>
-                                <p className="text-xs text-gray-500">
-                                  ID: {idServicio}{typeof precio === 'number' ? ` • $${precio.toLocaleString()}` : ''}
+                                <p className="text-xs text-gray-500">Fecha salida</p>
+                                <p className="font-medium text-gray-900">{selectedProgramacion.date}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Hora</p>
+                                <p className="font-medium text-gray-900">{selectedProgramacion.startTime || 'Por definir'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Punto encuentro</p>
+                                <p className="font-medium text-gray-900">{selectedProgramacion.meetingPoint}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-500">Cupos</p>
+                                <p className={`font-medium ${selectedProgramacion.availableSeats < participantTotal ? 'text-red-700' : 'text-gray-900'}`}>
+                                  {selectedProgramacion.availableSeats} disponibles de {selectedProgramacion.totalSeats}
                                 </p>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <Label className="text-xs text-gray-600">Cantidad</Label>
+                          )}
+
+                          <div>
+                            <Label>Servicios opcionales de la ruta</Label>
+                            <div className="mt-3">
+                              {renderServiceOptionList(
+                                'form',
+                                formRutaDetalle,
+                                formRutaOpcionalesSeleccion,
+                                setFormRutaOpcionalesSeleccion
+                              )}
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                          <div>
+                            <Label>Check-in *</Label>
+                            <Input
+                              type="date"
+                              value={formData.checkIn}
+                              onChange={(e) =>
+                                setFormData((prev) => ({ ...prev, checkIn: e.target.value }))
+                              }
+                              className="bg-gray-50"
+                            />
+                          </div>
+                          <div>
+                            <Label>Check-out *</Label>
+                            <Input
+                              type="date"
+                              value={formData.checkOut}
+                              onChange={(e) =>
+                                setFormData((prev) => ({ ...prev, checkOut: e.target.value }))
+                              }
+                              className="bg-gray-50"
+                            />
+                          </div>
+                          <div>
+                            <Label>Noches *</Label>
+                            <Input
+                              type="number"
+                              min="1"
+                              value={formData.nights}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  nights: Math.max(1, Number(e.target.value) || 1),
+                                  total:
+                                    Math.max(1, Number(e.target.value) || 1) *
+                                    Number(prev.nightlyPrice || 0),
+                                }))
+                              }
+                              className="bg-gray-50"
+                            />
+                          </div>
+                          <div>
+                            <Label>Precio por noche *</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              value={formData.nightlyPrice}
+                              onChange={(e) =>
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  nightlyPrice: Math.max(0, Number(e.target.value) || 0),
+                                  total:
+                                    Math.max(0, Number(e.target.value) || 0) *
+                                    Number(prev.nights || 1),
+                                }))
+                              }
+                              className="bg-gray-50"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {activeView === 'create' && companionDetails.length > 0 && (
+                  <Card className="border-green-100">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base text-green-800">3. Acompañantes</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <p className="text-sm text-gray-600">
+                        Registra aquí a las {companionDetails.length} personas adicionales de la reserva.
+                      </p>
+                      {companionDetails.map((companion, index) => (
+                        <div key={`companion-${index}`} className="rounded-lg border bg-gray-50 p-4">
+                          <p className="mb-4 text-sm font-medium text-gray-900">Acompañante {index + 1}</p>
+                          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            <div>
+                              <Label>Nombre *</Label>
                               <Input
-                                type="number"
-                                min="1"
-                                value={checked ? cantidadSeleccionada : ''}
-                                disabled={!checked}
-                                onChange={(e) => {
-                                  const nextQty = Math.max(1, Number(e.target.value) || 1);
-                                  setDetalleOpcionalesSeleccion((prev) => ({ ...prev, [idServicio]: nextQty }));
-                                }}
-                                className="w-24 bg-white"
+                                value={companion.nombre}
+                                onChange={(e) => updateCompanionField(index, 'nombre', e.target.value)}
+                                className="bg-white"
+                              />
+                            </div>
+                            <div>
+                              <Label>Apellido *</Label>
+                              <Input
+                                value={companion.apellido}
+                                onChange={(e) => updateCompanionField(index, 'apellido', e.target.value)}
+                                className="bg-white"
+                              />
+                            </div>
+                            <div>
+                              <Label>Tipo de documento</Label>
+                              <Select
+                                value={companion.tipo_documento || 'CC'}
+                                onValueChange={(value) => updateCompanionField(index, 'tipo_documento', value)}
+                              >
+                                <SelectTrigger className="bg-white">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="CC">CC</SelectItem>
+                                  <SelectItem value="TI">TI</SelectItem>
+                                  <SelectItem value="CE">CE</SelectItem>
+                                  <SelectItem value="PAS">Pasaporte</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div>
+                              <Label>Número de documento</Label>
+                              <Input
+                                value={companion.numero_documento}
+                                onChange={(e) => updateCompanionField(index, 'numero_documento', e.target.value)}
+                                className="bg-white"
+                              />
+                            </div>
+                            <div>
+                              <Label>Teléfono</Label>
+                              <Input
+                                value={companion.telefono}
+                                onChange={(e) => updateCompanionField(index, 'telefono', e.target.value)}
+                                className="bg-white"
+                              />
+                            </div>
+                            <div>
+                              <Label>Fecha de nacimiento</Label>
+                              <Input
+                                type="date"
+                                value={companion.fecha_nacimiento}
+                                onChange={(e) => updateCompanionField(index, 'fecha_nacimiento', e.target.value)}
+                                className="bg-white"
                               />
                             </div>
                           </div>
-                        );
-                      })}
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {activeView === 'edit' && selectedBooking && (
+                  <Card className="border-blue-100 bg-blue-50/40">
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base text-blue-900">Servicio actual</CardTitle>
+                    </CardHeader>
+                    <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                      <div>
+                        <p className="text-sm text-gray-600">Tipo</p>
+                        <p className="font-medium">
+                          {selectedBooking.serviceTypeForm === 'ruta' ? 'Ruta' : 'Finca'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Reserva</p>
+                        <p className="font-medium">#{selectedBooking.id}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-600">Estado de pago</p>
+                        <div className="mt-1">
+                          {getPaymentStatusBadge(selectedBooking.paymentStatus)}
+                        </div>
+                      </div>
+                      <div className="md:col-span-3">
+                        <p className="text-sm text-gray-600">
+                          La reasignación de programación, finca o servicios se gestiona desde el detalle completo.
+                        </p>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+
+              <div className="space-y-6">
+                <Card className="border-green-100">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">Resumen</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div>
+                      <p className="text-sm text-gray-600">Cliente</p>
+                      <p className="font-medium text-gray-900">
+                        {selectedClient?.name || formData.clientName || 'Sin seleccionar'}
+                      </p>
                     </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Documento</p>
+                      <p className="font-medium text-gray-900">
+                        {selectedClient?.document || '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Participantes</p>
+                      <p className="font-medium text-gray-900">{participantTotal}</p>
+                    </div>
+                    {activeView === 'create' && formData.serviceType === 'ruta' && (
+                      <>
+                        <div>
+                          <p className="text-sm text-gray-600">Programación seleccionada</p>
+                          <p className="font-medium text-gray-900">
+                            {selectedProgramacion
+                              ? `#${selectedProgramacion.id} · ${selectedProgramacion.date}`
+                              : 'Sin seleccionar'}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-sm text-gray-600">Acompañantes</p>
+                          <p className="font-medium text-gray-900">{companionDetails.length}</p>
+                        </div>
+                      </>
+                    )}
+                    <div>
+                      <p className="text-sm text-gray-600">Estado</p>
+                      <div className="mt-1">
+                        {getStatusBadge(activeView === 'edit' ? formData.status : 'Pendiente')}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Estado de pago</p>
+                      <div className="mt-1">
+                        {getPaymentStatusBadge(
+                          activeView === 'edit' ? selectedBooking?.paymentStatus || 'Pendiente' : 'Pendiente'
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Total</p>
+                      <p className="text-xl font-semibold text-green-800">
+                        {formatCurrency(formData.total)}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
 
-                    <div className="flex justify-end mt-3">
+                <Card className="border-green-100">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">Reglas del flujo</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm text-gray-600">
+                    <p>Toda reserva nueva se crea como `Pendiente`.</p>
+                    <p>`Confirmada` solo se permite cuando la venta esté en `Parcial` o `Pagado`.</p>
+                    <p>Para rutas manuales, primero se elige una programación operativa real; ya no se escribe el ID a mano.</p>
+                    <p>El total de una ruta se calcula con el precio de la programación seleccionada y los opcionales agregados.</p>
+                    <p>Los acompañantes del formulario se registran directamente en `detalle_reserva_acompanante` al crear la reserva.</p>
+                    <p>Los comprobantes y validaciones pertenecen a `Ventas` y `Abonos`.</p>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+              <Button variant="outline" onClick={goBackToList}>
+                Cancelar
+              </Button>
+              <Button
+                onClick={activeView === 'create' ? handleCreateBooking : handleEditBooking}
+                disabled={
+                  isLoading ||
+                  (activeView === 'create' && !canCreateReservas) ||
+                  (activeView === 'edit' && !canEditReservas)
+                }
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {activeView === 'create' ? (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Crear reserva
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Guardar cambios
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {activeView === 'detail' && selectedBooking && (
+        <>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Reserva</p>
+                  <p className="text-2xl font-semibold text-green-800">#{selectedBooking.id}</p>
+                </div>
+                <FileText className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Participantes</p>
+                  <p className="text-2xl font-semibold text-green-800">
+                    {reservaDetalle?.numero_participantes || selectedBooking.participants}
+                  </p>
+                </div>
+                <Users className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Total</p>
+                  <p className="text-xl font-semibold text-green-800">
+                    {formatCurrency(reservaDetalle?.monto_total || selectedBooking.total)}
+                  </p>
+                </div>
+                <DollarSign className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+            <Card className="border-green-200">
+              <CardContent className="flex items-center justify-between pt-6">
+                <div>
+                  <p className="text-sm text-gray-600">Pago</p>
+                  <div className="mt-2">
+                    {getPaymentStatusBadge(reservaDetalle?.estado_pago || selectedBooking.paymentStatus)}
+                  </div>
+                </div>
+                <CheckCircle className="h-8 w-8 text-green-600" />
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
+            <div className="space-y-6 xl:col-span-2">
+              <Card className="border-green-200">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800">Detalle completo de la reserva</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6 pt-6">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <p className="text-sm text-gray-600">Cliente</p>
+                      <p className="font-medium">{selectedBooking.clientName}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Correo</p>
+                      <p className="font-medium">
+                        {reservaDetalle?.cliente_email || selectedBooking.clientEmail || '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Teléfono</p>
+                      <p className="font-medium">
+                        {reservaDetalle?.cliente_telefono || selectedBooking.clientPhone || '—'}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Tipo de servicio</p>
+                      <p className="font-medium">{reservaDetalle?.tipo_servicio || selectedBooking.packageName}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Fecha de reserva</p>
+                      <p className="font-medium">
+                        {formatDate(reservaDetalle?.fecha_reserva || selectedBooking.date)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Estado</p>
+                      <div className="mt-1">
+                        {getStatusBadge(reservaDetalle?.estado || selectedBooking.status)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Pagado</p>
+                      <p className="font-medium">
+                        {formatCurrency(reservaDetalle?.monto_pagado || selectedBooking.paidAmount)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Saldo pendiente</p>
+                      <p className="font-medium">
+                        {formatCurrency(reservaDetalle?.saldo_pendiente || selectedBooking.pendingAmount)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Método de pago</p>
+                      <p className="font-medium">
+                        {reservaDetalle?.metodo_pago || selectedBooking.paymentMethod || 'Por definir'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border bg-gray-50 p-4">
+                    <p className="text-sm text-gray-600">Observaciones</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-gray-800">
+                      {reservaDetalle?.notas || selectedBooking.specialRequests || 'Sin observaciones registradas.'}
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Asociaciones operativas</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                    <div>
+                      <p className="text-sm text-gray-600">ID reserva</p>
+                      <p className="font-medium">{selectedBooking.id}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">ID programación</p>
+                      <p className="font-medium">{detalleProgramacionId || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">ID ruta</p>
+                      <p className="font-medium">
+                        {resolveRouteIdFromReservaDetalle(reservaDetalle) || '—'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <div className="md:col-span-2">
+                      <Label>ID de programación</Label>
+                      <Input
+                        type="number"
+                        min="1"
+                        value={detalleProgramacionId}
+                        onChange={(e) => setDetalleProgramacionId(e.target.value)}
+                        className="bg-gray-50"
+                        placeholder="Ej: 12"
+                      />
+                    </div>
+                    <div className="flex items-end">
                       <Button
-                        className="bg-green-600 hover:bg-green-700"
-                        disabled={isLoadingDetalle}
-                        onClick={async () => {
-                          const idReserva = Number(selectedBooking?.id);
-                          if (!Number.isFinite(idReserva) || idReserva <= 0) {
-                            toast.error('Reserva inválida');
-                            return;
-                          }
-                          try {
-                            const opcionalesSeleccionados = Object.entries(detalleOpcionalesSeleccion)
-                              .map(([id_servicio, cantidad]) => ({
-                                id_servicio: Number(id_servicio),
-                                cantidad: Number(cantidad),
-                              }))
-                              .filter((item) => Number.isFinite(item.id_servicio) && item.id_servicio > 0 && item.cantidad > 0);
-
-                            if (opcionalesSeleccionados.length === 0) {
-                              toast.info('Selecciona al menos un servicio opcional');
-                              return;
-                            }
-
-                            for (const item of opcionalesSeleccionados) {
-                              await reservasAPI.agregarServicio(idReserva, {
-                                id_servicio: item.id_servicio,
-                                cantidad: item.cantidad,
-                              });
-                            }
-
-                            toast.success('Servicios opcionales agregados');
-                            setDetalleOpcionalesSeleccion({});
-                            await cargarDetalleReserva(idReserva);
-                          } catch (error: any) {
-                            toast.error(error?.message || 'No se pudieron agregar los servicios opcionales');
-                          }
-                        }}
+                        className="w-full bg-green-600 hover:bg-green-700"
+                        onClick={handleAssociateProgramacion}
+                        disabled={isLoadingDetail}
                       >
-                        Agregar opcionales
+                        Asociar programación
                       </Button>
                     </div>
                   </div>
-                )}
 
-                {isLoadingDetalle && (
-                  <p className="text-sm text-gray-500 mt-3">Cargando detalle de reserva...</p>
-                )}
-              </div>
-
-              {/* Información del cliente */}
-              <div className="bg-green-50 p-4 rounded-lg">
-                <h4 className="font-medium text-green-800 mb-3">Información del Cliente</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Nombre</p>
-                    <p className="font-medium">{selectedBooking.clientName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Email</p>
-                    <p className="font-medium">{selectedBooking.clientEmail}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Teléfono</p>
-                    <p className="font-medium">{selectedBooking.clientPhone}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Contacto de Emergencia</p>
-                    <p className="font-medium">{selectedBooking.emergency}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Detalles de la reserva */}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <div>
-                  <p className="text-sm text-gray-600">Tipo de reserva</p>
-                  <p className="font-medium">{selectedBooking.packageName}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Fecha</p>
-                  <p className="font-medium">{selectedBooking.date}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Horario</p>
-                  <p className="font-medium">{selectedBooking.checkIn} - {selectedBooking.checkOut}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Participantes</p>
-                  <p className="font-medium">{selectedBooking.participants} ({selectedBooking.adults}A / {selectedBooking.children}N)</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Guía Asignado</p>
-                  <p className="font-medium">{selectedBooking.guide}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-600">Asesor</p>
-                  <p className="font-medium">{selectedBooking.advisor}</p>
-                </div>
-              </div>
-
-              {/* Desglose de precio */}
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <h4 className="font-medium text-gray-800 mb-3">Desglose de Precio</h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Subtotal</span>
-                    <span className="font-medium">${(selectedBooking.subtotal || selectedBooking.totalAmount || selectedBooking.total || 0).toLocaleString()}</span>
-                  </div>
-                  {selectedBooking.discount && selectedBooking.discount > 0 && (
-                    <div className="flex justify-between text-green-600">
-                      <span>Descuento</span>
-                      <span>-${selectedBooking.discount.toLocaleString()}</span>
+                  {Boolean(detalleRuta?.nombre) && (
+                    <div className="rounded-lg border bg-green-50 p-4">
+                      <p className="font-medium text-green-900">Ruta detectada: {detalleRuta.nombre}</p>
+                      <p className="mt-1 text-sm text-green-700">
+                        Puedes agregar servicios opcionales definidos para esta ruta.
+                      </p>
                     </div>
                   )}
-                  <div className="flex justify-between pt-2 border-t">
-                    <span>Total</span>
-                    <span className="text-green-700">${(selectedBooking.totalAmount || selectedBooking.total || 0).toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Estado de Pago</span>
-                    {getPaymentStatusBadge(selectedBooking.paymentStatus)}
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Método de Pago</span>
-                    <span className="font-medium">{selectedBooking.paymentMethod}</span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Notas y solicitudes especiales */}
-              {selectedBooking.specialRequests && (
-                <div>
-                  <h4 className="font-medium text-gray-800 mb-2">Solicitudes Especiales</h4>
-                  <p className="text-gray-600 bg-yellow-50 p-3 rounded-lg">
-                    {selectedBooking.specialRequests}
-                  </p>
-                </div>
+                  <div>
+                    <Label>Servicios opcionales disponibles</Label>
+                    <div className="mt-3">
+                      {renderServiceOptionList(
+                        'detail',
+                        detalleRuta,
+                        detalleOpcionalesSeleccion,
+                        setDetalleOpcionalesSeleccion
+                      )}
+                    </div>
+                    <div className="mt-4 flex justify-end">
+                      <Button
+                        variant="outline"
+                        className="border-green-600 text-green-700 hover:bg-green-50"
+                        onClick={handleSaveOptionalServicesFromDetail}
+                        disabled={isLoadingDetail}
+                      >
+                        Guardar servicios opcionales
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {Array.isArray(reservaDetalle?.programaciones) && reservaDetalle.programaciones.length > 0 && (
+                <Card className="border-green-200">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">Programaciones asociadas</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>ID programación</TableHead>
+                          <TableHead>Personas</TableHead>
+                          <TableHead>Precio</TableHead>
+                          <TableHead>Subtotal</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservaDetalle.programaciones.map((item: any) => (
+                          <TableRow
+                            key={item.id_detalle_reserva_programacion || `${item.id_programacion}-${item.subtotal}`}
+                          >
+                            <TableCell>{item.id_programacion}</TableCell>
+                            <TableCell>{item.cantidad_personas}</TableCell>
+                            <TableCell>{formatCurrency(item.precio_programacion || item.precio_unitario)}</TableCell>
+                            <TableCell>{formatCurrency(item.subtotal)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
               )}
 
-              {/* Comprobante de Pago */}
-              <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                <h4 className="font-medium text-gray-800 mb-3 flex items-center">
-                  <FileText className="w-4 h-4 mr-2 text-blue-600" />
-                  Comprobante de Pago
-                </h4>
-                {selectedBooking.paymentReceipt ? (
-                  <div className="space-y-3">
-                    <div className="bg-white p-3 rounded-lg border border-gray-200">
-                      <img 
-                        src={selectedBooking.paymentReceipt} 
-                        alt="Comprobante de pago"
-                        className="w-full h-auto rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-                        onClick={() => window.open(selectedBooking.paymentReceipt, '_blank')}
-                      />
-                    </div>
+              {Array.isArray(reservaDetalle?.fincas) && reservaDetalle.fincas.length > 0 && (
+                <Card className="border-green-200">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">Detalle de finca</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Finca</TableHead>
+                          <TableHead>Check-in</TableHead>
+                          <TableHead>Check-out</TableHead>
+                          <TableHead>Noches</TableHead>
+                          <TableHead>Subtotal</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservaDetalle.fincas.map((item: any) => (
+                          <TableRow
+                            key={item.id_detalle_reserva_finca || `${item.id_finca}-${item.subtotal}`}
+                          >
+                            <TableCell>{item.nombre_finca || `Finca #${item.id_finca}`}</TableCell>
+                            <TableCell>{formatDate(item.fecha_checkin)}</TableCell>
+                            <TableCell>{formatDate(item.fecha_checkout)}</TableCell>
+                            <TableCell>{item.numero_noches || '—'}</TableCell>
+                            <TableCell>{formatCurrency(item.subtotal)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              {Array.isArray(reservaDetalle?.servicios) && reservaDetalle.servicios.length > 0 && (
+                <Card className="border-green-200">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base text-green-800">Servicios agregados</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Servicio</TableHead>
+                          <TableHead>Cantidad</TableHead>
+                          <TableHead>Precio unitario</TableHead>
+                          <TableHead>Subtotal</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservaDetalle.servicios.map((item: any) => (
+                          <TableRow
+                            key={item.id_detalle_reserva_servicio || `${item.id_servicio}-${item.subtotal}`}
+                          >
+                            <TableCell>
+                              {item.nombre_servicio || item.servicio_nombre || `Servicio #${item.id_servicio}`}
+                            </TableCell>
+                            <TableCell>{item.cantidad}</TableCell>
+                            <TableCell>{formatCurrency(item.precio_unitario)}</TableCell>
+                            <TableCell>{formatCurrency(item.subtotal)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </CardContent>
+                </Card>
+              )}
+
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Acompañantes</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {Array.isArray(reservaDetalle?.acompanantes) && reservaDetalle.acompanantes.length > 0 ? (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Nombre</TableHead>
+                          <TableHead>Documento</TableHead>
+                          <TableHead>Teléfono</TableHead>
+                          <TableHead>Fecha de nacimiento</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservaDetalle.acompanantes.map((acompanante: any) => (
+                          <TableRow key={acompanante.id_detalle_reserva_acompanante}>
+                            <TableCell>{`${acompanante.nombre || ''} ${acompanante.apellido || ''}`.trim()}</TableCell>
+                            <TableCell>
+                              {acompanante.tipo_documento || '—'} {acompanante.numero_documento || ''}
+                            </TableCell>
+                            <TableCell>{acompanante.telefono || '—'}</TableCell>
+                            <TableCell>{formatDate(acompanante.fecha_nacimiento)}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      Esta reserva no tiene acompañantes registrados.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="space-y-6">
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Acciones</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {canEditReservas && (
                     <Button
                       variant="outline"
-                      size="sm"
-                      onClick={() => window.open(selectedBooking.paymentReceipt, '_blank')}
-                      className="w-full border-blue-600 text-blue-600 hover:bg-blue-50"
+                      className="w-full border-blue-600 text-blue-700 hover:bg-blue-50"
+                      onClick={() => openEditView(selectedBooking)}
                     >
-                      <Download className="w-4 h-4 mr-2" />
-                      Ver Comprobante en Tamaño Completo
+                      <Edit className="mr-2 h-4 w-4" />
+                      Editar reserva
                     </Button>
-                  </div>
-                ) : (
-                  <div className="text-center py-6 text-gray-500">
-                    <AlertCircle className="w-8 h-8 mx-auto mb-2 text-gray-400" />
-                    <p className="text-sm">No se ha cargado un comprobante de pago</p>
-                  </div>
-                )}
-              </div>
+                  )}
+                  <Button
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
+                    onClick={() => void loadReservaDetail(Number(selectedBooking.id))}
+                    disabled={isLoadingDetail}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Recargar detalle
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
+                    onClick={handleGeneratePDF}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Descargar PDF
+                  </Button>
+                  {canDeleteReservas && (
+                    <Button
+                      variant="outline"
+                      className="w-full border-red-600 text-red-700 hover:bg-red-50"
+                      onClick={() => setIsDeleteDialogOpen(true)}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Eliminar reserva
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
 
-              {/* Estado */}
-              <div className="flex items-center justify-between p-4 bg-green-50 rounded-lg">
-                <div>
-                  <p className="text-sm text-gray-600">Estado de la Reserva</p>
-                  <p className="font-medium text-green-800">{selectedBooking.status}</p>
-                </div>
-                {getStatusBadge(selectedBooking.status)}
-              </div>
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Fechas y control</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div>
+                    <p className="text-sm text-gray-600">Creada el</p>
+                    <p className="font-medium">{formatDate(reservaDetalle?.fecha_creacion)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Actualizada el</p>
+                    <p className="font-medium">{formatDate(reservaDetalle?.fecha_actualizacion)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Cancelada el</p>
+                    <p className="font-medium">{formatDate(reservaDetalle?.fecha_cancelacion)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Motivo de cancelación</p>
+                    <p className="font-medium">{reservaDetalle?.motivo_cancelacion || '—'}</p>
+                  </div>
+                </CardContent>
+              </Card>
 
-              {/* Botones de acción */}
-              <div className="flex justify-end space-x-2 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  onClick={() => handleGeneratePDF(selectedBooking)}
-                  className="border-green-600 text-green-600 hover:bg-green-50"
-                >
-                  <Download className="w-4 h-4 mr-2" />
-                  Descargar PDF
-                </Button>
-                <Button
-                  onClick={() => setIsDetailModalOpen(false)}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  Cerrar
-                </Button>
-              </div>
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Resumen del servicio</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex items-start gap-3">
+                    <MapPin className="mt-0.5 h-5 w-5 text-green-600" />
+                    <div>
+                      <p className="text-sm text-gray-600">Tipo</p>
+                      <p className="font-medium">
+                        {reservaDetalle?.tipo_servicio || selectedBooking.packageName}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <CalendarDays className="mt-0.5 h-5 w-5 text-green-600" />
+                    <div>
+                      <p className="text-sm text-gray-600">Fecha</p>
+                      <p className="font-medium">
+                        {formatDate(reservaDetalle?.fecha_reserva || selectedBooking.date)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-3">
+                    <Users className="mt-0.5 h-5 w-5 text-green-600" />
+                    <div>
+                      <p className="text-sm text-gray-600">Participantes</p>
+                      <p className="font-medium">
+                        {reservaDetalle?.numero_participantes || selectedBooking.participants}
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+          </div>
+        </>
+      )}
 
-      {/* Alert Dialog: Confirmar Eliminación */}
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-red-600">¿Eliminar Reserva?</AlertDialogTitle>
+            <AlertDialogTitle className="text-red-700">¿Eliminar reserva?</AlertDialogTitle>
             <AlertDialogDescription>
-              Esta acción eliminará permanentemente la reserva de{' '}\n
-              <span className="font-semibold">{selectedBooking?.clientName}</span>.\n
-              Esta acción no se puede deshacer.
+              Esta acción eliminará permanentemente la reserva de{' '}
+              <span className="font-semibold">{selectedBooking?.clientName || 'este cliente'}</span>.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

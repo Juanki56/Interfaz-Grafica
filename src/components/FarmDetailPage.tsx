@@ -1,14 +1,15 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Coffee, TreePine, Music, UtensilsCrossed, UserCheck, Sparkles, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { getFarmById } from '../utils/mockData';
+import { getFarmById, type Farm } from '../utils/mockData';
 import { Checkbox } from './ui/checkbox';
 import { FarmBookingModal } from './FarmBookingModal';
 import { useAuth } from '../App';
+import { fincasAPI, type Finca as BackendFinca } from '../services/api';
 
 interface FarmDetailPageProps {
   farmId: string;
@@ -23,13 +24,70 @@ const additionalServices = [
   { id: 'decoracion', name: 'Decoración', price: 600000, icon: Sparkles },
 ];
 
+const DEFAULT_FARM_IMAGE = 'https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080';
+const DEFAULT_AMENITIES = ['Wifi', 'Zona verde', 'Cocina', 'Parqueadero'];
+
+function mapBackendFarmToDetail(finca: BackendFinca, fallback?: Farm): Farm {
+  const image = finca.imagen_principal || fallback?.image || DEFAULT_FARM_IMAGE;
+  const description = String(finca.descripcion || fallback?.description || 'Hospedaje rural disponible para reserva en OCCITOUR.');
+  return {
+    id: String(finca.id_finca),
+    name: String(finca.nombre || fallback?.name || `Finca #${finca.id_finca}`),
+    description,
+    shortDescription: fallback?.shortDescription || description.slice(0, 140),
+    location: String(finca.ubicacion || finca.direccion || fallback?.location || 'Ubicación por confirmar'),
+    image,
+    gallery: fallback?.gallery?.length ? fallback.gallery : [image],
+    services: fallback?.services || [],
+    activities: fallback?.activities || [],
+    pricePerNight: Number(finca.precio_por_noche || fallback?.pricePerNight || 0),
+    maxGuests: Number(finca.capacidad_personas || fallback?.maxGuests || 1),
+    amenities: fallback?.amenities?.length ? fallback.amenities : DEFAULT_AMENITIES,
+  };
+}
+
 export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
   const { user } = useAuth();
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [activeGalleryTab, setActiveGalleryTab] = useState('principal');
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
-  const farm = getFarmById(farmId);
+  const fallbackFarm = getFarmById(farmId);
+  const [farm, setFarm] = useState<Farm | undefined>(fallbackFarm);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFarm(fallbackFarm);
+    setCurrentImageIndex(0);
+
+    if (!user) return () => {
+      cancelled = true;
+    };
+
+    const numericFarmId = Number(farmId);
+    if (!Number.isFinite(numericFarmId) || numericFarmId <= 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadFarm = async () => {
+      try {
+        const backendFarm = await fincasAPI.getById(numericFarmId);
+        if (cancelled || !backendFarm) return;
+        setFarm(mapBackendFarmToDetail(backendFarm, fallbackFarm));
+      } catch {
+        if (cancelled) return;
+        setFarm(fallbackFarm);
+      }
+    };
+
+    void loadFarm();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackFarm, farmId, user]);
 
   const handleBookingClick = () => {
     if (!user) {
