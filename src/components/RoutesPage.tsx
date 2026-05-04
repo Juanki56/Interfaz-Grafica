@@ -6,13 +6,11 @@ import { Badge } from './ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { rutasAPI, type Ruta } from '../services/api';
+import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 
 interface RoutesPageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
-
-const FALLBACK_ROUTE_IMAGE =
-  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
@@ -38,7 +36,7 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
       setIsLoading(true);
       setError(null);
       const data = await rutasAPI.getActivas();
-      setRoutes(data || []);
+      setRoutes(Array.isArray(data) ? data : []);
     } catch (e: any) {
       setError(e?.message || 'No se pudieron cargar las rutas');
       setRoutes([]);
@@ -116,16 +114,10 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50 pt-20 relative">
-      {/* Background Image with Blur */}
+    <div className="relative min-h-screen bg-gradient-to-br from-green-50 via-sky-50/50 to-emerald-50 pt-20">
       <div
-        className="absolute inset-0 bg-cover bg-center bg-no-repeat opacity-20"
-        style={{
-          backgroundImage:
-            'url(https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxuYXR1cmUlMjBmb3Jlc3QlMjBtb3VudGFpbnMlMjBibHVyfGVufDF8fHx8MTc2NTIxOTc4M3ww&ixlib=rb-4.1.0&q=80&w=1080)',
-          filter: 'blur(4px)',
-          backgroundAttachment: 'fixed',
-        }}
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(167,243,208,0.35),transparent_50%),radial-gradient(ellipse_at_bottom_left,rgba(186,230,253,0.35),transparent_45%)]"
+        aria-hidden
       />
 
       {/* Content */}
@@ -243,9 +235,11 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
                   >
                     <div className="relative h-48">
                       <ImageWithFallback
-                        src={route.imagen_url || FALLBACK_ROUTE_IMAGE}
+                        src={normalizeString(route.imagen_url) || CATALOG_IMAGE_PLACEHOLDER}
                         alt={route.nombre}
-                        className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
                       />
                       <div className="absolute top-4 left-4 flex flex-col space-y-2">
                         {route.destacado && <Badge className="bg-green-600 text-white">Destacado</Badge>}

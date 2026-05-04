@@ -5,7 +5,7 @@
  * Servicio para conectar con el backend
  */
 
-import { buildApiUrl, getAuthHeaders } from '../config/api.config';
+import { buildApiUrl } from '../config/api.config';
 
 // =====================================================
 // TIPOS
@@ -572,17 +572,27 @@ export interface Venta {
 // =====================================================
 
 async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const token = localStorage.getItem('token');
+  const isFormDataBody =
+    typeof FormData !== 'undefined' && options?.body != null && options.body instanceof FormData;
+
+  const baseHeaders: Record<string, string> = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(isFormDataBody ? {} : { 'Content-Type': 'application/json' }),
+  };
+
   const config: RequestInit = {
     ...options,
     headers: {
-      ...getAuthHeaders(),
-      ...options.headers,
+      ...baseHeaders,
+      ...(options.headers as Record<string, string> | undefined),
     },
   };
 
   try {
     const response = await fetch(buildApiUrl(endpoint), config);
-    const data = await response.json();
+    const contentType = response.headers.get('content-type') || '';
+    const data = contentType.includes('application/json') ? await response.json() : await response.text();
 
     // Si hay token y el backend responde 401 (token inválido/expirado), limpiar sesión.
     // Importante: si NO hay token (catálogo público), no debemos redirigir.
@@ -605,13 +615,19 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
         // ignore
       }
 
-      throw new Error(data?.mensaje || data?.message || data?.error || 'No autorizado');
+      if (data && typeof data === 'object') {
+        throw new Error((data as any)?.mensaje || (data as any)?.message || (data as any)?.error || 'No autorizado');
+      }
+      throw new Error('No autorizado');
     }
 
     if (!response.ok) {
       // Mejorar mensaje de error con detalles del backend
-      const errorMessage = data.mensaje || data.message || data.error || `Error ${response.status}`;
-      const errorDetails = data.detalles || data.details || '';
+      const errorMessage =
+        data && typeof data === 'object'
+          ? (data as any).mensaje || (data as any).message || (data as any).error || `Error ${response.status}`
+          : `Error ${response.status}`;
+      const errorDetails = data && typeof data === 'object' ? (data as any).detalles || (data as any).details || '' : '';
       const fullError = errorDetails ? `${errorMessage}: ${errorDetails}` : errorMessage;
       
       console.error('❌ Error del backend:', { status: response.status, data });
@@ -621,7 +637,7 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
     return data;
   } catch (error: any) {
     // Si es un error de red o parsing
-    if (error.message.includes('Failed to fetch') || error.message.includes('JSON')) {
+    if (error.message.includes('Failed to fetch')) {
       console.error('❌ Error de conexión:', error);
       throw new Error('Error de conexión con el servidor. Verifica que el backend esté corriendo.');
     }
@@ -1139,6 +1155,23 @@ export const rutasAPI = {
       method: 'DELETE',
     });
   },
+
+  getImagenes: async (id: number): Promise<string[]> => {
+    const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`);
+    return unwrapApiArray<string>(response);
+  },
+
+  uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
+    const form = new FormData();
+    for (const file of files) form.append('imagenes', file);
+
+    const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`, {
+      method: 'POST',
+      body: form,
+    });
+
+    return unwrapApiArray<string>(response);
+  },
 };
 
 // =====================================================
@@ -1174,6 +1207,23 @@ export const fincasAPI = {
     return fetchAPI(`/api/fincas/${id}`, {
       method: 'DELETE',
     });
+  },
+
+  getImagenes: async (id: number): Promise<string[]> => {
+    const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`);
+    return unwrapApiArray<string>(response);
+  },
+
+  uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
+    const form = new FormData();
+    for (const file of files) form.append('imagenes', file);
+
+    const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`, {
+      method: 'POST',
+      body: form,
+    });
+
+    return unwrapApiArray<string>(response);
   },
 };
 

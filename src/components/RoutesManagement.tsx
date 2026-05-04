@@ -137,6 +137,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     imagen_url: ''
   });
 
+  const [createImageFiles, setCreateImageFiles] = useState<File[]>([]);
+  const [editImageFiles, setEditImageFiles] = useState<File[]>([]);
+
   const [predefinedServices, setPredefinedServices] = useState<PredefinedServiceFormItem[]>([]);
   const [serviceToAdd, setServiceToAdd] = useState<string>('');
 
@@ -191,24 +194,27 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       console.log('📊 Tipo de dato recibido:', typeof rutasFromDB, Array.isArray(rutasFromDB));
       console.log('📏 Cantidad de rutas:', rutasFromDB?.length || 0);
       
-      // Mapear rutas del backend (mantener estructura exacta de la BD)
-      const mappedRoutes: Route[] = rutasFromDB.map(ruta => {
-        console.log('🔄 Mapeando ruta:', ruta);
-        return {
-          id_ruta: ruta.id_ruta,
-          nombre: ruta.nombre,
-          descripcion: ruta.descripcion,
-          duracion_dias: ruta.duracion_dias,
-          precio_base: ruta.precio_base,
-          dificultad: ruta.dificultad,
-          imagen_url: ruta.imagen_url,
-          estado: ruta.estado,
-          fecha_creacion: ruta.fecha_creacion,
-          servicios_predefinidos: ruta.servicios_predefinidos ?? [],
-          servicios_opcionales: (ruta as any).servicios_opcionales ?? [],
-        };
+      // Imagen: el backend ya enriquece `imagen_url` desde Storage cuando aplica.
+      const mappedRoutes: Route[] = (rutasFromDB || []).map((ruta) => {
+          console.log('🔄 Mapeando ruta:', ruta);
+
+          const imagen_url = ruta.imagen_url?.trim() || null;
+
+          return {
+            id_ruta: ruta.id_ruta,
+            nombre: ruta.nombre,
+            descripcion: ruta.descripcion,
+            duracion_dias: ruta.duracion_dias,
+            precio_base: ruta.precio_base,
+            dificultad: ruta.dificultad,
+            imagen_url,
+            estado: ruta.estado,
+            fecha_creacion: ruta.fecha_creacion,
+            servicios_predefinidos: ruta.servicios_predefinidos ?? [],
+            servicios_opcionales: (ruta as any).servicios_opcionales ?? [],
+          };
       });
-      
+
       console.log('✅ Rutas mapeadas:', mappedRoutes);
       setRoutes([...mappedRoutes]); // Crear nuevo array para forzar re-render
       console.log('✅ Estado actualizado con', mappedRoutes.length, 'rutas');
@@ -299,6 +305,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     setOptionalServiceToAdd('');
     
     console.log('📝 FormData preparado:', formData);
+
+    setEditImageFiles([]);
     
     setIsEditModalOpen(true);
   };
@@ -477,6 +485,18 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       const response = await rutasAPI.create(rutaData);
       console.log('✅ Ruta creada en BD, respuesta:', response);
 
+      const createdPayload: any = (response as any)?.data ?? response;
+      const createdIdRaw = createdPayload?.id_ruta ?? createdPayload?.id;
+      const createdId = createdIdRaw != null ? Number(createdIdRaw) : null;
+
+      if (createdId && createImageFiles.length) {
+        try {
+          await rutasAPI.uploadImagenes(createdId, createImageFiles);
+        } catch (e: any) {
+          toast.error(`La ruta se creó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
+        }
+      }
+
       toast.success('Ruta creada correctamente en la base de datos');
       
       // Cerrar modal y resetear formulario ANTES de recargar
@@ -566,6 +586,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       await rutasAPI.update(routeId, rutaData);
       console.log('✅ Ruta actualizada en BD');
 
+      if (editImageFiles.length) {
+        try {
+          await rutasAPI.uploadImagenes(routeId, editImageFiles);
+        } catch (e: any) {
+          toast.error(`La ruta se actualizó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
+        }
+      }
+
       toast.success('Ruta actualizada correctamente en la base de datos');
       
       // Cerrar modal y resetear ANTES de recargar
@@ -592,6 +620,8 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       dificultad: 'Moderado',
       imagen_url: ''
     });
+    setCreateImageFiles([]);
+    setEditImageFiles([]);
     setPredefinedServices([]);
     setServiceToAdd('');
     setOptionalServices([]);
@@ -1003,6 +1033,18 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 />
               </div>
 
+              <div>
+                <Label htmlFor="imagenes">Subir fotos (Supabase Storage)</Label>
+                <Input
+                  id="imagenes"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => setCreateImageFiles(Array.from(e.target.files || []))}
+                />
+                <p className="text-xs text-gray-500 mt-1">Máx. 5 imágenes, 5MB c/u.</p>
+              </div>
+
               <Separator />
 
               <div className="space-y-3">
@@ -1315,6 +1357,18 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
                   placeholder="https://ejemplo.com/imagen.jpg"
                 />
+              </div>
+
+              <div>
+                <Label htmlFor="edit-imagenes">Subir fotos (Supabase Storage)</Label>
+                <Input
+                  id="edit-imagenes"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => setEditImageFiles(Array.from(e.target.files || []))}
+                />
+                <p className="text-xs text-gray-500 mt-1">Máx. 5 imágenes, 5MB c/u.</p>
               </div>
 
               <Separator />

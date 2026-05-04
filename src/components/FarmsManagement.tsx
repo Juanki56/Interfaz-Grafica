@@ -97,9 +97,9 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
     try {
       setIsLoading(true);
       const fincasFromDB = await fincasAPI.getAll();
-      
-      // Mapear fincas del backend al formato del frontend
-      const mappedFarms = fincasFromDB.map(finca => ({
+
+      // Imagen: el backend ya enriquece `imagen_principal` desde Storage cuando aplica.
+      const mappedFarms = (fincasFromDB || []).map((finca) => ({
         id: finca.id_finca.toString(),
         id_propietario: finca.id_propietario,
         name: finca.nombre,
@@ -108,13 +108,12 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
         description: finca.descripcion || '',
         capacity: finca.capacidad_personas || 0,
         pricePerNight: finca.precio_por_noche || 0,
-        imagen_principal: finca.imagen_principal || '',
+        imagen_principal: finca.imagen_principal?.trim() || '',
         status: finca.estado ? 'active' : 'inactive',
         fecha_registro: finca.fecha_registro,
-        // Datos del propietario (JOIN)
-        owner: finca.propietario_nombre 
+        owner: finca.propietario_nombre
           ? `${finca.propietario_nombre} ${finca.propietario_apellido || ''}`.trim()
-          : 'N/A'
+          : 'N/A',
       }));
       
       setFarms(mappedFarms);
@@ -238,6 +237,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
       id_propietario: '',
       estado: true
     });
+    const [imageFiles, setImageFiles] = useState<File[]>([]);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -278,10 +278,31 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
         if (isEdit && farm) {
           // Actualizar finca existente
           await fincasAPI.update(farm.id, fincaData);
+
+          const farmId = Number(farm.id);
+          if (Number.isFinite(farmId) && farmId > 0 && imageFiles.length) {
+            try {
+              await fincasAPI.uploadImagenes(farmId, imageFiles);
+            } catch (e: any) {
+              toast.error(`La finca se actualizó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
+            }
+          }
           toast.success('Finca actualizada exitosamente');
         } else {
           // Crear nueva finca
-          await fincasAPI.create(fincaData);
+          const resp: any = await fincasAPI.create(fincaData);
+
+          const createdPayload: any = resp?.data ?? resp;
+          const createdIdRaw = createdPayload?.id_finca ?? createdPayload?.id;
+          const createdId = createdIdRaw != null ? Number(createdIdRaw) : null;
+
+          if (createdId && imageFiles.length) {
+            try {
+              await fincasAPI.uploadImagenes(createdId, imageFiles);
+            } catch (e: any) {
+              toast.error(`La finca se creó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
+            }
+          }
           toast.success('Finca creada exitosamente');
         }
         
@@ -412,6 +433,19 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
               placeholder="https://example.com/imagen.jpg"
               disabled={isSubmitting}
             />
+          </div>
+
+          <div className="col-span-2">
+            <Label htmlFor="imagenes">Subir fotos (Supabase Storage)</Label>
+            <Input
+              id="imagenes"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => setImageFiles(Array.from(e.target.files || []))}
+              disabled={isSubmitting}
+            />
+            <p className="text-xs text-gray-500 mt-1">Máx. 5 imágenes, 5MB c/u.</p>
           </div>
 
           <div className="col-span-2 flex items-center space-x-2">

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Star, MapPin, Clock, Users, Shield, ChevronRight, Sparkles, TrendingUp, Facebook, Instagram, Twitter, Mail, Phone } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from './ui/button';
@@ -6,9 +6,9 @@ import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './ui/carousel';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { mockFarms } from '../utils/mockData';
-import { programacionAPI, rutasAPI, type Programacion, type Ruta } from '../services/api';
+import { fincasAPI, programacionAPI, rutasAPI, type Finca, type Programacion, type Ruta } from '../services/api';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { useAuth } from '../App';
 import { motion } from 'motion/react';
 import heroImage from 'figma:asset/d8d3bc172f99829d8ecd1672db5f890e39054e24.png';
@@ -16,9 +16,6 @@ import heroImage from 'figma:asset/d8d3bc172f99829d8ecd1672db5f890e39054e24.png'
 interface HomePageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
-
-const FALLBACK_ROUTE_IMAGE =
-  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
 
 function formatDurationDays(duracion_dias?: number | null): string {
   if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
@@ -44,56 +41,36 @@ export function HomePage({ onViewChange }: HomePageProps) {
   const { user } = useAuth();
   const [routes, setRoutes] = useState<Ruta[]>([]);
   const [programaciones, setProgramaciones] = useState<Programacion[]>([]);
+  const [homeFincas, setHomeFincas] = useState<Finca[]>([]);
+
   useEffect(() => {
     let cancelled = false;
 
-    const load = async () => {
+    (async () => {
       try {
-        const data = await rutasAPI.getActivas();
+        const [routesData, progData, fincasData] = await Promise.all([
+          rutasAPI.getActivas(),
+          programacionAPI.getPublicas(),
+          fincasAPI.getAll(),
+        ]);
         if (cancelled) return;
-        setRoutes(data || []);
+        setRoutes(Array.isArray(routesData) ? routesData : []);
+        setProgramaciones(Array.isArray(progData) ? progData : []);
+        const activas = Array.isArray(fincasData) ? fincasData.filter((f) => f.estado !== false) : [];
+        setHomeFincas(activas.slice(0, 4));
       } catch {
-        if (cancelled) return;
-        setRoutes([]);
+        if (!cancelled) {
+          setRoutes([]);
+          setProgramaciones([]);
+          setHomeFincas([]);
+        }
       }
-    };
-
-    void load();
+    })();
 
     return () => {
       cancelled = true;
     };
   }, []);
-
-  const loadProgramaciones = useCallback(async () => {
-    try {
-      const data = await programacionAPI.getPublicas();
-      setProgramaciones(data || []);
-    } catch {
-      setProgramaciones([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const run = async () => {
-      try {
-        const data = await programacionAPI.getPublicas();
-        if (cancelled) return;
-        setProgramaciones(data || []);
-      } catch {
-        if (cancelled) return;
-        setProgramaciones([]);
-      }
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [loadProgramaciones]);
 
   const featuredRoute = useMemo(() => {
     const active = routes.filter((r) => r.estado !== false);
@@ -126,6 +103,8 @@ export function HomePage({ onViewChange }: HomePageProps) {
       .sort((a, b) => String(a.fecha_salida).localeCompare(String(b.fecha_salida)))
       .slice(0, 12);
   }, [programaciones]);
+
+  const destacadasFincas = useMemo(() => homeFincas.slice(0, 2), [homeFincas]);
 
   const formatDate = (value?: string | null) => {
     if (!value) return '—';
@@ -186,7 +165,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
                 {upcomingProgramaciones.map((p) => {
                   const ruta = routeById.get(Number(p.id_ruta));
                   const nombre = ruta?.nombre || p.ruta_nombre || `Ruta ${p.id_ruta}`;
-                  const imagen = ruta?.imagen_url || FALLBACK_ROUTE_IMAGE;
+                  const imagen = ruta?.imagen_url || CATALOG_IMAGE_PLACEHOLDER;
                   const ubicacion = ruta?.ubicacion || '—';
                   const dificultad = ruta?.dificultad || '—';
                   const cuposDisponibles = Number(p.cupos_disponibles ?? 0);
@@ -358,7 +337,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
               <div className="grid md:grid-cols-2 gap-0">
                 <div className="relative h-64 md:h-full">
                   <ImageWithFallback
-                    src={featuredRoute.imagen_url || FALLBACK_ROUTE_IMAGE}
+                    src={featuredRoute.imagen_url || CATALOG_IMAGE_PLACEHOLDER}
                     alt={featuredRoute.nombre}
                     className="w-full h-full object-cover"
                   />
@@ -516,161 +495,122 @@ export function HomePage({ onViewChange }: HomePageProps) {
           >
             <div className="flex items-center justify-center space-x-2 mb-4">
               <TrendingUp className="w-8 h-8 text-green-600" />
-              <Badge className="bg-green-600 text-white px-4 py-1 text-sm">
-                Más Cotizadas 2024
-              </Badge>
+              <Badge className="bg-green-600 text-white px-4 py-1 text-sm">Catálogo en vivo</Badge>
             </div>
-            <h2 className="text-4xl mb-4 text-gray-800">Las Fincas Más Solicitadas del Año</h2>
+            <h2 className="text-4xl mb-4 text-gray-800">Fincas destacadas</h2>
             <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Descubre los destinos favoritos de nuestros clientes y reserva tu experiencia inolvidable
+              Propiedades activas tomadas directamente del sistema; disponibilidad y precios según OCCITOUR.
             </p>
           </motion.div>
 
-          <div className="grid md:grid-cols-2 gap-8">
-            {/* Finca 1 - Vista del Valle (más cotizada) */}
-            <motion.div
-              initial={{ opacity: 0, x: -50 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.6, delay: 0.2 }}
-              whileHover={{ y: -10 }}
-            >
-              <Card className="overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 border-2 border-green-200">
-                <div className="relative h-80">
-                  <ImageWithFallback
-                    src={mockFarms[5].image}
-                    alt={mockFarms[5].name}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute top-4 left-4 flex gap-2">
-                    <Badge className="bg-gradient-to-r from-yellow-500 to-orange-500 text-white border-0">
-                      <Star className="w-3 h-3 mr-1 fill-white" />
-                      #1 Más Cotizada
-                    </Badge>
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
-                  <div className="absolute bottom-4 left-4 right-4">
-                    <div className="flex items-end justify-between">
-                      <div>
-                        <h3 className="text-2xl text-white mb-1">{mockFarms[5].name}</h3>
-                        <div className="flex items-center space-x-1 text-green-300">
-                          <MapPin className="w-4 h-4" />
-                          <span className="text-sm">{mockFarms[5].location}</span>
+          {destacadasFincas.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/70 py-14 text-center">
+              <p className="text-gray-700 mb-4">Aún no hay fincas públicas para mostrar aquí.</p>
+              <Button variant="outline" className="border-green-600 text-green-700" onClick={() => onViewChange('farms')}>
+                Ir al catálogo de fincas
+              </Button>
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-8">
+              {destacadasFincas.map((finca, idx) => {
+                const imgSrc = finca.imagen_principal?.trim() || CATALOG_IMAGE_PLACEHOLDER;
+                const ubicacion = finca.ubicacion || finca.direccion || '—';
+                const precio = finca.precio_por_noche != null ? Number(finca.precio_por_noche) : null;
+                const cupos = finca.capacidad_personas != null ? Number(finca.capacidad_personas) : null;
+                const excerpt = String(finca.descripcion || '')
+                  .trim()
+                  .slice(0, 160);
+                const isFirst = idx === 0;
+                const borderClass = isFirst ? 'border-emerald-200' : 'border-sky-200';
+                const priceClass = isFirst ? 'text-emerald-600' : 'text-sky-600';
+                const pinClass = isFirst ? 'text-emerald-300' : 'text-sky-200';
+                const btnClass = isFirst ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-sky-600 hover:bg-sky-700';
+                const badgeClass = isFirst
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-500 text-white border-0'
+                  : 'bg-gradient-to-r from-sky-500 to-indigo-500 text-white border-0';
+
+                return (
+                  <motion.div
+                    key={finca.id_finca}
+                    initial={{ opacity: 0, x: idx === 0 ? -50 : 50 }}
+                    whileInView={{ opacity: 1, x: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6, delay: idx === 0 ? 0.2 : 0.35 }}
+                    whileHover={{ y: -8 }}
+                  >
+                    <Card className={`overflow-hidden shadow-xl transition-all duration-300 border-2 ${borderClass}`}>
+                      <div className="relative h-80">
+                        <ImageWithFallback
+                          src={imgSrc}
+                          alt={finca.nombre}
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
+                        <div className="absolute top-4 left-4 z-10 flex gap-2">
+                          <Badge className={badgeClass}>
+                            <Star className="mr-1 h-3 w-3 fill-white" />
+                            {idx === 0 ? 'Destacada' : 'En catálogo'}
+                          </Badge>
+                        </div>
+                        <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-t from-black/65 via-black/10 to-transparent" />
+                        <div className="absolute bottom-4 left-4 right-4 z-10">
+                          <div className="flex items-end justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="mb-1 truncate text-2xl text-white drop-shadow-md">{finca.nombre}</h3>
+                              <div className={`flex items-center gap-1 ${pinClass}`}>
+                                <MapPin className="h-4 w-4 shrink-0" />
+                                <span className="truncate text-sm">{ubicacion}</span>
+                              </div>
+                            </div>
+                            <div className="shrink-0 rounded-lg bg-white/95 px-4 py-2 shadow-md backdrop-blur-sm">
+                              <div className={`text-2xl font-semibold ${priceClass}`}>
+                                {precio != null && precio > 0
+                                  ? `$${precio.toLocaleString('es-CO')}`
+                                  : 'Consultar'}
+                              </div>
+                              {precio != null && precio > 0 && (
+                                <div className="text-xs text-gray-600">por noche</div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                      <div className="bg-white/95 backdrop-blur-sm rounded-lg px-4 py-2">
-                        <div className="text-2xl text-green-600">${mockFarms[5].pricePerNight.toLocaleString()}</div>
-                        <div className="text-xs text-gray-600">por noche</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <CardContent className="p-6">
-                  <p className="text-gray-600 mb-4 line-clamp-2">
-                    {mockFarms[5].shortDescription}
-                  </p>
-                  
-                  <div className="flex items-center space-x-4 mb-4 text-sm text-gray-500">
-                    <div className="flex items-center space-x-1">
-                      <Users className="w-4 h-4 text-green-600" />
-                      <span>Hasta {mockFarms[5].maxGuests} huéspedes</span>
-                    </div>
-                  </div>
 
-                  <div className="flex flex-wrap gap-2 mb-6">
-                    {mockFarms[5].amenities.slice(0, 3).map((amenity, index) => (
-                      <Badge key={index} variant="outline" className="text-xs border-green-300 text-green-700">
-                        {amenity}
-                      </Badge>
-                    ))}
-                  </div>
+                      <CardContent className="p-6">
+                        {excerpt ? (
+                          <p className="mb-4 line-clamp-2 text-gray-600">{excerpt}</p>
+                        ) : (
+                          <p className="mb-4 text-sm text-gray-500">Consulta el detalle para ver la descripción completa.</p>
+                        )}
 
-                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Button 
-                      onClick={() => onViewChange('farm-detail', mockFarms[5].id)}
-                      className="w-full bg-green-600 hover:bg-green-700"
-                    >
-                      Reservar Ahora
-                      <ChevronRight className="ml-2 w-4 h-4" />
-                    </Button>
-                  </motion.div>
-                </CardContent>
-              </Card>
-            </motion.div>
-
-            {/* Finca 2 - El Paraíso (segunda más cotizada) */}
-            <motion.div
-              initial={{ opacity: 0, x: 50 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.6, delay: 0.4 }}
-              whileHover={{ y: -10 }}
-            >
-              <Card className="overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 border-2 border-blue-200">
-                <div className="relative h-80">
-                  <ImageWithFallback
-                    src={mockFarms[0].image}
-                    alt={mockFarms[0].name}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute top-4 left-4 flex gap-2">
-                    <Badge className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white border-0">
-                      <Star className="w-3 h-3 mr-1 fill-white" />
-                      #2 Más Cotizada
-                    </Badge>
-                  </div>
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
-                  <div className="absolute bottom-4 left-4 right-4">
-                    <div className="flex items-end justify-between">
-                      <div>
-                        <h3 className="text-2xl text-white mb-1">{mockFarms[0].name}</h3>
-                        <div className="flex items-center space-x-1 text-blue-300">
-                          <MapPin className="w-4 h-4" />
-                          <span className="text-sm">{mockFarms[0].location}</span>
+                        <div className="mb-6 flex flex-wrap items-center gap-4 text-sm text-gray-500">
+                          <div className="flex items-center gap-1">
+                            <Users className={`h-4 w-4 ${isFirst ? 'text-emerald-600' : 'text-sky-600'}`} />
+                            <span>
+                              {cupos != null && cupos > 0
+                                ? `Hasta ${cupos} huéspedes`
+                                : 'Capacidad por confirmar'}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                      <div className="bg-white/95 backdrop-blur-sm rounded-lg px-4 py-2">
-                        <div className="text-2xl text-blue-600">${mockFarms[0].pricePerNight.toLocaleString()}</div>
-                        <div className="text-xs text-gray-600">por noche</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                
-                <CardContent className="p-6">
-                  <p className="text-gray-600 mb-4 line-clamp-2">
-                    {mockFarms[0].shortDescription}
-                  </p>
-                  
-                  <div className="flex items-center space-x-4 mb-4 text-sm text-gray-500">
-                    <div className="flex items-center space-x-1">
-                      <Users className="w-4 h-4 text-blue-600" />
-                      <span>Hasta {mockFarms[0].maxGuests} huéspedes</span>
-                    </div>
-                  </div>
 
-                  <div className="flex flex-wrap gap-2 mb-6">
-                    {mockFarms[0].amenities.slice(0, 3).map((amenity, index) => (
-                      <Badge key={index} variant="outline" className="text-xs border-blue-300 text-blue-700">
-                        {amenity}
-                      </Badge>
-                    ))}
-                  </div>
-
-                  <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
-                    <Button 
-                      onClick={() => onViewChange('farm-detail', mockFarms[0].id)}
-                      className="w-full bg-blue-600 hover:bg-blue-700"
-                    >
-                      Reservar Ahora
-                      <ChevronRight className="ml-2 w-4 h-4" />
-                    </Button>
+                        <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                          <Button
+                            onClick={() => onViewChange('farm-detail', String(finca.id_finca))}
+                            className={`w-full ${btnClass}`}
+                          >
+                            Ver detalle y reservar
+                            <ChevronRight className="ml-2 h-4 w-4" />
+                          </Button>
+                        </motion.div>
+                      </CardContent>
+                    </Card>
                   </motion.div>
-                </CardContent>
-              </Card>
-            </motion.div>
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 

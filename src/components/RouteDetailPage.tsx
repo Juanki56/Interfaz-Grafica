@@ -1,5 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Calendar, Check, Clock, Info, MapPin, Sparkles, Star, Users } from 'lucide-react';
+import {
+  ArrowLeft,
+  Calendar,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Info,
+  MapPin,
+  Sparkles,
+  Star,
+  Users,
+} from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
@@ -13,14 +25,43 @@ import {
   type Ruta,
 } from '../services/api';
 import { useAuth } from '../App';
+import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 
 interface RouteDetailPageProps {
   routeId: string;
   onViewChange: (view: string, itemId?: string) => void;
 }
 
-const FALLBACK_ROUTE_IMAGE =
-  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
+const PRINCIPAL_STORAGE_IMAGE_RE = /\/principal\.(png|jpe?g|webp|gif|bmp)$/i;
+
+function bestRutaImageFromStorageUrls(
+  imagenes: string[] | null | undefined,
+  fallback: string | null | undefined
+): string | null {
+  if (!imagenes?.length) return fallback?.trim() ? fallback : null;
+  const principal = imagenes.find((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
+  return principal || imagenes[0] || (fallback?.trim() ? fallback : null);
+}
+
+function uniqueImageUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of urls) {
+    const s = String(u || '').trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+function orderGalleryPrincipalFirst(urls: string[]): string[] {
+  if (!urls.length) return urls;
+  const i = urls.findIndex((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
+  if (i <= 0) return urls;
+  const principal = urls[i];
+  return [principal, ...urls.slice(0, i), ...urls.slice(i + 1)];
+}
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
@@ -39,11 +80,15 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
   const [route, setRoute] = useState<Ruta | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [imageGallery, setImageGallery] = useState<string[]>([]);
+  const [heroIndex, setHeroIndex] = useState(0);
 
   const id = useMemo(() => Number(routeId), [routeId]);
 
   useEffect(() => {
     let cancelled = false;
+    setHeroIndex(0);
+    setImageGallery([]);
 
     const load = async () => {
       if (Number.isNaN(id)) {
@@ -79,6 +124,27 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           return;
         }
 
+        let rawImagenes: string[] = [];
+        try {
+          rawImagenes = await rutasAPI.getImagenes(id);
+        } catch {
+          rawImagenes = [];
+        }
+
+        const orderedFromStorage = orderGalleryPrincipalFirst(uniqueImageUrls(rawImagenes));
+        const storageImage = bestRutaImageFromStorageUrls(rawImagenes, base.imagen_url);
+
+        let gallery: string[] = [];
+        if (orderedFromStorage.length) {
+          gallery = orderedFromStorage;
+        } else if (storageImage) {
+          gallery = [storageImage];
+        } else if (base.imagen_url?.trim()) {
+          gallery = [base.imagen_url.trim()];
+        } else {
+          gallery = [CATALOG_IMAGE_PLACEHOLDER];
+        }
+
         const incA = extractRutaServiciosPredefinidos(rActiva);
         const incB = extractRutaServiciosPredefinidos(rById);
         const includedMerged = incA.length >= incB.length ? incA : incB;
@@ -89,11 +155,14 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
 
         if (cancelled) return;
 
+        setImageGallery(gallery);
+        setHeroIndex(0);
         setRoute({
           ...rActiva,
           ...rById,
           id_ruta: id,
           nombre: String(rById?.nombre || rActiva?.nombre || 'Ruta'),
+          imagen_url: storageImage ?? null,
           servicios_predefinidos: includedMerged,
           servicios_opcionales: optionalMerged,
         });
@@ -174,6 +243,29 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
 
   const isAvailable = route.estado !== false;
 
+  const galleryForUi =
+    imageGallery.length > 0 ? imageGallery : [route.imagen_url || CATALOG_IMAGE_PLACEHOLDER];
+  const heroSrc = galleryForUi[heroIndex] ?? galleryForUi[0];
+  const slideCount = galleryForUi.length;
+
+  const goPrevHero = () => {
+    setHeroIndex((i) => {
+      const g =
+        imageGallery.length > 0 ? imageGallery : [route.imagen_url || CATALOG_IMAGE_PLACEHOLDER];
+      const n = g.length;
+      return i === 0 ? n - 1 : i - 1;
+    });
+  };
+
+  const goNextHero = () => {
+    setHeroIndex((i) => {
+      const g =
+        imageGallery.length > 0 ? imageGallery : [route.imagen_url || CATALOG_IMAGE_PLACEHOLDER];
+      const n = g.length;
+      return i >= n - 1 ? 0 : i + 1;
+    });
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50 pt-20">
       <div className="max-w-7xl mx-auto px-4 py-8">
@@ -239,18 +331,77 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
 
         <div className="grid lg:grid-cols-2 gap-8 mb-12">
           <div className="space-y-4">
-            <div className="relative h-96 rounded-2xl overflow-hidden shadow-xl border border-green-100/80">
+            <div className="relative h-96 overflow-hidden rounded-2xl border border-green-100/80 shadow-xl">
               <ImageWithFallback
-                src={route.imagen_url || FALLBACK_ROUTE_IMAGE}
+                src={heroSrc}
                 alt={route.nombre}
-                className="w-full h-full object-cover"
+                loading="eager"
+                decoding="async"
+                className="h-full w-full object-cover"
               />
+
+              {slideCount > 1 && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Foto anterior"
+                    onClick={goPrevHero}
+                    className="absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/85 p-2 shadow-md backdrop-blur-sm hover:bg-white"
+                  >
+                    <ChevronLeft className="h-5 w-5 text-gray-800" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Foto siguiente"
+                    onClick={goNextHero}
+                    className="absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/85 p-2 shadow-md backdrop-blur-sm hover:bg-white"
+                  >
+                    <ChevronRight className="h-5 w-5 text-gray-800" />
+                  </button>
+                  <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2">
+                    {galleryForUi.map((_, index) => (
+                      <button
+                        type="button"
+                        key={index}
+                        aria-label={`Ir a la foto ${index + 1}`}
+                        onClick={() => setHeroIndex(index)}
+                        className={`h-2 w-2 rounded-full transition-colors ${
+                          index === heroIndex ? 'bg-white' : 'bg-white/50'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
 
               <div className="absolute top-4 left-4 flex flex-col space-y-2">
                 {route.destacado ? <Badge className="bg-green-600 text-white shadow">Destacado</Badge> : null}
                 <Badge className={`${getDifficultyColor(difficulty)} shadow`}>{difficulty}</Badge>
               </div>
             </div>
+
+            {slideCount > 1 && (
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {galleryForUi.map((src, index) => (
+                  <button
+                    type="button"
+                    key={`${src}-${index}`}
+                    onClick={() => setHeroIndex(index)}
+                    className={`relative h-20 w-28 shrink-0 overflow-hidden rounded-lg ring-2 transition-all ${
+                      index === heroIndex ? 'ring-green-600 opacity-100' : 'ring-transparent opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <ImageWithFallback
+                      src={src}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -356,6 +507,38 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
                 </p>
               </CardContent>
             </Card>
+          </div>
+        </div>
+
+        <div className="mb-12">
+          <h2 className="mb-2 text-2xl text-gray-800">Todas las fotos</h2>
+          <p className="mb-6 text-sm text-gray-600">
+            {slideCount === 1
+              ? 'Hay una foto en el álbum de esta ruta.'
+              : `${slideCount} fotos en el álbum. Toca una miniatura para verla en la vista principal.`}
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            {galleryForUi.map((img, index) => (
+              <button
+                type="button"
+                key={`${img}-${index}`}
+                onClick={() => {
+                  setHeroIndex(index);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className={`relative aspect-[4/3] overflow-hidden rounded-xl border-2 bg-white shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-green-500 ${
+                  index === heroIndex ? 'border-green-600 ring-2 ring-green-200' : 'border-transparent'
+                }`}
+              >
+                <ImageWithFallback
+                  src={img}
+                  alt={`${route.nombre} — foto ${index + 1}`}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover transition-transform duration-300 hover:scale-105"
+                />
+              </button>
+            ))}
           </div>
         </div>
 
@@ -511,7 +694,7 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           name: route.nombre,
           description: normalizeString(route.descripcion) || '—',
           price: price ?? 0,
-          image: route.imagen_url || FALLBACK_ROUTE_IMAGE,
+          image: route.imagen_url || CATALOG_IMAGE_PLACEHOLDER,
           duration: formatDurationDays(route.duracion_dias),
           difficulty,
           location: locationRaw || '—',

@@ -3,13 +3,11 @@ import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Co
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { getFarmById, type Farm } from '../utils/mockData';
-import { Checkbox } from './ui/checkbox';
 import { FarmBookingModal } from './FarmBookingModal';
 import { useAuth } from '../App';
 import { fincasAPI, type Finca as BackendFinca } from '../services/api';
+import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 
 interface FarmDetailPageProps {
   farmId: string;
@@ -24,25 +22,65 @@ const additionalServices = [
   { id: 'decoracion', name: 'Decoración', price: 600000, icon: Sparkles },
 ];
 
-const DEFAULT_FARM_IMAGE = 'https://images.unsplash.com/photo-1556235123-9538e0766731?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080';
-const DEFAULT_AMENITIES = ['Wifi', 'Zona verde', 'Cocina', 'Parqueadero'];
+const PRINCIPAL_STORAGE_IMAGE_RE = /\/principal\.(png|jpe?g|webp|gif|bmp)$/i;
 
-function mapBackendFarmToDetail(finca: BackendFinca, fallback?: Farm): Farm {
-  const image = finca.imagen_principal || fallback?.image || DEFAULT_FARM_IMAGE;
-  const description = String(finca.descripcion || fallback?.description || 'Hospedaje rural disponible para reserva en OCCITOUR.');
+function uniqueImageUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const u of urls) {
+    const s = String(u || '').trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+  }
+  return out;
+}
+
+/** Misma prioridad que el API: `principal.*` primero si existe. */
+function orderGalleryPrincipalFirst(urls: string[]): string[] {
+  if (!urls.length) return urls;
+  const i = urls.findIndex((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
+  if (i <= 0) return urls;
+  const principal = urls[i];
+  return [principal, ...urls.slice(0, i), ...urls.slice(i + 1)];
+}
+
+type FarmDetailModel = {
+  id: string;
+  name: string;
+  description: string;
+  shortDescription: string;
+  location: string;
+  image: string;
+  gallery: string[];
+  services: string[];
+  activities: string[];
+  pricePerNight: number;
+  maxGuests: number;
+  amenities: string[];
+};
+
+function buildFarmDetail(finca: BackendFinca, galleryUrls: string[]): FarmDetailModel {
+  const orderedGallery =
+    galleryUrls.length > 0 ? galleryUrls : [finca.imagen_principal?.trim() || CATALOG_IMAGE_PLACEHOLDER];
+  const image = orderedGallery[0] || CATALOG_IMAGE_PLACEHOLDER;
+  const description =
+    String(finca.descripcion || '').trim() ||
+    'Los detalles de la estadía los confirma OCCITOUR junto al propietario al procesar tu reserva.';
+
   return {
     id: String(finca.id_finca),
-    name: String(finca.nombre || fallback?.name || `Finca #${finca.id_finca}`),
+    name: String(finca.nombre || `Finca #${finca.id_finca}`),
     description,
-    shortDescription: fallback?.shortDescription || description.slice(0, 140),
-    location: String(finca.ubicacion || finca.direccion || fallback?.location || 'Ubicación por confirmar'),
+    shortDescription: description.slice(0, 160),
+    location: String(finca.ubicacion || finca.direccion || '').trim() || 'Ubicación por confirmar',
     image,
-    gallery: fallback?.gallery?.length ? fallback.gallery : [image],
-    services: fallback?.services || [],
-    activities: fallback?.activities || [],
-    pricePerNight: Number(finca.precio_por_noche || fallback?.pricePerNight || 0),
-    maxGuests: Number(finca.capacidad_personas || fallback?.maxGuests || 1),
-    amenities: fallback?.amenities?.length ? fallback.amenities : DEFAULT_AMENITIES,
+    gallery: orderedGallery,
+    services: [],
+    activities: [],
+    pricePerNight: Number(finca.precio_por_noche) || 0,
+    maxGuests: Math.max(1, Number(finca.capacidad_personas) || 1),
+    amenities: [],
   };
 }
 
@@ -50,35 +88,64 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
   const { user } = useAuth();
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
-  const [activeGalleryTab, setActiveGalleryTab] = useState('principal');
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
-  const fallbackFarm = getFarmById(farmId);
-  const [farm, setFarm] = useState<Farm | undefined>(fallbackFarm);
+  const [farm, setFarm] = useState<FarmDetailModel | null>(null);
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
     let cancelled = false;
-    setFarm(fallbackFarm);
+    setFarm(null);
     setCurrentImageIndex(0);
-
-    if (!user) return () => {
-      cancelled = true;
-    };
+    setLoadState('loading');
 
     const numericFarmId = Number(farmId);
     if (!Number.isFinite(numericFarmId) || numericFarmId <= 0) {
-      return () => {
-        cancelled = true;
-      };
+      setLoadState('error');
+      return;
     }
 
     const loadFarm = async () => {
       try {
         const backendFarm = await fincasAPI.getById(numericFarmId);
-        if (cancelled || !backendFarm) return;
-        setFarm(mapBackendFarmToDetail(backendFarm, fallbackFarm));
-      } catch {
         if (cancelled) return;
-        setFarm(fallbackFarm);
+        if (!backendFarm) {
+          setLoadState('error');
+          return;
+        }
+
+        let imagenes: string[] = [];
+        try {
+          imagenes = await fincasAPI.getImagenes(numericFarmId);
+        } catch {
+          imagenes = [];
+        }
+
+        const orderedStorage = orderGalleryPrincipalFirst(uniqueImageUrls(imagenes));
+        const principalFromStorage = orderedStorage.find((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
+        const thumb = principalFromStorage || orderedStorage[0];
+
+        const enriched = {
+          ...backendFarm,
+          imagen_principal: thumb || backendFarm.imagen_principal || undefined,
+        };
+
+        const gallery =
+          orderedStorage.length > 0
+            ? orderedStorage
+            : orderGalleryPrincipalFirst(
+                uniqueImageUrls(
+                  enriched.imagen_principal ? [enriched.imagen_principal] : [CATALOG_IMAGE_PLACEHOLDER]
+                )
+              );
+
+        const model = buildFarmDetail(enriched, gallery);
+        setFarm(model);
+        setLoadState('ready');
+      } catch {
+        if (!cancelled) {
+          setFarm(null);
+          setLoadState('error');
+        }
       }
     };
 
@@ -87,13 +154,11 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [fallbackFarm, farmId, user]);
+  }, [farmId]);
 
   const handleBookingClick = () => {
     if (!user) {
-      // Redirect to login if user is not logged in
       onViewChange('home');
-      // Show login modal after redirect
       setTimeout(() => {
         const loginButton = document.querySelector('[data-login-trigger]') as HTMLElement;
         if (loginButton) loginButton.click();
@@ -103,14 +168,23 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
     setIsBookingModalOpen(true);
   };
 
-  if (!farm) {
+  if (loadState === 'loading') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50 pt-20 flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-green-50 via-sky-50/40 to-emerald-50 pt-20">
+        <div className="text-center text-gray-600">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-emerald-200 border-t-emerald-600" />
+          Cargando finca…
+        </div>
+      </div>
+    );
+  }
+
+  if (!farm || loadState === 'error') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-green-50 via-sky-50/40 to-emerald-50 pt-20">
         <div className="text-center">
-          <h2 className="text-2xl text-gray-800 mb-4">Finca no encontrada</h2>
-          <Button onClick={() => onViewChange('farms')}>
-            Volver a Fincas
-          </Button>
+          <h2 className="mb-4 text-2xl text-gray-800">Finca no encontrada</h2>
+          <Button onClick={() => onViewChange('farms')}>Volver a fincas</Button>
         </div>
       </div>
     );
@@ -161,32 +235,40 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
         <div className="grid lg:grid-cols-2 gap-8 mb-12">
           {/* Image Gallery */}
           <div className="space-y-4">
-            <div className="relative h-96 rounded-lg overflow-hidden">
+            <div className="relative h-96 overflow-hidden rounded-lg">
               <ImageWithFallback
                 src={farm.gallery[currentImageIndex]}
                 alt={`${farm.name} - Imagen ${currentImageIndex + 1}`}
-                className="w-full h-full object-cover"
+                loading={currentImageIndex === 0 ? 'eager' : 'lazy'}
+                decoding="async"
+                className="h-full w-full object-cover"
               />
               
               {farm.gallery.length > 1 && (
                 <>
                   <button
+                    type="button"
+                    aria-label="Foto anterior"
                     onClick={prevImage}
                     className="absolute left-4 top-1/2 -translate-y-1/2 bg-white/80 backdrop-blur-sm rounded-full p-2 hover:bg-white transition-colors"
                   >
                     <ChevronLeft className="w-5 h-5 text-gray-700" />
                   </button>
                   <button
+                    type="button"
+                    aria-label="Foto siguiente"
                     onClick={nextImage}
                     className="absolute right-4 top-1/2 -translate-y-1/2 bg-white/80 backdrop-blur-sm rounded-full p-2 hover:bg-white transition-colors"
                   >
                     <ChevronRight className="w-5 h-5 text-gray-700" />
                   </button>
-                  
+
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex space-x-2">
                     {farm.gallery.map((_, index) => (
                       <button
+                        type="button"
                         key={index}
+                        aria-label={`Ir a la foto ${index + 1}`}
                         onClick={() => setCurrentImageIndex(index)}
                         className={`w-2 h-2 rounded-full transition-colors ${
                           index === currentImageIndex ? 'bg-white' : 'bg-white/50'
@@ -203,6 +285,29 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                 </Badge>
               </div>
             </div>
+
+            {farm.gallery.length > 1 && (
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {farm.gallery.map((src, index) => (
+                  <button
+                    type="button"
+                    key={`${src}-${index}`}
+                    onClick={() => setCurrentImageIndex(index)}
+                    className={`relative h-20 w-28 shrink-0 overflow-hidden rounded-lg ring-2 transition-all ${
+                      index === currentImageIndex ? 'ring-emerald-600 opacity-100' : 'ring-transparent opacity-80 hover:opacity-100'
+                    }`}
+                  >
+                    <ImageWithFallback
+                      src={src}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Farm Info */}
@@ -237,13 +342,15 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
               <CardContent className="p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <span className="text-3xl text-green-600">
-                      ${farm.pricePerNight.toLocaleString()}
+                    <span className="text-3xl font-semibold text-emerald-700">
+                      {farm.pricePerNight > 0
+                        ? `$${farm.pricePerNight.toLocaleString('es-CO')}`
+                        : 'Consultar'}
                     </span>
-                    <span className="text-gray-600 ml-2">por noche</span>
+                    {farm.pricePerNight > 0 && <span className="ml-2 text-gray-600">por noche</span>}
                   </div>
                   <Badge variant="secondary" className="bg-green-100 text-green-800">
-                    Disponible
+                    En catálogo
                   </Badge>
                 </div>
                 
@@ -256,7 +363,9 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                 </Button>
                 
                 <p className="text-sm text-gray-600 mt-3 text-center">
-                  Precio por noche para hasta {farm.maxGuests} personas
+                  {farm.pricePerNight > 0
+                    ? `Referencia por noche para hasta ${farm.maxGuests} personas.`
+                    : 'El precio por noche lo cotiza OCCITOUR según fechas y ocupación.'}
                 </p>
               </CardContent>
             </Card>
@@ -264,127 +373,82 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
         </div>
 
         {/* Detailed Information */}
-        <div className="grid lg:grid-cols-2 gap-8 mb-12">
-          {/* Comodidades */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-2xl text-gray-800">Comodidades y Servicios</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-3">
-                {farm.amenities.map((amenity, index) => (
-                  <div key={index} className="flex items-center space-x-2 p-2 bg-gray-50 rounded-lg">
-                    {getAmenityIcon(amenity)}
-                    <span className="text-sm text-gray-700">{amenity}</span>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+        <div className="mb-12 grid gap-8 lg:grid-cols-2">
+          {farm.amenities.length > 0 && (
+            <Card className="border-emerald-100/80 shadow-sm">
+              <CardHeader>
+                <CardTitle className="text-2xl text-gray-800">Comodidades</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-2 gap-3">
+                  {farm.amenities.map((amenity, index) => (
+                    <div key={index} className="flex items-center space-x-2 rounded-lg bg-gray-50 p-2">
+                      {getAmenityIcon(amenity)}
+                      <span className="text-sm text-gray-700">{amenity}</span>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
-          {/* Información Importante */}
-          <Card className="bg-green-50 border-green-200">
+          <Card
+            className={`border-emerald-100/80 bg-emerald-50/40 shadow-sm ${farm.amenities.length === 0 ? 'lg:col-span-2' : ''}`}
+          >
             <CardHeader>
-              <CardTitle className="text-2xl text-gray-800">Información Importante</CardTitle>
+              <CardTitle className="text-2xl text-gray-800">Antes de reservar</CardTitle>
             </CardHeader>
             <CardContent>
-              <ul className="text-green-700 space-y-2">
-                <li className="flex items-start">
-                  <span className="text-green-600 mr-2">•</span>
-                  <span>Check-in: 3:00 PM - Check-out: 11:00 AM</span>
+              <ul className="space-y-2 text-emerald-900/90">
+                <li className="flex items-start gap-2">
+                  <span className="text-emerald-600">•</span>
+                  <span>Horarios de llegada y salida los confirma el propietario u OCCITOUR al aprobar tu reserva.</span>
                 </li>
-                <li className="flex items-start">
-                  <span className="text-green-600 mr-2">•</span>
-                  <span>Todas las comidas pueden ser preparadas con ingredientes locales</span>
+                <li className="flex items-start gap-2">
+                  <span className="text-emerald-600">•</span>
+                  <span>
+                    El precio mostrado es referencial; pueden aplicar temporadas altas, fines de semana o festivos.
+                  </span>
                 </li>
-                <li className="flex items-start">
-                  <span className="text-green-600 mr-2">•</span>
-                  <span>Se permite la participación en actividades de la finca</span>
-                </li>
-                <li className="flex items-start">
-                  <span className="text-green-600 mr-2">•</span>
-                  <span>Ideal para familias y grupos que buscan tranquilidad</span>
+                <li className="flex items-start gap-2">
+                  <span className="text-emerald-600">•</span>
+                  <span>Servicios opcionales del formulario son ejemplos; la cotización final puede variar.</span>
                 </li>
               </ul>
             </CardContent>
           </Card>
         </div>
 
-        {/* Gallery Section - Different Areas */}
         <div className="mb-12">
-          <h2 className="text-2xl mb-6 text-gray-800">Galería de la Finca</h2>
-          <Tabs defaultValue="principal" className="space-y-4">
-            <TabsList className="grid w-full grid-cols-4 bg-white border border-green-200">
-              <TabsTrigger value="principal" className="data-[state=active]:bg-green-600 data-[state=active]:text-white">
-                Principal
-              </TabsTrigger>
-              <TabsTrigger value="piscina" className="data-[state=active]:bg-green-600 data-[state=active]:text-white">
-                Piscina
-              </TabsTrigger>
-              <TabsTrigger value="sala" className="data-[state=active]:bg-green-600 data-[state=active]:text-white">
-                Sala
-              </TabsTrigger>
-              <TabsTrigger value="terraza" className="data-[state=active]:bg-green-600 data-[state=active]:text-white">
-                Terraza
-              </TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="principal">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {farm.gallery.slice(0, 3).map((img, index) => (
-                  <div key={index} className="relative h-48 rounded-lg overflow-hidden">
-                    <ImageWithFallback
-                      src={img}
-                      alt={`Vista principal ${index + 1}`}
-                      className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-            
-            <TabsContent value="piscina">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {farm.gallery.slice(0, 3).map((img, index) => (
-                  <div key={index} className="relative h-48 rounded-lg overflow-hidden">
-                    <ImageWithFallback
-                      src={img}
-                      alt={`Piscina ${index + 1}`}
-                      className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-            
-            <TabsContent value="sala">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {farm.gallery.slice(0, 3).map((img, index) => (
-                  <div key={index} className="relative h-48 rounded-lg overflow-hidden">
-                    <ImageWithFallback
-                      src={img}
-                      alt={`Sala ${index + 1}`}
-                      className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-            
-            <TabsContent value="terraza">
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {farm.gallery.slice(0, 3).map((img, index) => (
-                  <div key={index} className="relative h-48 rounded-lg overflow-hidden">
-                    <ImageWithFallback
-                      src={img}
-                      alt={`Terraza ${index + 1}`}
-                      className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
-                    />
-                  </div>
-                ))}
-              </div>
-            </TabsContent>
-          </Tabs>
+          <h2 className="text-2xl mb-2 text-gray-800">Todas las fotos</h2>
+          <p className="text-sm text-gray-600 mb-6">
+            {farm.gallery.length === 1
+              ? 'Hay una foto en el álbum.'
+              : `${farm.gallery.length} fotos en el álbum. Toca una miniatura para verla arriba.`}
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {farm.gallery.map((img, index) => (
+              <button
+                type="button"
+                key={`${img}-${index}`}
+                onClick={() => {
+                  setCurrentImageIndex(index);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className={`relative aspect-[4/3] overflow-hidden rounded-xl border-2 bg-white shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                  index === currentImageIndex ? 'border-emerald-600 ring-2 ring-emerald-200' : 'border-transparent'
+                }`}
+              >
+                <ImageWithFallback
+                  src={img}
+                  alt={`${farm.name} — foto ${index + 1}`}
+                  loading="lazy"
+                  decoding="async"
+                  className="h-full w-full object-cover transition-transform duration-300 hover:scale-105"
+                />
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Additional Services Section */}
@@ -450,9 +514,11 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                 <CardContent className="space-y-4 pt-6">
                   <div className="space-y-3">
                     <div className="flex justify-between items-center pb-3 border-b">
-                      <span className="text-gray-600">Precio de la Finca</span>
+                      <span className="text-gray-600">Precio de la finca</span>
                       <span className="font-medium text-gray-800">
-                        ${farm.pricePerNight.toLocaleString()}
+                        {farm.pricePerNight > 0
+                          ? `$${farm.pricePerNight.toLocaleString('es-CO')}`
+                          : 'Por cotizar'}
                       </span>
                     </div>
                     
@@ -481,13 +547,14 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                     <div className="flex justify-between items-center pt-2">
                       <span className="text-lg text-gray-800">Total</span>
                       <span className="text-2xl text-green-600">
-                        ${(
-                          farm.pricePerNight + 
+                        $
+                        {(
+                          (farm.pricePerNight > 0 ? farm.pricePerNight : 0) +
                           selectedServices.reduce((total, serviceId) => {
-                            const service = additionalServices.find(s => s.id === serviceId);
+                            const service = additionalServices.find((s) => s.id === serviceId);
                             return total + (service?.price || 0);
                           }, 0)
-                        ).toLocaleString()}
+                        ).toLocaleString('es-CO')}
                       </span>
                     </div>
                   </div>
