@@ -17,6 +17,7 @@ import { RoutesPage } from './components/RoutesPage';
 import { RouteDetailPage } from './components/RouteDetailPage';
 import { FarmsPage } from './components/FarmsPage';
 import { FarmDetailPage } from './components/FarmDetailPage';
+import { ProgrammedRouteBookingPage } from './components/ProgrammedRouteBookingPage';
 import { UserProfile } from './components/UserProfile';
 import { ProgrammingManagement } from './components/ProgrammingManagement';
 import { WhatsAppButton } from './components/WhatsAppButton';
@@ -45,8 +46,14 @@ const FORCED_ADMIN_EMAIL = String(import.meta.env.VITE_FORCED_ADMIN_EMAIL || 'ad
   .toLowerCase()
   .trim();
 
-// Duración de sesión en minutos (alineada con la expiración JWT por defecto)
-const SESSION_TIMEOUT_MINUTES = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || 480);
+// Duración de sesión en minutos (timeout local en el cliente).
+// Se puede sobrescribir con VITE_SESSION_TIMEOUT_MINUTES.
+// Default: 7 días.
+const DEFAULT_SESSION_TIMEOUT_MINUTES = 60 * 24 * 7;
+const SESSION_TIMEOUT_MINUTES = (() => {
+  const raw = Number(import.meta.env.VITE_SESSION_TIMEOUT_MINUTES || DEFAULT_SESSION_TIMEOUT_MINUTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SESSION_TIMEOUT_MINUTES;
+})();
 
 const setSessionExpiry = (minutes: number) => {
   const expiry = Date.now() + minutes * 60 * 1000;
@@ -362,6 +369,29 @@ export default function App() {
     checkSession();
   }, []);
 
+  // Si alguna llamada devuelve 401, validamos token con /api/auth/profile.
+  // Solo hacemos logout si /profile también retorna 401.
+  useEffect(() => {
+    let isHandling = false;
+
+    const handler = async () => {
+      if (isHandling) return;
+      isHandling = true;
+      try {
+        await refreshProfile();
+        // Si refreshProfile limpió el token (401), terminamos sesión.
+        if (!localStorage.getItem('token')) {
+          logout();
+        }
+      } finally {
+        isHandling = false;
+      }
+    };
+
+    window.addEventListener('occitours:auth-401', handler as unknown as EventListener);
+    return () => window.removeEventListener('occitours:auth-401', handler as unknown as EventListener);
+  }, []);
+
   // Si llega un link de recuperación con token+email, mostrar reset password sin romper el resto del flujo.
   useEffect(() => {
     try {
@@ -405,15 +435,6 @@ export default function App() {
 
         if (response.ok) {
           const data = await response.json();
-
-          if (isSessionExpired()) {
-            console.warn('Sesión expiró en el cliente, limpiando token.');
-            localStorage.removeItem('token');
-            localStorage.removeItem('session_expiry');
-            setUser(null);
-            setLoading(false);
-            return;
-          }
 
           const tokenPayload = decodeJWT(token);
           // El backend retorna { success: true, perfil: {...} }
@@ -459,7 +480,9 @@ export default function App() {
               status: data.perfil.estado ? 'Activo' : 'Inactivo'
             };
 
-            // Extender el timeout de sesión con cada carga de perfil válida
+            // Extender el timeout de sesión con cada carga de perfil válida.
+            // Nota: evitamos que una expiración local previa bloquee restaurar sesión
+            // si el backend todavía acepta el JWT.
             setSessionExpiry(SESSION_TIMEOUT_MINUTES);
 
             console.log('🔄 Sesión restaurada - Rol fuente backend:', backendRoleSource, '→ Rol frontend:', frontendRole);
@@ -920,10 +943,28 @@ export default function App() {
     if (!user) return;
 
     const intervalId = setInterval(() => {
-      if (isSessionExpired()) {
-        console.warn('Sesión expirada localmente. Cerrando sesión.');
-        logout();
+      if (!isSessionExpired()) return;
+
+      // Si el expiry local se desincroniza, intentamos validar/rehidratar con el backend
+      // antes de cerrar sesión (evita logout inesperado por session_expiry faltante/viejo).
+      const token = localStorage.getItem('token');
+      if (token) {
+        refreshProfile()
+          .then(() => {
+            if (isSessionExpired()) {
+              console.warn('Sesión expirada localmente. Cerrando sesión.');
+              logout();
+            }
+          })
+          .catch(() => {
+            console.warn('No se pudo validar sesión con backend. Cerrando sesión.');
+            logout();
+          });
+        return;
       }
+
+      console.warn('Sesión expirada localmente. Cerrando sesión.');
+      logout();
     }, 30 * 1000); // cada 30 segundos
 
     return () => clearInterval(intervalId);
@@ -933,6 +974,11 @@ export default function App() {
     setCurrentView(view);
     if (itemId) {
       setSelectedItemId(itemId);
+    }
+
+    // Actividad del usuario: extender sesión local.
+    if (user && localStorage.getItem('token')) {
+      setSessionExpiry(SESSION_TIMEOUT_MINUTES);
     }
   };
 
@@ -1137,6 +1183,8 @@ export default function App() {
         return <FarmsPage onViewChange={handleViewChange} />;
       case 'farm-detail':
         return <FarmDetailPage farmId={selectedItemId} onViewChange={handleViewChange} />;
+      case 'programmed-booking':
+        return <ProgrammedRouteBookingPage programacionId={selectedItemId} onViewChange={handleViewChange} />;
       case 'dashboard':
         return user ? renderDashboard() : <HomePage onViewChange={handleViewChange} />;
       default:
@@ -1167,7 +1215,7 @@ export default function App() {
                currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
             </main>
           </>
-        ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail') ? (
+        ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking') ? (
           <>
             <HeaderNavigation 
               currentView={currentView}

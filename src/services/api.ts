@@ -168,6 +168,217 @@ export interface RutaServicioOpcional {
   };
 }
 
+/**
+ * Normaliza los servicios incluidos con la ruta aunque el backend use otro nombre,
+ * anidación ({ data: ... }) o una lista plana en `servicios` con banderas.
+ */
+export function extractRutaServiciosPredefinidos(ruta: unknown, depth = 0): RutaServicioPredefinido[] {
+  if (depth > 4 || !ruta || typeof ruta !== 'object') return [];
+  const o = ruta as Record<string, unknown>;
+
+  const mapRow = (raw: unknown): RutaServicioPredefinido | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const row = raw as Record<string, unknown>;
+    const idServicio = Number(row.id_servicio ?? row.idServicio);
+    if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+    const nested = row.servicio;
+    const cantidadRaw = Number(row.cantidad_default ?? row.cantidad ?? 1);
+    const cantidad = Number.isFinite(cantidadRaw) && cantidadRaw > 0 ? cantidadRaw : 1;
+    const requerido = Boolean(row.requerido);
+
+    if (nested && typeof nested === 'object') {
+      const sn = nested as Record<string, unknown>;
+      return {
+        id_ruta_servicio_predefinido: row.id_ruta_servicio_predefinido as number | undefined,
+        id_ruta: row.id_ruta as number | undefined,
+        id_servicio: idServicio,
+        cantidad_default: cantidad,
+        requerido,
+        servicio: {
+          id_servicio: Number(sn.id_servicio) || idServicio,
+          nombre: String(sn.nombre || 'Servicio'),
+          descripcion: (sn.descripcion as string | null | undefined) ?? null,
+          precio: sn.precio != null ? Number(sn.precio) : null,
+          imagen_url: (sn.imagen_url as string | null | undefined) ?? null,
+          estado: sn.estado != null ? Boolean(sn.estado) : null,
+          fecha_creacion: (sn.fecha_creacion as string | null | undefined) ?? null,
+        },
+      };
+    }
+
+    return {
+      id_ruta_servicio_predefinido: row.id_ruta_servicio_predefinido as number | undefined,
+      id_ruta: row.id_ruta as number | undefined,
+      id_servicio: idServicio,
+      cantidad_default: cantidad,
+      requerido,
+      servicio: {
+        id_servicio: idServicio,
+        nombre: String(row.nombre || 'Servicio'),
+        descripcion: (row.descripcion as string | null | undefined) ?? null,
+        precio: row.precio != null ? Number(row.precio) : null,
+        imagen_url: (row.imagen_url as string | null | undefined) ?? null,
+        estado: null,
+        fecha_creacion: (row.fecha_creacion as string | null | undefined) ?? null,
+      },
+    };
+  };
+
+  const tryArray = (value: unknown): RutaServicioPredefinido[] => {
+    if (!Array.isArray(value)) return [];
+    const out: RutaServicioPredefinido[] = [];
+    for (const item of value) {
+      const mapped = mapRow(item);
+      if (mapped) out.push(mapped);
+    }
+    return out;
+  };
+
+  const nested =
+    o.data && typeof o.data === 'object' ? (o.data as Record<string, unknown>) : null;
+
+  const fromKeys = [
+    o.servicios_predefinidos,
+    o.serviciosPredefinidos,
+    nested?.servicios_predefinidos,
+    nested?.serviciosPredefinidos,
+  ];
+
+  for (const k of fromKeys) {
+    const arr = tryArray(k);
+    if (arr.length > 0) return arr;
+  }
+
+  const serviciosRaw = (o.servicios ?? nested?.servicios) as unknown;
+  if (Array.isArray(serviciosRaw)) {
+    const predefFlags = serviciosRaw.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const r = item as Record<string, unknown>;
+      return (
+        r.predefinido === true ||
+        r.es_predefinido === true ||
+        r.incluido === true ||
+        r.tipo === 'predefinido' ||
+        String(r.tipo_servicio || '')
+          .toLowerCase()
+          .includes('predef')
+      );
+    });
+    const fromFiltered = tryArray(predefFlags);
+    if (fromFiltered.length > 0) return fromFiltered;
+  }
+
+  if (nested) {
+    const deeper = extractRutaServiciosPredefinidos(nested, depth + 1);
+    if (deeper.length > 0) return deeper;
+  }
+
+  return [];
+}
+
+export function extractRutaServiciosOpcionales(ruta: unknown, depth = 0): RutaServicioOpcional[] {
+  if (depth > 4 || !ruta || typeof ruta !== 'object') return [];
+  const o = ruta as Record<string, unknown>;
+
+  const mapRow = (raw: unknown): RutaServicioOpcional | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const row = raw as Record<string, unknown>;
+    const idServicio = Number(row.id_servicio ?? row.idServicio);
+    if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
+    const nested = row.servicio;
+    const cantidadRaw = Number(row.cantidad_default ?? row.cantidad ?? 1);
+    const cantidad = Number.isFinite(cantidadRaw) && cantidadRaw > 0 ? cantidadRaw : 1;
+
+    const servicioFrom = (sn: Record<string, unknown>) => ({
+      id_servicio: Number(sn.id_servicio) || idServicio,
+      nombre: String(sn.nombre || 'Servicio'),
+      descripcion: (sn.descripcion as string | null | undefined) ?? null,
+      precio: sn.precio != null ? Number(sn.precio) : null,
+      imagen_url: (sn.imagen_url as string | null | undefined) ?? null,
+      estado: sn.estado != null ? Boolean(sn.estado) : null,
+      fecha_creacion: (sn.fecha_creacion as string | null | undefined) ?? null,
+    });
+
+    if (nested && typeof nested === 'object') {
+      return {
+        id_ruta_servicio_opcional: row.id_ruta_servicio_opcional as number | undefined,
+        id_ruta: row.id_ruta as number | undefined,
+        id_servicio: idServicio,
+        cantidad_default: cantidad,
+        fecha_creacion: row.fecha_creacion as string | undefined,
+        servicio: servicioFrom(nested as Record<string, unknown>),
+      };
+    }
+
+    return {
+      id_ruta_servicio_opcional: row.id_ruta_servicio_opcional as number | undefined,
+      id_ruta: row.id_ruta as number | undefined,
+      id_servicio: idServicio,
+      cantidad_default: cantidad,
+      fecha_creacion: row.fecha_creacion as string | undefined,
+      servicio: {
+        id_servicio: idServicio,
+        nombre: String(row.nombre || 'Servicio'),
+        descripcion: (row.descripcion as string | null | undefined) ?? null,
+        precio: row.precio != null ? Number(row.precio) : null,
+        imagen_url: (row.imagen_url as string | null | undefined) ?? null,
+        estado: null,
+        fecha_creacion: (row.fecha_creacion as string | null | undefined) ?? null,
+      },
+    };
+  };
+
+  const tryArray = (value: unknown): RutaServicioOpcional[] => {
+    if (!Array.isArray(value)) return [];
+    const out: RutaServicioOpcional[] = [];
+    for (const item of value) {
+      const mapped = mapRow(item);
+      if (mapped) out.push(mapped);
+    }
+    return out;
+  };
+
+  const nested =
+    o.data && typeof o.data === 'object' ? (o.data as Record<string, unknown>) : null;
+
+  const fromKeys = [
+    o.servicios_opcionales,
+    o.serviciosOpcionales,
+    nested?.servicios_opcionales,
+    nested?.serviciosOpcionales,
+  ];
+
+  for (const k of fromKeys) {
+    const arr = tryArray(k);
+    if (arr.length > 0) return arr;
+  }
+
+  const serviciosRaw = (o.servicios ?? nested?.servicios) as unknown;
+  if (Array.isArray(serviciosRaw)) {
+    const opcFlags = serviciosRaw.filter((item) => {
+      if (!item || typeof item !== 'object') return false;
+      const r = item as Record<string, unknown>;
+      return (
+        r.opcional === true ||
+        r.es_opcional === true ||
+        r.tipo === 'opcional' ||
+        String(r.tipo_servicio || '')
+          .toLowerCase()
+          .includes('opc')
+      );
+    });
+    const fromFiltered = tryArray(opcFlags);
+    if (fromFiltered.length > 0) return fromFiltered;
+  }
+
+  if (nested) {
+    const deeper = extractRutaServiciosOpcionales(nested, depth + 1);
+    if (deeper.length > 0) return deeper;
+  }
+
+  return [];
+}
+
 export interface Programacion {
   id_programacion: number;
   id_ruta: number;
@@ -378,9 +589,23 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
     const isAuthEndpoint = endpoint.startsWith('/api/auth/');
     const hasToken = !!localStorage.getItem('token');
     if (response.status === 401 && hasToken && !isAuthEndpoint) {
-      localStorage.removeItem('token');
-      window.location.href = '/';
-      throw new Error('Sesión expirada');
+      // No forzamos logout aquí: primero dejamos que la app valide el token con /api/auth/profile.
+      // Esto evita falsos positivos (p.ej. 401 por permisos/rutas específicas).
+      try {
+        window.dispatchEvent(
+          new CustomEvent('occitours:auth-401', {
+            detail: {
+              endpoint,
+              status: response.status,
+              payload: data,
+            },
+          })
+        );
+      } catch {
+        // ignore
+      }
+
+      throw new Error(data?.mensaje || data?.message || data?.error || 'No autorizado');
     }
 
     if (!response.ok) {
@@ -815,8 +1040,9 @@ export const pagosAPI = {
   },
 
   getById: async (id: number): Promise<PagoCliente> => {
-    const response = await fetchAPI<{ data: PagoCliente }>(`/api/pagos/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/pagos/${id}`);
+    const inner = response?.data ?? response;
+    return (inner?.data ?? inner) as PagoCliente;
   },
 
   getByReserva: async (idReserva: number): Promise<PagoCliente[]> => {

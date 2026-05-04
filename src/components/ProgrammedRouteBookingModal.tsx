@@ -1,11 +1,33 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Calendar, CheckCircle2, CreditCard, MapPin, QrCode, Users } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ArrowLeft,
+  Calendar,
+  CheckCircle2,
+  Clock,
+  Compass,
+  CreditCard,
+  MapPin,
+  QrCode,
+  Sparkles,
+  UserCircle,
+  Users,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../App';
-import { reservasAPI, type PagoReservaProgramada, type Programacion, type Ruta, type VentaReserva } from '../services/api';
+import {
+  reservasAPI,
+  extractRutaServiciosPredefinidos,
+  type PagoReservaProgramada,
+  type Programacion,
+  type Ruta,
+  type RutaServicioPredefinido,
+  type VentaReserva,
+} from '../services/api';
+import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
-import { Card, CardContent } from './ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import {
   Dialog,
   DialogContent,
@@ -35,6 +57,8 @@ interface ProgrammedRouteBookingModalProps {
   programacion: Programacion | null;
   ruta?: Ruta | null;
   onSuccess?: () => Promise<void> | void;
+  /** Vista de página completa (p. ej. flujo desde el home) en lugar de diálogo. */
+  layout?: 'dialog' | 'page';
 }
 
 interface CreatedCheckoutState {
@@ -51,6 +75,21 @@ const OCCITOURS_PAYMENT_INFO = {
   bancolombiaTipoCuenta: 'Ahorros',
   bancolombiaNumeroCuenta: '12345678901',
 };
+
+const FALLBACK_ROUTE_IMAGE =
+  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
+
+function formatDurationDays(duracionDias?: number | null): string {
+  if (duracionDias == null || Number.isNaN(Number(duracionDias))) return '—';
+  const days = Number(duracionDias);
+  if (days <= 0) return '—';
+  return days === 1 ? '1 día' : `${days} días`;
+}
+
+function normalizeMultilineText(value?: string | null): string {
+  const t = String(value || '').trim();
+  return t || '';
+}
 
 const EMPTY_COMPANION: CompanionFormState = {
   nombre: '',
@@ -102,12 +141,37 @@ function getReservationId(payload: any): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+/** Monto a cobrar al cliente: prioriza saldo de venta; si el backend manda 0, usa monto de venta o estimado de la pantalla. */
+function resolveAmountDue(checkout: CreatedCheckoutState | null, estimate: number | null): number {
+  if (!checkout) return 0;
+  const v = checkout.venta;
+  if (v) {
+    const estado = String(v.estado_pago || '').trim().toLowerCase();
+    if (estado === 'pagado' || estado === 'paid') return 0;
+  }
+
+  const saldo = Number(v?.saldo_pendiente);
+  if (Number.isFinite(saldo) && saldo > 0) return saldo;
+
+  const montoVenta = Number(v?.monto_total);
+  if (Number.isFinite(montoVenta) && montoVenta > 0) return montoVenta;
+
+  const montoCheckout = Number(checkout.monto_total);
+  if (Number.isFinite(montoCheckout) && montoCheckout > 0) return montoCheckout;
+
+  const est = estimate != null ? Number(estimate) : NaN;
+  if (Number.isFinite(est) && est > 0) return est;
+
+  return 0;
+}
+
 export function ProgrammedRouteBookingModal({
   isOpen,
   onClose,
   programacion,
   ruta,
   onSuccess,
+  layout = 'dialog',
 }: ProgrammedRouteBookingModalProps) {
   const { user } = useAuth();
   const [companions, setCompanions] = useState<CompanionFormState[]>([]);
@@ -145,10 +209,12 @@ export function ProgrammedRouteBookingModal({
 
   const estimatedTotal = unitPrice != null ? unitPrice * totalPeople : null;
   const routeName = ruta?.nombre || programacion?.ruta_nombre || 'Ruta programada';
-  const pendingAmount = Math.max(
-    0,
-    Number(createdCheckout?.venta?.saldo_pendiente ?? createdCheckout?.monto_total ?? 0)
+  const amountDue = useMemo(
+    () => resolveAmountDue(createdCheckout, estimatedTotal),
+    [createdCheckout, estimatedTotal]
   );
+
+  const paymentSectionRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -168,6 +234,14 @@ export function ProgrammedRouteBookingModal({
     });
     setProofFileName('');
   }, [isOpen, programacion?.id_programacion]);
+
+  useEffect(() => {
+    if (!createdCheckout || registeredPayment || !isOpen) return;
+    const id = window.setTimeout(() => {
+      paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 200);
+    return () => window.clearTimeout(id);
+  }, [createdCheckout, registeredPayment, isOpen]);
 
   const handleCompanionCountChange = (count: number) => {
     const safeCount = Math.max(0, Math.min(maxCompanions, count));
@@ -244,6 +318,13 @@ export function ProgrammedRouteBookingModal({
         precio_unitario: unitPrice ?? 0,
       });
 
+      const rawProg: any = programacionResponse;
+      const dataProg = rawProg?.data ?? rawProg;
+      const ventaCreada = (dataProg?.venta ?? rawProg?.venta ?? null) as VentaReserva | null;
+      const montoTotalCreado = Number(
+        dataProg?.monto_total ?? rawProg?.monto_total ?? ventaCreada?.monto_total ?? 0
+      );
+
       for (const companion of companions) {
         await reservasAPI.agregarAcompanante(reservaId, {
           id_cliente: null,
@@ -256,9 +337,6 @@ export function ProgrammedRouteBookingModal({
         });
       }
 
-      const ventaCreada = (programacionResponse as any)?.venta ?? (programacionResponse as any)?.data?.venta ?? null;
-      const montoTotalCreado = Number((programacionResponse as any)?.monto_total ?? ventaCreada?.monto_total ?? 0);
-
       setCreatedCheckout({
         id_reserva: reservaId,
         monto_total: Number.isFinite(montoTotalCreado) ? montoTotalCreado : 0,
@@ -268,8 +346,13 @@ export function ProgrammedRouteBookingModal({
       await onSuccess?.();
       toast.success(
         companions.length > 0
-          ? `Reserva creada para ti y ${companions.length} acompanante${companions.length > 1 ? 's' : ''}.`
-          : 'Tu cupo fue reservado correctamente.'
+          ? `Solicitud registrada (tu grupo: ${1 + companions.length} personas).`
+          : 'Solicitud registrada.',
+        {
+          description:
+            'Baja al formulario de pago en esta misma pantalla, paga y adjunta el comprobante. Tu cupo en la salida queda confirmado cuando OCCITOUR verifique el pago.',
+          duration: 7000,
+        }
       );
     } catch (error: any) {
       toast.error(error?.message || 'No se pudo completar la reserva de la salida programada.');
@@ -281,13 +364,13 @@ export function ProgrammedRouteBookingModal({
   const handleRegisterPayment = async () => {
     if (!createdCheckout) return;
 
-    if (pendingAmount <= 0) {
+    if (amountDue <= 0) {
       toast.error('Esta reserva no tiene saldo pendiente para registrar.');
       return;
     }
 
     if (!String(paymentData.comprobante_url || '').trim()) {
-      toast.error('Debes pegar la URL del comprobante.');
+      toast.error('Debes adjuntar el comprobante (archivo requerido).');
       return;
     }
 
@@ -377,67 +460,323 @@ export function ProgrammedRouteBookingModal({
     setProofFileName('');
   };
 
-  return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-4xl w-[95vw] max-h-[90vh] flex flex-col overflow-hidden">
-        <DialogHeader className="shrink-0">
-          <DialogTitle>
-            {createdCheckout ? 'Reserva creada: registrar pago' : 'Reservar cupo en salida programada'}
-          </DialogTitle>
-          <DialogDescription>
-            {createdCheckout
-              ? 'Para rutas programadas se registra el pago completo. Los abonos siguen reservados para fincas.'
-              : 'Esta reserva toma la fecha, horario y ruta ya definidos por OCCITOUR. Solo debes confirmar cuantas personas viajan y registrar los acompanantes.'}
-          </DialogDescription>
-        </DialogHeader>
+  const scrollAreaClassName =
+    layout === 'page' ? 'space-y-6 pb-4' : 'flex-1 min-h-0 overflow-y-auto pr-2 space-y-6';
 
-        {programacion ? (
-          <div className="flex-1 min-h-0 overflow-y-auto pr-2 space-y-6">
+  const titleText = createdCheckout ? 'Siguiente paso: pago y comprobante' : 'Reservar cupo en salida programada';
+  const descriptionText = createdCheckout
+    ? 'Realiza el pago total de esta salida y sube el comprobante aquí. El staff validará el pago; hasta entonces la plaza puede seguir mostrándose como pendiente de confirmación.'
+    : 'Salida fijada por OCCITOUR: confirmas personas y acompañantes y, al continuar, pagas en el acto para tu cupo. No es una solicitud personalizada (ahí el asesor habilita el pago después de revisar).';
+
+  const footerActions = (
+    <>
+      {!createdCheckout ? (
+        <>
+          <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={!programacion || isSubmitting || cuposDisponibles <= 0}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            {isSubmitting ? 'Reservando...' : 'Confirmar reserva'}
+          </Button>
+        </>
+      ) : registeredPayment ? (
+        <Button onClick={onClose} className="bg-green-600 hover:bg-green-700">
+          Cerrar
+        </Button>
+      ) : amountDue > 0 ? (
+        <>
+          <Button
+            variant="outline"
+            onClick={() => {
+              toast.info('Reserva creada. Podrás pagarla más tarde cuando habilitemos ese acceso desde tu panel.');
+              onClose();
+            }}
+            disabled={isPaying}
+          >
+            Pagar despues
+          </Button>
+          <Button onClick={handleRegisterPayment} disabled={isPaying} className="bg-green-600 hover:bg-green-700">
+            {isPaying ? 'Enviando pago...' : 'Registrar pago completo'}
+          </Button>
+        </>
+      ) : (
+        <Button onClick={onClose}>Cerrar</Button>
+      )}
+    </>
+  );
+
+  const renderBookingBody = () => {
+    if (!programacion) return null;
+
+    const heroImage = String(ruta?.imagen_url || '').trim() || FALLBACK_ROUTE_IMAGE;
+    const descripcionRuta = normalizeMultilineText(ruta?.descripcion);
+    const serviciosIncluidos: RutaServicioPredefinido[] = extractRutaServiciosPredefinidos(ruta);
+    const guiaNombre = [programacion.empleado_nombre, programacion.empleado_apellido]
+      .map((x) => String(x || '').trim())
+      .filter(Boolean)
+      .join(' ');
+    const cuposTotales = Number(programacion.cupos_totales ?? 0);
+    const lugarEncuentroText = String(programacion.lugar_encuentro || '').trim() || 'Se confirma al cliente';
+    const horaSalida = String(programacion.hora_salida || '').trim() || null;
+    const horaRegreso = String(programacion.hora_regreso || '').trim() || null;
+    const horarioViaje =
+      horaSalida && horaRegreso
+        ? `Desde ${horaSalida} hasta ${horaRegreso}`
+        : horaSalida
+          ? `Salida: ${horaSalida}`
+          : horaRegreso
+            ? `Regreso: ${horaRegreso}`
+            : 'Horario por confirmar';
+    const estadoSalida = estadoSalidaParaCliente(programacion.estado);
+    const heroMinHeight = layout === 'page' ? 'min-h-[220px] sm:min-h-[260px] md:min-h-[300px]' : 'min-h-[160px]';
+
+    return (
+      <div className={scrollAreaClassName}>
+            <div
+              className={`relative w-full overflow-hidden rounded-2xl border border-green-100 shadow-xl ${heroMinHeight}`}
+            >
+              <ImageWithFallback
+                src={heroImage}
+                alt={routeName}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/10" />
+              <div className="relative flex h-full min-h-[inherit] flex-col justify-end p-5 sm:p-7 md:p-8">
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <Badge variant="outline" translate="no" className={estadoSalida.badgeClassName}>
+                    {estadoSalida.label}
+                  </Badge>
+                  <Badge
+                    translate="no"
+                    variant="secondary"
+                    className="border border-green-200/90 bg-white/95 text-green-900 shadow-sm backdrop-blur-sm"
+                  >
+                    {cuposDisponibles} cupos disponibles
+                    {cuposTotales > 0 ? ` · ${cuposTotales} totales` : ''}
+                  </Badge>
+                </div>
+                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white drop-shadow-sm leading-tight">
+                  {routeName}
+                </h2>
+                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-white/90">
+                  {ruta?.ubicacion ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <MapPin className="w-4 h-4 opacity-90" />
+                      {ruta.ubicacion}
+                    </span>
+                  ) : null}
+                  <span className="inline-flex items-center gap-1.5 max-w-full">
+                    <MapPin className="w-4 h-4 shrink-0 opacity-90" />
+                    <span className="line-clamp-2">
+                      <span className="text-white/80">Encuentro: </span>
+                      {lugarEncuentroText}
+                    </span>
+                  </span>
+                  {ruta?.dificultad ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Compass className="w-4 h-4 opacity-90" />
+                      {ruta.dificultad}
+                    </span>
+                  ) : null}
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 opacity-90" />
+                    {formatDurationDays(ruta?.duracion_dias)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {descripcionRuta ? (
+              <Card className="overflow-hidden border-green-100/80 shadow-md bg-white/95">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-green-900">Sobre esta experiencia</CardTitle>
+                  <CardDescription className="text-gray-600">
+                    Todo lo que incluye la ruta para esta salida programada.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-gray-700 leading-relaxed text-[15px] whitespace-pre-line">{descripcionRuta}</p>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            <Card className="border-green-200/90 bg-gradient-to-br from-white to-emerald-50/40 shadow-md overflow-hidden">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg text-green-900 flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-green-600" />
+                  Fechas y horarios
+                </CardTitle>
+                <CardDescription>Planifica tu llegada según la salida y el regreso de este grupo.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-xl border border-green-100 bg-white p-4 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-green-700 mb-1">Fecha de salida</p>
+                    <p className="text-base font-semibold text-gray-900">{formatDate(programacion.fecha_salida)}</p>
+                  </div>
+                  <div className="rounded-xl border border-green-100 bg-white p-4 shadow-sm">
+                    <p className="text-xs font-medium uppercase tracking-wide text-green-700 mb-1">Fecha de regreso</p>
+                    <p className="text-base font-semibold text-gray-900">{formatDate(programacion.fecha_regreso)}</p>
+                  </div>
+                  <div className="rounded-xl border border-green-100 bg-white p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+                    <p className="text-xs font-medium uppercase tracking-wide text-green-700 mb-1 flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5" />
+                      Horario del viaje
+                    </p>
+                    <p className="text-base font-semibold text-gray-900">{horarioViaje}</p>
+                    {(horaSalida || horaRegreso) && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {horaSalida ? `Hora salida: ${horaSalida}` : ''}
+                        {horaSalida && horaRegreso ? ' · ' : ''}
+                        {horaRegreso ? `Hora regreso: ${horaRegreso}` : ''}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-green-200/80 bg-white p-4 shadow-sm">
+                  <p className="text-xs font-medium uppercase tracking-wide text-green-700 mb-1 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5" />
+                    Punto de encuentro
+                  </p>
+                  <p className="text-base font-medium text-gray-900 leading-snug">{lugarEncuentroText}</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-gray-200/90 shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg text-gray-900">Cupo y guía</CardTitle>
+                <CardDescription className="text-gray-600">
+                  La capacidad que ves aquí es la de <strong>esta salida programada</strong> (cupos de la operación), no el catálogo genérico.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex gap-3 rounded-xl border border-green-100 bg-green-50/60 p-4 sm:col-span-2">
+                    <Users className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs text-green-800 uppercase tracking-wide font-medium">Cupos de esta salida</p>
+                      <p className="text-gray-900 font-semibold text-lg">
+                        {cuposDisponibles} disponibles
+                        {cuposTotales > 0 ? (
+                          <span className="text-base font-normal text-gray-600">
+                            {' '}
+                            · {cuposTotales} cupos totales de la programación
+                          </span>
+                        ) : null}
+                      </p>
+                      {ruta?.capacidad_maxima != null && Number(ruta.capacidad_maxima) > 0 ? (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Referencia catálogo de la ruta: hasta {ruta.capacidad_maxima} personas por definición del producto.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  {guiaNombre ? (
+                    <div className="flex gap-3 rounded-xl border border-gray-100 bg-gray-50/80 p-4 sm:col-span-2">
+                      <UserCircle className="w-5 h-5 text-green-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-xs text-gray-500 uppercase tracking-wide">Guía asignado</p>
+                        <p className="text-gray-900 font-medium">{guiaNombre}</p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-green-100 shadow-md overflow-hidden bg-white">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg text-green-900 flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-500" />
+                  Servicios
+                </CardTitle>
+                <CardDescription>
+                  Lo que incluye esta ruta en cada salida (según lo configurado en OCCITOUR).
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {serviciosIncluidos.length > 0 ? (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {serviciosIncluidos.map((item, idx) => {
+                      const s = item.servicio;
+                      const nombre = String(s?.nombre || `Servicio ${item.id_servicio}`).trim();
+                      const desc = normalizeMultilineText(s?.descripcion);
+                      const cantidad = Math.max(1, Number(item.cantidad_default) || 1);
+                      const img = String(s?.imagen_url || '').trim();
+                      const key = `${item.id_servicio}-${idx}`;
+                      return (
+                        <div
+                          key={key}
+                          className="group flex gap-4 rounded-xl border border-green-100/90 bg-gradient-to-br from-white to-green-50/30 p-4 shadow-sm transition-shadow hover:shadow-md"
+                        >
+                          <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-green-100 bg-green-50">
+                            {img ? (
+                              <ImageWithFallback src={img} alt="" className="h-full w-full object-cover" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center">
+                                <Sparkles className="w-8 h-8 text-green-300" />
+                              </div>
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                              <p className="font-semibold text-gray-900 leading-snug">{nombre}</p>
+                              {cantidad > 1 ? (
+                                <Badge variant="secondary" className="text-xs">
+                                  x{cantidad}
+                                </Badge>
+                              ) : null}
+                              {item.requerido ? (
+                                <Badge className="bg-green-600 text-white text-xs">Incluido</Badge>
+                              ) : null}
+                            </div>
+                            {desc ? (
+                              <p className="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-4">{desc}</p>
+                            ) : (
+                              <p className="mt-2 text-sm text-gray-400 italic">Sin descripción breve.</p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-green-200 bg-green-50/50 px-4 py-8 text-center">
+                    <p className="text-gray-700 font-medium">Aún no aparecen servicios para esta ruta.</p>
+                    <p className="text-sm text-gray-500 mt-2 max-w-lg mx-auto leading-relaxed">
+                      En el panel de OCCITOUR deberían estar cargados en la ruta. Si ya existen y no los ves aquí,
+                      el detalle público o autenticado puede no estar enviándolos: pide a soporte revisar el endpoint
+                      de la ruta. Tu asesor puede confirmarte igualmente lo que incluye la salida.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card className="border-green-200 bg-gradient-to-br from-green-50 to-emerald-50">
               <CardContent className="p-5 grid gap-4 md:grid-cols-[1.4fr,0.9fr]">
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge className="bg-green-600 text-white">Salida confirmada</Badge>
-                    <Badge variant="outline" className="border-green-300 text-green-700">
-                      {cuposDisponibles} cupos disponibles
+                    <Badge className="bg-emerald-700 text-white">Tarifas</Badge>
+                    <Badge variant="outline" className="border-green-300 text-green-800">
+                      Precio por persona
                     </Badge>
                   </div>
                   <div>
-                    <h3 className="text-xl text-gray-900">{routeName}</h3>
-                    <p className="text-sm text-gray-600">
-                      {ruta?.ubicacion || 'Ubicacion por confirmar'}
+                    <p className="text-sm text-gray-600 leading-relaxed">
+                      La salida usa la programación vigente de OCCITOUR. Revisa arriba fechas, horarios y servicios
+                      antes de confirmar tus cupos.
                     </p>
-                  </div>
-                  <div className="grid sm:grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-lg border border-green-100 bg-white px-3 py-3">
-                      <p className="text-gray-500 mb-1 flex items-center gap-2">
-                        <Calendar className="w-4 h-4 text-green-600" />
-                        Fecha de salida
-                      </p>
-                      <p className="text-gray-800">{formatDate(programacion.fecha_salida)}</p>
-                    </div>
-                    <div className="rounded-lg border border-green-100 bg-white px-3 py-3">
-                      <p className="text-gray-500 mb-1">Horario</p>
-                      <p className="text-gray-800">
-                        {programacion.hora_salida || 'Por definir'}
-                        {programacion.hora_regreso ? ` - ${programacion.hora_regreso}` : ''}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border border-green-100 bg-white px-3 py-3">
-                      <p className="text-gray-500 mb-1 flex items-center gap-2">
-                        <MapPin className="w-4 h-4 text-green-600" />
-                        Punto de encuentro
-                      </p>
-                      <p className="text-gray-800">{programacion.lugar_encuentro || 'Se confirma al cliente'}</p>
-                    </div>
-                    <div className="rounded-lg border border-green-100 bg-white px-3 py-3">
-                      <p className="text-gray-500 mb-1 flex items-center gap-2">
-                        <CreditCard className="w-4 h-4 text-green-600" />
-                        Tarifa estimada
-                      </p>
-                      <p className="text-gray-800">
-                        {unitPrice == null ? 'Por confirmar' : `$${unitPrice.toLocaleString('es-CO')} por persona`}
-                      </p>
+                    <div className="mt-4 rounded-xl border border-green-100 bg-white px-4 py-3 font-semibold text-green-800 text-lg">
+                      {unitPrice == null
+                        ? 'Tarifa por confirmar con tu asesor'
+                        : `${unitPrice.toLocaleString('es-CO')} COP / persona`}
                     </div>
                   </div>
                 </div>
@@ -613,7 +952,8 @@ export function ProgrammedRouteBookingModal({
               </Card>
             )}
 
-            {createdCheckout && !registeredPayment && pendingAmount > 0 ? (
+            {createdCheckout && !registeredPayment && amountDue > 0 ? (
+              <div ref={paymentSectionRef}>
               <Card>
                 <CardContent className="p-5 space-y-5">
                   <div>
@@ -624,13 +964,13 @@ export function ProgrammedRouteBookingModal({
                   </div>
 
                   <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                    Monto a pagar ahora: <strong>{formatCurrency(pendingAmount)}</strong>
+                    Monto a pagar ahora: <strong>{formatCurrency(amountDue)}</strong>
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-2">
                       <Label>Monto</Label>
-                      <Input value={formatCurrency(pendingAmount)} disabled />
+                      <Input value={formatCurrency(amountDue)} disabled />
                     </div>
 
                     <div className="space-y-2">
@@ -725,7 +1065,7 @@ export function ProgrammedRouteBookingModal({
                       <div className="grid gap-3 md:grid-cols-3 text-left">
                         <div className="bg-white rounded-lg p-3 border border-white/70">
                           <p className="text-xs text-gray-500">Valor a pagar</p>
-                          <p className="font-semibold text-gray-900">{formatCurrency(pendingAmount)}</p>
+                          <p className="font-semibold text-gray-900">{formatCurrency(amountDue)}</p>
                         </div>
                         <div className="bg-white rounded-lg p-3 border border-white/70">
                           <p className="text-xs text-gray-500">Referencia</p>
@@ -803,9 +1143,10 @@ export function ProgrammedRouteBookingModal({
                   </div>
                 </CardContent>
               </Card>
+              </div>
             ) : null}
 
-            {createdCheckout && pendingAmount <= 0 && !registeredPayment ? (
+            {createdCheckout && amountDue <= 0 && !registeredPayment ? (
               <Card>
                 <CardContent className="p-5 text-sm text-gray-600">
                   Esta reserva quedó creada, pero el valor aún no está listo para pago automático. Un asesor debe
@@ -839,47 +1180,58 @@ export function ProgrammedRouteBookingModal({
                 </CardContent>
               </Card>
             ) : null}
-          </div>
-        ) : null}
+      </div>
+    );
+  };
 
-        <DialogFooter className="shrink-0">
-          {!createdCheckout ? (
-            <>
-              <Button variant="outline" onClick={onClose} disabled={isSubmitting}>
-                Cancelar
-              </Button>
-              <Button
-                onClick={handleSubmit}
-                disabled={!programacion || isSubmitting || cuposDisponibles <= 0}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {isSubmitting ? 'Reservando...' : 'Confirmar reserva'}
-              </Button>
-            </>
-          ) : registeredPayment ? (
-            <Button onClick={onClose} className="bg-green-600 hover:bg-green-700">
-              Cerrar
+  if (layout === 'page') {
+    if (!isOpen) return null;
+
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50/80 to-white flex flex-col">
+        <header className="sticky top-0 z-20 border-b border-green-100/80 bg-white/90 backdrop-blur-md shadow-sm">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-4">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 border-green-200 text-green-800 hover:bg-green-50 w-fit"
+              onClick={onClose}
+            >
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Volver
             </Button>
-          ) : pendingAmount > 0 ? (
-            <>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  toast.info('Reserva creada. Podrás pagarla más tarde cuando habilitemos ese acceso desde tu panel.');
-                  onClose();
-                }}
-                disabled={isPaying}
-              >
-                Pagar despues
-              </Button>
-              <Button onClick={handleRegisterPayment} disabled={isPaying} className="bg-green-600 hover:bg-green-700">
-                {isPaying ? 'Enviando pago...' : 'Registrar pago completo'}
-              </Button>
-            </>
-          ) : (
-            <Button onClick={onClose}>Cerrar</Button>
-          )}
-        </DialogFooter>
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl sm:text-2xl font-semibold text-gray-900 leading-tight">{titleText}</h1>
+              <p className="text-sm text-gray-600 mt-1">{descriptionText}</p>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10 pb-32">
+          {renderBookingBody()}
+        </div>
+
+        <footer className="fixed bottom-0 left-0 right-0 z-20 border-t border-green-100 bg-white/95 backdrop-blur-md pb-[env(safe-area-inset-bottom)]">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-4 flex flex-col-reverse sm:flex-row gap-3 sm:justify-end">
+            {footerActions}
+          </div>
+        </footer>
+      </div>
+    );
+  }
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-4xl w-[95vw] max-h-[90vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
+          <DialogTitle>{titleText}</DialogTitle>
+          <DialogDescription>{descriptionText}</DialogDescription>
+        </DialogHeader>
+
+        {renderBookingBody()}
+
+        <DialogFooter className="shrink-0">{footerActions}</DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -8,7 +8,7 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { mockFarms } from '../utils/mockData';
 import { programacionAPI, rutasAPI, type Programacion, type Ruta } from '../services/api';
-import { ProgrammedRouteBookingModal } from './ProgrammedRouteBookingModal';
+import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
 import { useAuth } from '../App';
 import { motion } from 'motion/react';
 import heroImage from 'figma:asset/d8d3bc172f99829d8ecd1672db5f890e39054e24.png';
@@ -44,8 +44,6 @@ export function HomePage({ onViewChange }: HomePageProps) {
   const { user } = useAuth();
   const [routes, setRoutes] = useState<Ruta[]>([]);
   const [programaciones, setProgramaciones] = useState<Programacion[]>([]);
-  const [selectedProgramacion, setSelectedProgramacion] = useState<Programacion | null>(null);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -118,11 +116,12 @@ export function HomePage({ onViewChange }: HomePageProps) {
       .filter((p) => {
         if (!p) return false;
         const estado = String(p.estado || '').toLowerCase().trim();
-        if (estado !== 'programado') return false;
+        // Misma idea que /api/programaciones/publicas: aún reservable / en ejecución con cupos.
+        if (!['programado', 'programada', 'activa', 'activo', 'en progreso'].includes(estado)) return false;
         if (p.es_personalizada) return false;
         if (Number(p.cupos_disponibles ?? 0) <= 0) return false;
-        const d = parseApiDate(String(p.fecha_salida || ''));
-        return d ? d >= today : false;
+        const fin = parseApiDate(String(p.fecha_regreso || p.fecha_salida || ''));
+        return fin ? fin >= today : false;
       })
       .sort((a, b) => String(a.fecha_salida).localeCompare(String(b.fecha_salida)))
       .slice(0, 12);
@@ -150,7 +149,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
       return;
     }
 
-    setSelectedProgramacion(programacion);
+    onViewChange('programmed-booking', String(programacion.id_programacion));
   };
 
   const renderScheduledRoutesSection = () => (
@@ -165,7 +164,10 @@ export function HomePage({ onViewChange }: HomePageProps) {
               </Badge>
             </div>
             <h2 className="text-4xl mb-2 text-gray-800">Carrusel de rutas programadas</h2>
-            <p className="text-lg text-gray-600">Salidas públicas, no personalizadas y con cupos disponibles.</p>
+            <p className="text-lg text-gray-600">
+              Salidas públicas con cupos disponibles. Sobre la imagen solo verás el estado de la salida (activa o en progreso); el
+              resto de datos están abajo.
+            </p>
           </div>
           <Button
             variant="outline"
@@ -195,6 +197,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
                       : ruta?.precio_base != null
                         ? Number(ruta.precio_base)
                         : null;
+                  const estadoSalida = estadoSalidaParaCliente(p.estado);
 
                   return (
                     <CarouselItem key={p.id_programacion} className="md:basis-1/2 lg:basis-1/3">
@@ -207,10 +210,16 @@ export function HomePage({ onViewChange }: HomePageProps) {
                           />
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
                           <div className="absolute top-3 left-3 right-3 flex items-start justify-between gap-2">
-                            <Badge className="bg-green-600 text-white">
-                              {formatDate(p.fecha_salida)}
-                            </Badge>
-                            <Badge variant="outline" className="bg-white/90 border-white text-green-800">
+                            <div className="flex min-w-0 flex-1 flex-nowrap items-center gap-2">
+                              <Badge variant="outline" translate="no" className={estadoSalida.badgeClassName}>
+                                {estadoSalida.compactLabel}
+                              </Badge>
+                            </div>
+                            <Badge
+                              translate="no"
+                              variant="outline"
+                              className="shrink-0 !border-green-200/90 !bg-white/95 !text-green-900 shadow-sm backdrop-blur-sm"
+                            >
                               {cuposDisponibles} cupos
                             </Badge>
                           </div>
@@ -335,14 +344,6 @@ export function HomePage({ onViewChange }: HomePageProps) {
       </section>
 
       {renderScheduledRoutesSection()}
-
-      <ProgrammedRouteBookingModal
-        isOpen={Boolean(selectedProgramacion)}
-        onClose={() => setSelectedProgramacion(null)}
-        programacion={selectedProgramacion}
-        ruta={selectedProgramacion ? routeById.get(Number(selectedProgramacion.id_ruta)) ?? null : null}
-        onSuccess={loadProgramaciones}
-      />
 
       {/* Featured Route Section */}
       {featuredRoute && (

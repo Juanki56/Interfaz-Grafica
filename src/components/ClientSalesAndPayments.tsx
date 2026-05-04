@@ -21,6 +21,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
 import { Separator } from './ui/separator';
 import { pagosAPI, reservasAPI } from '../services/api';
+import {
+  clientPaymentFlowLabel,
+  resolveClientPaymentFlowKind,
+  type ClientPaymentFlowKind,
+} from '../utils/clientPaymentFlow';
 
 type ClientSaleItem = {
   id: string;
@@ -51,6 +56,8 @@ type ClientPaymentItem = {
   notes: string;
   comprobanteUrl?: string | null;
   transactionNumber?: string | null;
+  rejectionReason?: string | null;
+  paymentFlowKind: ClientPaymentFlowKind;
 };
 
 type ClientProgrammingItem = {
@@ -92,8 +99,17 @@ const getSaleStatusBadge = (status?: string | null) => {
   return <Badge className={classes[normalized] || 'bg-gray-100 text-gray-800'}>{normalized}</Badge>;
 };
 
+const normalizeClientAbonoStatus = (status?: string | null) => {
+  const k = String(status || 'Pendiente').trim().toLowerCase();
+  if (k === 'aprobado') return 'Aprobado';
+  if (k === 'verificado') return 'Verificado';
+  if (k === 'rechazado') return 'Rechazado';
+  if (k === 'pendiente') return 'Pendiente';
+  return 'Pendiente';
+};
+
 const getInstallmentStatusBadge = (status?: string | null) => {
-  const normalized = String(status || 'Pendiente').trim();
+  const normalized = normalizeClientAbonoStatus(status);
   const classes: Record<string, string> = {
     Aprobado: 'bg-green-100 text-green-800 border-green-200',
     Verificado: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -192,10 +208,12 @@ function useClientPaymentsData() {
           paymentMethod: payment.metodo_pago || 'Por definir',
           totalSale: Number(booking.total ?? booking.monto_total ?? 0),
           remaining: Number(booking.saldo_pendiente ?? booking.total ?? booking.monto_total ?? 0),
-          status: String(payment.estado || 'Pendiente'),
+          status: normalizeClientAbonoStatus(payment.estado),
           notes: payment.observaciones || '',
           comprobanteUrl: payment.comprobante_url || null,
           transactionNumber: payment.numero_transaccion || null,
+          rejectionReason: payment.motivo_rechazo || null,
+          paymentFlowKind: resolveClientPaymentFlowKind(booking),
         }));
 
         setPayments(mapped);
@@ -446,7 +464,11 @@ export function ClientPaymentsTab() {
             <span>Mis Abonos</span>
           </CardTitle>
           <p className="text-sm text-gray-600 mt-2">
-            Abonos reales registrados para tus reservas y ventas.
+            Abonos reales registrados para tus reservas y ventas.{' '}
+            <span className="text-gray-700">
+              En <strong>salidas programadas</strong> pagas al reservar el cupo; en <strong>solicitudes personalizadas</strong>{' '}
+              el asesor habilita el pago antes de subir el comprobante.
+            </span>
           </p>
         </CardHeader>
         <CardContent>
@@ -551,6 +573,7 @@ export function ClientPaymentsTab() {
               </div>
               <Separator />
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                <div><span className="text-gray-500">Contexto:</span> <span className="font-medium">{clientPaymentFlowLabel(selectedPayment.paymentFlowKind)}</span></div>
                 <div><span className="text-gray-500">Venta:</span> <span className="font-medium">#{selectedPayment.saleId || '—'}</span></div>
                 <div><span className="text-gray-500">Reserva:</span> <span className="font-medium">#{selectedPayment.reservationId}</span></div>
                 <div><span className="text-gray-500">Monto:</span> <span className="font-medium">{formatCurrency(selectedPayment.amount)}</span></div>
@@ -561,6 +584,39 @@ export function ClientPaymentsTab() {
               {selectedPayment.notes ? (
                 <div className="rounded-lg bg-blue-50 p-4 text-sm text-gray-700">
                   <strong>Observaciones:</strong> {selectedPayment.notes}
+                </div>
+              ) : null}
+              {selectedPayment.status === 'Rechazado' ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-950 space-y-2">
+                  <p className="font-semibold text-red-900">Comprobante no aceptado</p>
+                  <p className="text-xs font-medium text-red-800">{clientPaymentFlowLabel(selectedPayment.paymentFlowKind)}</p>
+                  {selectedPayment.paymentFlowKind === 'programmed_route' ? (
+                    <p>
+                      En <strong>salida programada</strong> pagaste al apartar cupo; corrige el comprobante y vuelve a registrar el
+                      pago si el saldo o el equipo lo requieren.
+                    </p>
+                  ) : selectedPayment.paymentFlowKind === 'custom_request' ? (
+                    <p>
+                      En <strong>solicitud personalizada</strong> el pago solo procede cuando el asesor lo habilita; revisa el
+                      motivo y reenvía el comprobante desde tu solicitud cuando siga abierta al pago.
+                    </p>
+                  ) : selectedPayment.paymentFlowKind === 'finca' ? (
+                    <p>Abono de finca: prepara un comprobante corregido y un nuevo abono si aplica saldo pendiente.</p>
+                  ) : (
+                    <p>Revisa el motivo del rechazo y sigue las indicaciones de tu asesor para volver a enviar el pago.</p>
+                  )}
+                  {selectedPayment.rejectionReason ? (
+                    <p>
+                      <span className="text-red-800">Motivo: </span>
+                      {selectedPayment.rejectionReason}
+                    </p>
+                  ) : (
+                    <p className="text-red-800">Contacta a OCCITOUR para saber qué corregir y cómo volver a enviar el pago.</p>
+                  )}
+                  <p className="text-red-900/90">
+                    Con saldo pendiente en la venta, podrás registrar un nuevo abono cuando el equipo lo habilite (salvo en flujo
+                    personalizado, donde depende de la solicitud).
+                  </p>
                 </div>
               ) : null}
               {selectedPayment.comprobanteUrl ? (

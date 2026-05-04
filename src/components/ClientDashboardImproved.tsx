@@ -22,6 +22,13 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
 import { Badge } from './ui/badge';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import {
@@ -43,7 +50,13 @@ import {
   type SolicitudPersonalizada,
   type Venta,
 } from '../services/api';
+import {
+  clientPaymentFlowLabel,
+  resolveClientPaymentFlowKind,
+  type ClientPaymentFlowKind,
+} from '../utils/clientPaymentFlow';
 import { Textarea } from './ui/textarea';
+import { toast } from 'sonner';
 
 type ClientBookingView = 'list' | 'detail';
 
@@ -103,6 +116,7 @@ type ClientPaymentSummary = {
   saleId: number;
   serviceName: string;
   serviceType: ClientBookingSummary['serviceType'];
+  paymentFlowKind: ClientPaymentFlowKind;
   date: string;
   amount: number;
   status: string;
@@ -123,6 +137,9 @@ type ClientProgrammingSummary = {
   difficulty: string;
 };
 
+const CLIENT_RESUBMIT_PROOF_MAX = 5 * 1024 * 1024;
+const CLIENT_RESUBMIT_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+
 const normalizeReservationStatus = (status?: string | null) => {
   const normalized = String(status || '').trim();
   return ['Pendiente', 'Confirmada', 'Cancelada', 'Completada'].includes(normalized)
@@ -138,10 +155,12 @@ const normalizePaymentStatus = (status?: string | null) => {
 };
 
 const normalizeInstallmentStatus = (status?: string | null) => {
-  const normalized = String(status || '').trim();
-  return ['Pendiente', 'Verificado', 'Aprobado', 'Rechazado'].includes(normalized)
-    ? normalized
-    : 'Pendiente';
+  const key = String(status || '').trim().toLowerCase();
+  if (key === 'pendiente') return 'Pendiente';
+  if (key === 'verificado') return 'Verificado';
+  if (key === 'aprobado') return 'Aprobado';
+  if (key === 'rechazado') return 'Rechazado';
+  return 'Pendiente';
 };
 
 const formatCurrency = (value?: number | string | null) =>
@@ -277,6 +296,24 @@ export function ClientDashboardImproved() {
     comprobante_url: '',
     observaciones: '',
   });
+  const [resubmitPago, setResubmitPago] = useState({
+    metodo_pago: 'Transferencia',
+    numero_transaccion: '',
+    observaciones: '',
+  });
+  const [resubmitProofName, setResubmitProofName] = useState('');
+  const [resubmitProofDataUrl, setResubmitProofDataUrl] = useState('');
+  const [resubmitProofMime, setResubmitProofMime] = useState('');
+  const [isSubmittingResubmitPago, setIsSubmittingResubmitPago] = useState(false);
+
+  useEffect(() => {
+    if (!selectedPayment) {
+      setResubmitPago({ metodo_pago: 'Transferencia', numero_transaccion: '', observaciones: '' });
+      setResubmitProofName('');
+      setResubmitProofDataUrl('');
+      setResubmitProofMime('');
+    }
+  }, [selectedPayment]);
 
   useEffect(() => {
     if (adminActiveTab) {
@@ -413,6 +450,7 @@ export function ClientDashboardImproved() {
           saleId,
           serviceName: String(booking.tipo_servicio || `Reserva #${reservationId}`),
           serviceType: resolveServiceType(booking.tipo_servicio),
+          paymentFlowKind: resolveClientPaymentFlowKind(booking),
           date: formatDate(payment.fecha_pago || payment.fecha_creacion),
           amount: Number(payment.monto ?? 0),
           status: normalizeInstallmentStatus(payment.estado),
@@ -648,7 +686,8 @@ export function ClientDashboardImproved() {
   const paymentStats = useMemo(() => ({
     total: payments.length,
     approved: payments.filter((payment) => payment.status === 'Aprobado').length,
-    pending: payments.filter((payment) => payment.status !== 'Aprobado').length,
+    pending: payments.filter((payment) => payment.status === 'Pendiente').length,
+    rejected: payments.filter((payment) => payment.status === 'Rechazado').length,
     totalAmount: payments.reduce((sum, payment) => sum + payment.amount, 0),
   }), [payments]);
 
@@ -699,6 +738,105 @@ export function ClientDashboardImproved() {
     setSelectedProgrammingDetail(null);
     setSelectedProgrammingBooking(null);
     setProgrammingView('detail');
+  };
+
+  const handleResubmitRejectedProofFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > CLIENT_RESUBMIT_PROOF_MAX) {
+      toast.error('El archivo no debe exceder 5MB.');
+      event.target.value = '';
+      return;
+    }
+    if (!CLIENT_RESUBMIT_PROOF_TYPES.includes(file.type)) {
+      toast.error('Solo se permiten PDF, JPG o PNG.');
+      event.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setResubmitProofDataUrl(String(reader.result || ''));
+      setResubmitProofName(file.name);
+      setResubmitProofMime(file.type || 'application/octet-stream');
+    };
+    reader.onerror = () => {
+      toast.error('No se pudo leer el archivo.');
+      event.target.value = '';
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleResubmitRejectedPago = async () => {
+    if (!selectedPayment || selectedPayment.status !== 'Rechazado') return;
+    if (selectedPayment.paymentFlowKind === 'custom_request') {
+      toast.info('Para solicitudes personalizadas, reenvía el comprobante desde el detalle de tu solicitud (Mis solicitudes).');
+      return;
+    }
+    if (!selectedPayment.reservationId) {
+      toast.error('No se pudo vincular la reserva. Contacta a soporte.');
+      return;
+    }
+    if (selectedPayment.paymentFlowKind === 'finca' && !selectedPayment.saleId) {
+      toast.error('No se pudo vincular la venta. Contacta a soporte.');
+      return;
+    }
+    if (!resubmitProofDataUrl.trim()) {
+      toast.error('Adjunta el nuevo comprobante.');
+      return;
+    }
+    setIsSubmittingResubmitPago(true);
+    try {
+      const observaciones =
+        resubmitPago.observaciones.trim() ||
+        `Reenvío de comprobante tras rechazo del pago #${selectedPayment.paymentId}`;
+
+      // El backend solo permite POST /api/pagos (nuevo abono) para clientes en reservas de finca.
+      // Rutas / salidas (aunque el flujo quede como "genérico") se reenvían con pago-completo como al reservar.
+      if (selectedPayment.paymentFlowKind === 'finca') {
+        await pagosAPI.create({
+          id_venta: selectedPayment.saleId,
+          id_reserva: selectedPayment.reservationId,
+          monto: Number(selectedPayment.amount),
+          metodo_pago: resubmitPago.metodo_pago || null,
+          numero_transaccion: resubmitPago.numero_transaccion.trim() || null,
+          comprobante_url: resubmitProofDataUrl.trim(),
+          comprobante_nombre: resubmitProofName || 'comprobante',
+          comprobante_tipo: resubmitProofMime || 'application/octet-stream',
+          observaciones,
+        });
+        toast.success('Comprobante reenviado', {
+          description: 'Registramos un nuevo abono pendiente de revisión. Revísalo en la lista de Mis abonos.',
+        });
+      } else {
+        await reservasAPI.pagarCompleto(selectedPayment.reservationId, {
+          metodo_pago: resubmitPago.metodo_pago || null,
+          numero_transaccion: resubmitPago.numero_transaccion.trim() || null,
+          comprobante_url: resubmitProofDataUrl.trim(),
+          comprobante_nombre: resubmitProofName || 'comprobante',
+          comprobante_tipo: resubmitProofMime || 'application/octet-stream',
+          observaciones,
+        });
+        toast.success('Comprobante reenviado', {
+          description:
+            selectedPayment.paymentFlowKind === 'programmed_route'
+              ? 'Actualizamos el pago de tu salida programada. Queda pendiente de verificación del equipo.'
+              : 'Actualizamos el comprobante de tu reserva. Queda pendiente de verificación del equipo.',
+        });
+      }
+      setResubmitPago({ metodo_pago: 'Transferencia', numero_transaccion: '', observaciones: '' });
+      setResubmitProofName('');
+      setResubmitProofDataUrl('');
+      setResubmitProofMime('');
+      setSelectedPayment(null);
+      setSelectedPaymentDetail(null);
+      setSelectedPaymentSale(null);
+      setPaymentsView('list');
+      await loadPayments();
+    } catch (error: any) {
+      toast.error(error?.message || 'No se pudo registrar el comprobante. Si el backend no permite otro abono, contacta a tu asesor.');
+    } finally {
+      setIsSubmittingResubmitPago(false);
+    }
   };
 
   const renderBookings = () => {
@@ -1773,9 +1911,158 @@ export function ClientDashboardImproved() {
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
             <div className="space-y-6 xl:col-span-2">
+              {selectedPayment.status === 'Rechazado' ? (
+                <Card className="border-red-200 bg-red-50 shadow-sm">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-lg text-red-900">Comprobante no aceptado</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 text-sm text-red-950">
+                    <p className="text-xs font-medium uppercase tracking-wide text-red-800">
+                      {clientPaymentFlowLabel(selectedPayment.paymentFlowKind)}
+                    </p>
+                    <p>
+                      OCCITOUR revisó tu comprobante y lo marcó como <strong>rechazado</strong>.
+                    </p>
+                    {selectedPayment.paymentFlowKind === 'programmed_route' ? (
+                      <p className="text-red-900/95">
+                        En una <strong>salida programada</strong> pagaste en el mismo paso para apartar tu cupo y enviaste el
+                        comprobante para validación. Corrige lo que indicamos abajo y, si tu venta sigue con saldo pendiente o el
+                        equipo te lo indica, vuelve a <strong>registrar el pago</strong> con un comprobante válido para poder
+                        verificar tu plaza.
+                      </p>
+                    ) : selectedPayment.paymentFlowKind === 'custom_request' ? (
+                      <p className="text-red-900/95">
+                        En una <strong>solicitud personalizada</strong> el flujo normal es que el asesor revise la solicitud y{' '}
+                        <strong>habilite el pago</strong> antes de que subas comprobante. Si rechazamos el comprobante, revisa el
+                        motivo y vuelve a enviar el pago desde el detalle de tu solicitud cuando el formulario siga habilitado.
+                      </p>
+                    ) : selectedPayment.paymentFlowKind === 'finca' ? (
+                      <p className="text-red-900/95">
+                        Este abono corresponde a tu <strong>reserva de finca</strong>. Corrige el comprobante según el motivo y,
+                        si el saldo sigue pendiente, podrás registrar un <strong>nuevo abono</strong> cuando corresponda.
+                      </p>
+                    ) : (
+                      <p className="text-red-900/95">
+                        Corrige lo indicado y vuelve a registrar el pago siguiendo las indicaciones de tu asesor cuando el saldo
+                        lo permita.
+                      </p>
+                    )}
+                    {selectedPaymentDetail?.motivo_rechazo ? (
+                      <div className="rounded-lg border border-red-200 bg-white/80 px-3 py-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-red-800">Motivo</p>
+                        <p className="mt-1 text-red-900">{selectedPaymentDetail.motivo_rechazo}</p>
+                      </div>
+                    ) : (
+                      <p className="text-red-900/90">
+                        No se registró un motivo en el sistema. Contacta a tu asesor para saber qué corregir.
+                      </p>
+                    )}
+                    {selectedPayment.paymentFlowKind !== 'custom_request' ? (
+                      <p className="text-red-900/85">
+                        Si tu venta sigue con <strong>saldo pendiente</strong>, cuando OCCITOUR lo permita podrás registrar un{' '}
+                        <strong>nuevo abono</strong> con otro comprobante; el registro rechazado queda en historial.
+                      </p>
+                    ) : (
+                      <p className="text-red-900/85">
+                        El abono rechazado queda en historial; el siguiente envío depende de que el pago siga habilitado en tu
+                        solicitud personalizada.
+                      </p>
+                    )}
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {selectedPayment.status === 'Rechazado' && selectedPayment.paymentFlowKind === 'custom_request' ? (
+                <Card className="border-amber-200 bg-amber-50/80 shadow-sm">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base text-amber-950">Cómo reenviar el comprobante</CardTitle>
+                  </CardHeader>
+                  <CardContent className="text-sm text-amber-950 space-y-2">
+                    <p>
+                      Este abono está ligado a una <strong>solicitud personalizada</strong>. Vuelve a{' '}
+                      <strong>Mis solicitudes</strong>, abre el detalle y usa el formulario de pago cuando siga habilitado.
+                    </p>
+                  </CardContent>
+                </Card>
+              ) : null}
+
+              {selectedPayment.status === 'Rechazado' && selectedPayment.paymentFlowKind !== 'custom_request' ? (
+                <Card className="border-green-200 bg-white shadow-sm">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-lg text-green-900">Reenviar comprobante</CardTitle>
+                    <p className="text-sm font-normal text-gray-600">
+                      Registramos un <strong>nuevo abono</strong> con el mismo monto ({formatCurrency(selectedPayment.amount)})
+                      para que el equipo lo revise. El pago rechazado anterior sigue en tu historial.
+                    </p>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Método de pago</Label>
+                        <Select
+                          value={resubmitPago.metodo_pago}
+                          onValueChange={(value) => setResubmitPago((p) => ({ ...p, metodo_pago: value }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecciona" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Transferencia">Transferencia</SelectItem>
+                            <SelectItem value="QR">QR</SelectItem>
+                            <SelectItem value="PSE">PSE</SelectItem>
+                            <SelectItem value="Tarjeta">Tarjeta</SelectItem>
+                            <SelectItem value="Efectivo">Efectivo</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Número de transacción (opcional)</Label>
+                        <Input
+                          value={resubmitPago.numero_transaccion}
+                          onChange={(e) => setResubmitPago((p) => ({ ...p, numero_transaccion: e.target.value }))}
+                          placeholder="Referencia del banco"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="client-resubmit-proof">Nuevo comprobante</Label>
+                      <Input
+                        id="client-resubmit-proof"
+                        type="file"
+                        accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+                        onChange={handleResubmitRejectedProofFile}
+                      />
+                      {resubmitProofName ? (
+                        <p className="text-xs text-green-800">Archivo: {resubmitProofName}</p>
+                      ) : (
+                        <p className="text-xs text-gray-500">PDF, JPG o PNG máx. 5MB.</p>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Nota para OCCITOUR (opcional)</Label>
+                      <Textarea
+                        value={resubmitPago.observaciones}
+                        onChange={(e) => setResubmitPago((p) => ({ ...p, observaciones: e.target.value }))}
+                        placeholder="Ej. comprobante corregido según indicaciones"
+                        className="min-h-[72px]"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+                      disabled={isSubmittingResubmitPago}
+                      onClick={() => void handleResubmitRejectedPago()}
+                    >
+                      {isSubmittingResubmitPago ? 'Enviando...' : 'Enviar nuevo comprobante'}
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : null}
+
               <Card>
                 <CardHeader><CardTitle>Resumen del abono</CardTitle></CardHeader>
                 <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div><p className="text-sm text-gray-600">Contexto del pago</p><p className="font-medium">{clientPaymentFlowLabel(selectedPayment.paymentFlowKind)}</p></div>
                   <div><p className="text-sm text-gray-600">Servicio</p><p className="font-medium">{selectedPayment.serviceName}</p></div>
                   <div><p className="text-sm text-gray-600">Tipo</p><p className="font-medium">{selectedPayment.serviceType}</p></div>
                   <div><p className="text-sm text-gray-600">Fecha de envío</p><p className="font-medium">{selectedPayment.date}</p></div>
@@ -1836,12 +2123,29 @@ export function ClientDashboardImproved() {
 
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Mis abonos</p><p className="text-2xl font-semibold text-green-800">{paymentStats.total}</p></CardContent></Card>
           <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Aprobados</p><p className="text-2xl font-semibold text-green-800">{paymentStats.approved}</p></CardContent></Card>
-          <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Pendientes</p><p className="text-2xl font-semibold text-green-800">{paymentStats.pending}</p></CardContent></Card>
+          <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Pendientes</p><p className="text-2xl font-semibold text-amber-700">{paymentStats.pending}</p></CardContent></Card>
+          <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Rechazados</p><p className="text-2xl font-semibold text-red-700">{paymentStats.rejected}</p></CardContent></Card>
           <Card><CardContent className="pt-6"><p className="text-sm text-gray-600">Monto enviado</p><p className="text-xl font-semibold text-green-800">{formatCurrency(paymentStats.totalAmount)}</p></CardContent></Card>
         </div>
+
+        <Card className="border-sky-100 bg-sky-50/60 shadow-sm">
+          <CardContent className="py-4 text-sm text-sky-950 space-y-2">
+            <p className="font-semibold text-sky-900">Dos formas distintas de pagar</p>
+            <ul className="list-disc pl-5 space-y-1.5 text-sky-900/95">
+              <li>
+                <strong>Salida programada:</strong> pagas en el mismo flujo en el que reservas el cupo y subes el comprobante para
+                que OCCITOUR lo valide.
+              </li>
+              <li>
+                <strong>Solicitud personalizada:</strong> primero envías la solicitud; cuando el asesor la revisa,{' '}
+                <strong>habilita el pago</strong> y recién ahí subes el comprobante desde el detalle de la solicitud.
+              </li>
+            </ul>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader><CardTitle>Mis abonos</CardTitle></CardHeader>

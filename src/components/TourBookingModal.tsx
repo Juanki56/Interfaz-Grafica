@@ -9,10 +9,18 @@ import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
-import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Calendar as BookingCalendar } from './ui/calendar';
 import { toast } from 'sonner';
-import { programacionAPI, reservasAPI, rutasAPI, solicitudesPersonalizadasAPI, type Ruta, type SolicitudPersonalizada } from '../services/api';
+import {
+  programacionAPI,
+  reservasAPI,
+  rutasAPI,
+  solicitudesPersonalizadasAPI,
+  extractRutaServiciosPredefinidos,
+  extractRutaServiciosOpcionales,
+  type Ruta,
+  type SolicitudPersonalizada,
+} from '../services/api';
 
 function parseDurationDays(durationLabel: string): number {
   const match = String(durationLabel || '').match(/(\d+)/);
@@ -21,15 +29,28 @@ function parseDurationDays(durationLabel: string): number {
 }
 
 function toYMD(date: Date): string {
-  const copy = new Date(date);
-  copy.setHours(0, 0, 0, 0);
-  return copy.toISOString().slice(0, 10);
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function addDays(date: Date, days: number): Date {
   const copy = new Date(date);
   copy.setDate(copy.getDate() + days);
   return copy;
+}
+
+/** Normaliza 'YYYY-MM-DD' del API (puede venir con hora o ISO). */
+function normalizeOccupiedYmd(value: string): string {
+  const s = String(value).trim();
+  if (!s) return '';
+  const ymd = s.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+  const parsed = new Date(s);
+  if (!Number.isNaN(parsed.getTime())) return toYMD(parsed);
+  return '';
 }
 
 interface Restaurant {
@@ -107,8 +128,31 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
 
   const [occupiedDates, setOccupiedDates] = useState<Set<string>>(new Set());
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
+  const [availabilityWarning, setAvailabilityWarning] = useState(false);
 
   const durationDays = useMemo(() => parseDurationDays(tour.duration), [tour.duration]);
+
+  const bookingCalendarModifiers = useMemo(() => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    return {
+      past: (date: Date) => {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        return d < startOfToday;
+      },
+      reserved: (date: Date) => occupiedDates.has(toYMD(date)),
+    };
+  }, [occupiedDates]);
+
+  const bookingCalendarModifiersClassNames = useMemo(
+    () => ({
+      past: 'rdp-day-past bg-slate-100 text-slate-400 line-through decoration-slate-400/90 opacity-65',
+      reserved:
+        'rdp-day-reserved bg-gray-200 text-gray-600 line-through decoration-gray-500 shadow-inner opacity-95 border border-gray-400/50',
+    }),
+    []
+  );
 
   useEffect(() => {
     if (!isOpen) return;
@@ -119,15 +163,26 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
 
     let cancelled = false;
     setIsLoadingAvailability(true);
+    setAvailabilityWarning(false);
     programacionAPI
       .getFechasOcupadasRuta(idRuta)
       .then((dates) => {
         if (cancelled) return;
-        setOccupiedDates(new Set((dates || []).map((d) => String(d).trim()).filter(Boolean)));
+        setOccupiedDates(
+          new Set(
+            (dates || [])
+              .map((d) => normalizeOccupiedYmd(String(d)))
+              .filter(Boolean)
+          )
+        );
       })
       .catch(() => {
         if (cancelled) return;
         setOccupiedDates(new Set());
+        setAvailabilityWarning(true);
+        toast.warning('No se pudieron cargar las fechas ya reservadas', {
+          description: 'Reintenta o confirma disponibilidad con OCCITOUR antes de enviar la solicitud.',
+        });
       })
       .finally(() => {
         if (cancelled) return;
@@ -440,8 +495,8 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     const capacity = Number.isFinite(tour.capacity) ? Number(tour.capacity) : 0;
     const maxCompanions = Math.max(0, Math.min((capacity > 0 ? capacity - 1 : 10), 10));
     const totalPeople = 1 + Number(bookingData.companions || 0);
-    const predefinidos = Array.isArray(routeDetail?.servicios_predefinidos) ? routeDetail.servicios_predefinidos : [];
-    const opcionales = Array.isArray(routeDetail?.servicios_opcionales) ? routeDetail.servicios_opcionales : [];
+    const predefinidos = extractRutaServiciosPredefinidos(routeDetail);
+    const opcionales = extractRutaServiciosOpcionales(routeDetail);
     const totalBaseEstimado = Math.max(0, Number(routeDetail?.precio_base ?? tour.price ?? 0)) * totalPeople;
     const totalPredefinidos = predefinidos.reduce((acc, item) => {
       const cantidad = Math.max(1, Number(item?.cantidad_default || 1));
@@ -529,38 +584,74 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                 <div>
                   <h4 className="font-semibold mb-4">Detalles de la solicitud</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="date">Fecha *</Label>
-                      <Popover>
-                        <PopoverTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="w-full justify-start text-left font-normal"
-                            disabled={isLoadingAvailability}
-                          >
-                            <Calendar className="mr-2 h-4 w-4" />
-                            {isLoadingAvailability ? 'Cargando disponibilidad…' : formatSelectedDate(selectedDate)}
-                          </Button>
-                        </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
-                          <BookingCalendar
-                            mode="single"
-                            selected={selectedDate}
-                            onSelect={(date) => {
-                              if (!date) return;
-                              handleInputChange('date', toYMD(date));
-                            }}
-                            disabled={isStartDateDisabled}
-                            initialFocus
-                          />
-                        </PopoverContent>
-                      </Popover>
+                    <div className="space-y-3 md:col-span-2">
+                      <Label htmlFor="date">Fecha de salida *</Label>
+                      {availabilityWarning ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                          No pudimos cargar las fechas ya reservadas. Las mostradas pueden estar incompletas:{' '}
+                          <strong>confirma con OCCITOUR</strong> o reabre el formulario para reintentar.
+                        </div>
+                      ) : null}
+                      <p className="text-sm text-gray-600">
+                        Fecha elegida:{' '}
+                        <span className="font-medium text-gray-900">
+                          {formatSelectedDate(selectedDate)}
+                        </span>
+                      </p>
+                      <div className="rounded-xl border border-green-200 bg-white p-4 shadow-sm">
+                        {isLoadingAvailability ? (
+                          <p className="text-sm text-gray-500 py-10 text-center">Cargando calendario de disponibilidad…</p>
+                        ) : (
+                          <>
+                            <div className="flex justify-center overflow-x-auto">
+                              <BookingCalendar
+                                mode="single"
+                                weekStartsOn={1}
+                                selected={selectedDate}
+                                onSelect={(date) => {
+                                  if (!date) return;
+                                  handleInputChange('date', toYMD(date));
+                                }}
+                                disabled={isStartDateDisabled}
+                                modifiers={bookingCalendarModifiers}
+                                modifiersClassNames={bookingCalendarModifiersClassNames}
+                                defaultMonth={selectedDate || new Date()}
+                                className="rounded-md"
+                              />
+                            </div>
+                            <div className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2 border-t border-green-100 pt-3 text-xs text-gray-600">
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="h-3.5 w-3.5 rounded border border-green-300 bg-white shadow-sm" />
+                                Disponible
+                              </span>
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="h-3.5 w-3.5 rounded bg-slate-100 border border-slate-200 line-through opacity-75 text-[0px]">
+                                  —
+                                </span>
+                                Pasado
+                              </span>
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="h-3.5 w-3.5 rounded bg-gray-200 border border-dashed border-gray-400 shadow-inner" />
+                                Día reservado u ocupado
+                              </span>
+                              <span className="inline-flex items-center gap-1.5 w-full sm:w-auto justify-center text-gray-500">
+                                Otros días en gris: tu viaje chocaría con reservas existentes según la duración.
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
                       {durationDays > 1 ? (
                         <p className="text-xs text-gray-500">
-                          La ruta dura {durationDays} días: se bloqueará el rango completo.
+                          La ruta dura {durationDays} días consecutivos: si cualquier día de ese rango ya está ocupado,
+                          no podrás iniciar la salida en una fecha que lo cruce.
                         </p>
-                      ) : null}
+                      ) : (
+                        <p className="text-xs text-gray-500">
+                          Cada día marcado como ocupado corresponde a salidas ya programadas o solicitudes que usan esa
+                          fecha para esta misma ruta.
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -712,7 +803,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   ) : (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div className="space-y-3">
-                        <h6 className="font-medium text-gray-900">Predefinidos</h6>
+                        <h6 className="font-medium text-gray-900">Incluidos con la ruta</h6>
                         {predefinidos.length > 0 ? (
                           predefinidos.map((servicio) => (
                             <div
@@ -737,7 +828,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                           ))
                         ) : (
                           <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-3 text-sm text-gray-500">
-                            Esta ruta no tiene servicios predefinidos registrados.
+                            Esta ruta no muestra servicios incluidos en el detalle.
                           </div>
                         )}
                       </div>

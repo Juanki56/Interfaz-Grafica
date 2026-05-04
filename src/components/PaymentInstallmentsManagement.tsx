@@ -59,6 +59,8 @@ import {
   type Reserva,
   type Venta,
 } from '../services/api';
+import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
+import { downloadReceiptFile } from '../utils/receiptProof';
 
 interface Client {
   id: string;
@@ -296,7 +298,11 @@ function mapPagoToInstallment(
     date: formatInputDate(pago.fecha_pago) || new Date().toISOString().split('T')[0],
     status: normalizeStatus(pago.estado),
     paymentMethod: String(pago.metodo_pago || 'Por definir'),
-    receiptUrl: pago.comprobante_url || undefined,
+    receiptUrl:
+      pago.comprobante_url ||
+      (pago as { url_comprobante?: string | null }).url_comprobante ||
+      (pago as { comprobante?: string | null }).comprobante ||
+      undefined,
     receiptName: pago.comprobante_nombre || undefined,
     receiptType: pago.comprobante_tipo || undefined,
     transactionNumber: pago.numero_transaccion || undefined,
@@ -305,14 +311,6 @@ function mapPagoToInstallment(
     verificationDate: pago.fecha_verificacion || undefined,
     verifiedBy: buildFullName((pago as any).verificado_por_nombre, (pago as any).verificado_por_apellido, ''),
   };
-}
-
-function openReceipt(url?: string | null) {
-  if (!url) {
-    toast.error('Este pago no tiene comprobante adjunto');
-    return;
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 async function fileToDataUrl(file: File) {
@@ -1387,12 +1385,14 @@ function InstallmentDetailView({
   loading,
   processing,
 }: InstallmentDetailViewProps) {
+  const [receiptViewerOpen, setReceiptViewerOpen] = useState(false);
   const [observations, setObservations] = useState(installment.observations || '');
   const [rejectionReason, setRejectionReason] = useState(installment.rejectionReason || '');
 
   useEffect(() => {
     setObservations(installment.observations || '');
     setRejectionReason(installment.rejectionReason || '');
+    setReceiptViewerOpen(false);
   }, [installment]);
 
   const clientHistoryLabel =
@@ -1408,8 +1408,27 @@ function InstallmentDetailView({
     alert(`Generando PDF del abono ${installment.id}...`);
   };
 
+  const handleDownloadReceipt = () => {
+    if (!installment.receiptUrl) {
+      toast.error('Este pago no tiene comprobante adjunto');
+      return;
+    }
+    try {
+      downloadReceiptFile(installment.receiptUrl, installment.receiptName);
+    } catch {
+      toast.error('No se pudo descargar el comprobante');
+    }
+  };
+
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="space-y-6">
+      <ReceiptProofViewerDialog
+        open={receiptViewerOpen}
+        onOpenChange={setReceiptViewerOpen}
+        url={installment.receiptUrl}
+        fileName={installment.receiptName}
+        mimeType={installment.receiptType}
+      />
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" onClick={onBack} className="text-green-700 hover:bg-green-50">
@@ -1501,7 +1520,7 @@ function InstallmentDetailView({
                           variant="outline"
                           size="sm"
                           className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                          onClick={() => openReceipt(installment.receiptUrl)}
+                          onClick={() => setReceiptViewerOpen(true)}
                         >
                           <Eye className="w-4 h-4 mr-2" />
                           Ver comprobante
@@ -1510,7 +1529,7 @@ function InstallmentDetailView({
                           variant="outline"
                           size="sm"
                           className="text-blue-600 border-blue-300 hover:bg-blue-50"
-                          onClick={() => openReceipt(installment.receiptUrl)}
+                          onClick={handleDownloadReceipt}
                         >
                           <Download className="w-4 h-4 mr-2" />
                           Descargar
@@ -1637,11 +1656,11 @@ function InstallmentDetailView({
 
                 {installment.receiptUrl && (
                   <Button
-                    onClick={() => openReceipt(installment.receiptUrl)}
+                    onClick={() => setReceiptViewerOpen(true)}
                     variant="outline"
                     className="w-full border-blue-300 text-blue-700 hover:bg-blue-50"
                   >
-                    <Download className="w-4 h-4 mr-2" />
+                    <Eye className="w-4 h-4 mr-2" />
                     Ver comprobante
                   </Button>
                 )}

@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import { clientesAPI, fincasAPI, pagosAPI, reservasAPI, rutasAPI, serviciosAPI, ventasAPI, type PagoCliente, type Reserva, type Venta } from '../services/api';
+import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
 
 // ===========================
 // INTERFACES Y TIPOS
@@ -98,6 +99,7 @@ interface SalePayment {
   transactionNumber?: string;
   receiptUrl?: string;
   receiptName?: string;
+  receiptType?: string;
   observations?: string;
   rejectionReason?: string;
 }
@@ -160,8 +162,13 @@ function mapPagoToSalePayment(pago: PagoCliente): SalePayment {
     status: normalizePaymentStatus(pago.estado),
     paymentMethod: String(pago.metodo_pago || 'Por definir'),
     transactionNumber: pago.numero_transaccion || undefined,
-    receiptUrl: pago.comprobante_url || undefined,
+    receiptUrl:
+      pago.comprobante_url ||
+      (pago as { url_comprobante?: string | null }).url_comprobante ||
+      (pago as { comprobante?: string | null }).comprobante ||
+      undefined,
     receiptName: pago.comprobante_nombre || undefined,
+    receiptType: pago.comprobante_tipo || undefined,
     observations: pago.observaciones || undefined,
     rejectionReason: pago.motivo_rechazo || undefined,
   };
@@ -1805,6 +1812,12 @@ interface SaleDetailViewProps {
 
 function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailViewProps) {
   const paymentHistory = sale.paymentHistory || [];
+  const [receiptDialog, setReceiptDialog] = useState<{
+    open: boolean;
+    url?: string;
+    name?: string;
+    mime?: string;
+  }>({ open: false });
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
@@ -1838,13 +1851,17 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
     alert(`Generando PDF de la venta ${sale.id}...`);
   };
 
-  const handleOpenReceipt = (receiptUrl?: string) => {
-    if (!receiptUrl) {
+  const handleOpenReceipt = (payment: SalePayment) => {
+    if (!payment.receiptUrl) {
       toast.error('Este pago no tiene comprobante adjunto');
       return;
     }
-
-    window.open(receiptUrl, '_blank', 'noopener,noreferrer');
+    setReceiptDialog({
+      open: true,
+      url: payment.receiptUrl,
+      name: payment.receiptName,
+      mime: payment.receiptType,
+    });
   };
 
   return (
@@ -1854,6 +1871,14 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
       exit={{ opacity: 0, y: -20 }}
       className="space-y-6"
     >
+      <ReceiptProofViewerDialog
+        open={receiptDialog.open}
+        onOpenChange={(open) => setReceiptDialog((d) => ({ ...d, open }))}
+        url={receiptDialog.url}
+        fileName={receiptDialog.name}
+        mimeType={receiptDialog.mime}
+      />
+
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" onClick={onBack} className="text-green-700 hover:bg-green-50">
@@ -2079,7 +2104,7 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleOpenReceipt(payment.receiptUrl)}
+                                onClick={() => handleOpenReceipt(payment)}
                                 className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                               >
                                 <Eye className="w-4 h-4 mr-2" />
