@@ -62,6 +62,8 @@ import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { toast } from 'sonner';
+import { usePermissions } from '../hooks/usePermissions';
+import { createModulePermissions } from '../utils/permissionHelper';
 import {
   empleadosAPI,
   programacionAPI,
@@ -166,7 +168,22 @@ interface BackendProgrammingEditFormState extends BackendProgrammingFormState {
 }
 
 export function ProgrammingManagement({ role, userId, userName }: ProgrammingManagementProps) {
-  const isStaff = role === 'admin' || role === 'advisor';
+  const permissions = usePermissions();
+  const programmingPerms = createModulePermissions(permissions, 'Programaciones');
+
+  const isStaffRole = role === 'admin' || role === 'advisor';
+
+  // Compatibilidad: algunas BD/backends pudieron usar el módulo en singular o la acción "actualizar".
+  const canViewProgramming = programmingPerms.canView() || permissions.hasPermission('programacion.leer');
+  const canCreateProgramming = programmingPerms.canCreate() || permissions.hasPermission('programacion.crear');
+  const canEditProgramming =
+    programmingPerms.canEdit() ||
+    permissions.hasPermission('programaciones.actualizar') ||
+    permissions.hasPermission('programacion.editar') ||
+    permissions.hasPermission('programacion.actualizar');
+  const canDeleteProgramming = programmingPerms.canDelete() || permissions.hasPermission('programacion.eliminar');
+
+  const canUseBackend = isStaffRole && !permissions.loadingRoles && canViewProgramming;
 
   const isGuideEmployee = (employee: EmpleadoBackend) => {
     const cargo = String(employee.cargo || '').toLowerCase();
@@ -815,7 +832,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   }, [backendCreateStep]);
 
   useEffect(() => {
-    if (!isStaff) return;
+    if (!canUseBackend) {
+      setBackendLoading(false);
+      return;
+    }
     let cancelled = false;
 
     const cargar = async () => {
@@ -850,10 +870,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     return () => {
       cancelled = true;
     };
-  }, [isStaff]);
+  }, [canUseBackend]);
 
   useEffect(() => {
-    if (!isStaff || staffActiveTab !== 'programaciones') return;
+    if (!canUseBackend || staffActiveTab !== 'programaciones') return;
 
     const intervalId = window.setInterval(async () => {
       try {
@@ -865,16 +885,38 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     }, 15000);
 
     return () => window.clearInterval(intervalId);
-  }, [isStaff, staffActiveTab]);
+  }, [canUseBackend, staffActiveTab]);
   
   const itemsPerPage = 4; // Paginación de 4 items
 
-  // Permisos según rol
-  const canCreate = role === 'admin' || role === 'advisor';
-  const canEdit = role === 'admin' || role === 'advisor';
-  const canDelete = role === 'admin';
-  const canChangeStatus = role === 'admin' || role === 'guide';
+  // Permisos (staff) por sistema dinámico de roles/permisos
+  const canCreate = isStaffRole ? canCreateProgramming : false;
+  const canEdit = isStaffRole ? canEditProgramming : false;
+  const canDelete = isStaffRole ? canDeleteProgramming : false;
+  const canChangeStatus = isStaffRole ? canEditProgramming : role === 'guide';
   const canViewDetails = true; // Todos los roles pueden ver detalles completos
+
+  if (isStaffRole && permissions.loadingRoles) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-700 font-medium">Cargando permisos...</p>
+          <p className="text-gray-600 mt-1">Estamos validando tu acceso a Programaciones.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isStaffRole && !permissions.loadingRoles && !canViewProgramming) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-700 font-medium">Acceso denegado</p>
+          <p className="text-gray-600 mt-1">No tienes permisos para ver programaciones.</p>
+        </div>
+      </div>
+    );
+  }
 
   // Filtrar programaciones
   const getFilteredProgrammings = () => {
@@ -925,7 +967,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         };
       });
 
-    let filtered = isStaff ? backendAsProgrammings : programmings;
+    let filtered = canUseBackend ? backendAsProgrammings : programmings;
 
     // Si es cliente, solo ver sus propias programaciones
     if (role === 'client') {
@@ -968,7 +1010,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     setSelectedProgramming(programming);
     setIsViewModalOpen(true);
 
-    if (!isStaff) {
+    if (!canUseBackend) {
       setBackendViewDetail(null);
       setBackendViewError(null);
       setBackendViewLoading(false);
@@ -1004,7 +1046,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const handleDelete = async () => {
     if (!selectedProgramming) return;
 
-    if (!isStaff) {
+    if (isStaffRole && !canDelete) {
+      toast.error(programmingPerms.getErrorMessage('eliminar'));
+      return;
+    }
+
+    if (!canUseBackend) {
       setProgrammings(programmings.filter(p => p.id !== selectedProgramming.id));
       toast.success('Programación eliminada exitosamente');
       setIsDeleteDialogOpen(false);
@@ -1028,7 +1075,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   };
 
   const handleStatusChange = async (programmingId: string, newStatus: Programming['status']) => {
-    if (!isStaff) {
+    if (isStaffRole && !canChangeStatus) {
+      toast.error(programmingPerms.getErrorMessage('editar'));
+      return;
+    }
+
+    if (!canUseBackend) {
       setProgrammings(programmings.map(p => 
         p.id === programmingId ? { ...p, status: newStatus } : p
       ));
@@ -1060,6 +1112,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   };
 
   const openBackendCreate = () => {
+    if (!canCreate) {
+      toast.error(programmingPerms.getErrorMessage('crear'));
+      return;
+    }
+
     setBackendCreateForm({
       id_ruta: '',
       fecha_salida: '',
@@ -1078,6 +1135,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   };
 
   const openBackendEdit = (idProgramacion: number) => {
+    if (!canEdit) {
+      toast.error(programmingPerms.getErrorMessage('editar'));
+      return;
+    }
+
     const p = backendProgramaciones.find((row) => row.id_programacion === idProgramacion);
     if (!p) {
       toast.error('No se encontró la programación');
@@ -1954,7 +2016,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           </div>
 
           {canCreate && (
-            <Button onClick={() => (isStaff ? openBackendCreate() : setIsCreateModalOpen(true))} className="bg-green-700 hover:bg-green-800">
+            <Button onClick={() => (isStaffRole ? openBackendCreate() : setIsCreateModalOpen(true))} className="bg-green-700 hover:bg-green-800">
               <Plus className="w-4 h-4 mr-2" />
               Nueva Programación
             </Button>
@@ -1975,7 +2037,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         </div>
       </motion.div>
 
-      {isStaff ? (
+      {isStaffRole ? (
         <Tabs
           value={staffActiveTab}
           onValueChange={(value) => setStaffActiveTab(value as 'programaciones' | 'solicitudes')}
@@ -2927,12 +2989,16 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               Complete los datos paso a paso para crear una nueva programación de ruta turística
             </DialogDescription>
           </DialogHeader>
-          {isStaff ? (
+          {isStaffRole ? (
             <form
               className="flex flex-col gap-4 flex-1 min-h-0 overflow-hidden"
               onSubmit={async (e) => {
                 e.preventDefault();
                 try {
+                  if (!canCreate) {
+                    toast.error(programmingPerms.getErrorMessage('crear'));
+                    return;
+                  }
                   if (backendCreateStep !== 2) {
                     const idRutaStep = Number(backendCreateForm.id_ruta);
                     if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
@@ -3295,12 +3361,16 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           Modifique los datos de la programación paso a paso
                         </DialogDescription>
                       </DialogHeader>
-                      {isStaff ? (
+                      {isStaffRole ? (
                         <form
                           className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden"
                           onSubmit={async (e) => {
                             e.preventDefault();
                             try {
+                              if (!canEdit) {
+                                toast.error(programmingPerms.getErrorMessage('editar'));
+                                return;
+                              }
                               if (!backendEditTargetId) {
                                 toast.error('No hay programación seleccionada');
                                 return;
@@ -3617,7 +3687,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           </DialogHeader>
           {selectedProgramming && (
             <ScrollArea className="max-h-[70vh] pr-4">
-              {isStaff ? (
+              {isStaffRole ? (
                 <div className="space-y-6">
                   {backendViewLoading ? (
                     <Card className="border-green-200">

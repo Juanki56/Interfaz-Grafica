@@ -231,6 +231,7 @@ Ten en cuenta estos nombres al usar `createModulePermissions`:
 'Reservas'
 'Fincas'
 'Rutas'
+'Programaciones'
 'Servicios'
 'Ventas'
 'Abonos'

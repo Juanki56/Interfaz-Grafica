@@ -21,6 +21,7 @@ export type Module =
   | 'Reservas'
   | 'Fincas'
   | 'Rutas'
+  | 'Programaciones'
   | 'Servicios'
   | 'Ventas'
   | 'Abonos'

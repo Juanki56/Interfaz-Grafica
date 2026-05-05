@@ -96,6 +96,7 @@ if (!ownerPermissions.canEdit()) {
 ```
 'Usuarios'      'Clientes'      'Propietarios'  'Empleados'
 'Reservas'      'Fincas'        'Rutas'         'Servicios'
+'Programaciones'
 'Ventas'        'Abonos'        'Pagos'         'Proveedores'
 'Restaurantes'  'Tours'         'Roles'
 ```

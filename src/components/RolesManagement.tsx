@@ -19,6 +19,10 @@ import { useAuth } from '../App';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import { permisosAPI, rolesAPI, usersAPI } from '../services/api';
+import {
+  ensureProgramacionesPermisosInCatalog,
+  PROGRAMACIONES_MODULE_KEY,
+} from '../utils/programacionesPermisosCatalog';
 
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -47,6 +51,8 @@ const moduleLabelMap: Record<string, string> = {
   reservas: 'Reservas',
   fincas: 'Fincas',
   rutas: 'Rutas',
+  programaciones: 'Programaciones',
+  programacion: 'Programaciones',
   servicios: 'Servicios',
   ventas: 'Ventas',
   abonos: 'Abonos',
@@ -159,13 +165,17 @@ export function RolesManagement() {
   };
 
   const getPermissionModules = () => {
-    const modules = Array.from(
+    const fromCatalog = Array.from(
       new Set(
         (availablePermisos || [])
           .map((perm: any) => String(perm?.nombre || '').split('.')[0])
           .filter((mod: string) => !!mod),
       ),
     ) as string[];
+
+    // Siempre mostrar Programaciones en el UI: el catálogo real viene del backend,
+    // pero el operador debe poder asignar acciones en cuanto existan las filas (o tras sync/SQL).
+    const modules = Array.from(new Set([...fromCatalog, PROGRAMACIONES_MODULE_KEY]));
 
     return modules.sort((a, b) => a.localeCompare(b));
   };
@@ -272,6 +282,11 @@ export function RolesManagement() {
 
       if (permisosResult.status === 'fulfilled') {
         catalogoPermisos = permisosResult.value || [];
+        try {
+          catalogoPermisos = await ensureProgramacionesPermisosInCatalog(catalogoPermisos);
+        } catch (err) {
+          console.warn('No se pudo sincronizar permisos de Programaciones en el catálogo:', err);
+        }
         setAvailablePermisos(catalogoPermisos || []);
       } else {
         console.warn('No se pudo cargar catálogo de permisos:', permisosResult.reason);
@@ -809,6 +824,10 @@ export function RolesManagement() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2 border rounded p-3">
                   {rolePermissionActions.map((action) => {
                     const actionId = `perm-action-${selectedPermissionModule}-${action.key}`;
+                    const permissionRecord = selectedPermissionModule
+                      ? getPermissionRecord(selectedPermissionModule, action.key)
+                      : undefined;
+                    const actionDisabled = !selectedPermissionModule || !permissionRecord;
                     return (
                       <div key={action.key} className="flex items-center space-x-2">
                         <input
@@ -816,15 +835,33 @@ export function RolesManagement() {
                           type="checkbox"
                           checked={isPermissionChecked(selectedPermissionModule, action.key)}
                           onChange={(e) => togglePermissionAction(selectedPermissionModule, action.key, e.target.checked)}
-                          disabled={!selectedPermissionModule}
+                          disabled={actionDisabled}
+                          title={
+                            actionDisabled && selectedPermissionModule
+                              ? 'Este permiso no está en el catálogo del servidor. Ejecuta el script src/database/add_programaciones_permisos.sql o habilita POST /api/permisos.'
+                              : undefined
+                          }
                         />
-                        <label htmlFor={actionId} className="text-sm">
+                        <label
+                          htmlFor={actionId}
+                          className={`text-sm ${actionDisabled ? 'text-gray-400' : ''}`}
+                        >
                           {action.label}
                         </label>
                       </div>
                     );
                   })}
                 </div>
+                {selectedPermissionModule === PROGRAMACIONES_MODULE_KEY &&
+                  rolePermissionActions.some((action) => !getPermissionRecord(PROGRAMACIONES_MODULE_KEY, action.key)) && (
+                    <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-2">
+                      Faltan filas <code className="text-xs">programaciones.*</code> en la tabla{' '}
+                      <strong>permisos</strong>. Ejecuta{' '}
+                      <code className="text-xs">src/database/add_programaciones_permisos.sql</code> en tu base de datos,
+                      o implementa en el backend <code className="text-xs">POST /api/permisos</code> para crear el catálogo
+                      automáticamente al cargar Roles.
+                    </p>
+                  )}
               </div>
 
               <div>

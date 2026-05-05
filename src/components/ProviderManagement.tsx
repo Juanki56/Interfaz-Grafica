@@ -85,12 +85,7 @@ interface ProviderManagementProps {
 
 export function ProviderManagement({ userRole = 'admin' }: ProviderManagementProps) {
   // Permisos
-  const { hasPermission, userPermissions, currentUserRole } = usePermissions();
-
-  useEffect(() => {
-    console.log('[ProviderManagement] currentUserRole:', currentUserRole);
-    console.log('[ProviderManagement] userPermissions:', userPermissions);
-  }, [currentUserRole, userPermissions]);
+  const { hasPermission, loadingRoles } = usePermissions();
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -111,10 +106,33 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
   const [providerToDelete, setProviderToDelete] = useState<number | null>(null);
 
   const isAdmin = userRole === 'admin';
+  const canReadProviders = isAdmin || hasPermission('proveedores.leer');
+  const canCreateProviders = isAdmin || hasPermission('proveedores.crear');
+  const canEditProviders = isAdmin || hasPermission('proveedores.editar');
+  const canDeleteProviders = isAdmin || hasPermission('proveedores.eliminar');
+
+  if (!loadingRoles && !canReadProviders) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-gray-700 font-medium">Acceso denegado</p>
+          <p className="text-gray-600 mt-1">No tienes permisos para ver proveedores.</p>
+        </div>
+      </div>
+    );
+  }
 
   // Cargar datos del backend
   useEffect(() => {
     const initData = async () => {
+      if (loadingRoles) return;
+      if (!canReadProviders) {
+        setProviders([]);
+        setProviderTypes([]);
+        setIsLoading(false);
+        return;
+      }
+
       if (providersCache && isCacheFresh(providersCacheAt)) {
         setProviders(providersCache);
         setIsLoading(false);
@@ -132,7 +150,7 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
     };
 
     void initData();
-  }, []);
+  }, [loadingRoles, canReadProviders]);
 
   const loadProviders = async (silent: boolean = false) => {
     try {
@@ -165,6 +183,11 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
   };
 
   const handleCreateProvider = async (newProvider: Partial<Provider>) => {
+    if (!canCreateProviders) {
+      toast.error('No tienes permiso para crear proveedores');
+      return;
+    }
+
     try {
       setIsLoading(true);
       const dataToSend = {
@@ -191,6 +214,11 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
   };
 
   const handleUpdateProvider = async (updatedProvider: Partial<Provider>) => {
+    if (!canEditProviders) {
+      toast.error('No tienes permiso para editar proveedores');
+      return;
+    }
+
     try {
       setIsLoading(true);
       await proveedoresAPI.update(selectedProvider!.id_proveedores, {
@@ -230,6 +258,11 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
   };
 
   const handleConfirmDelete = async () => {
+    if (!canDeleteProviders) {
+      toast.error('No tienes permiso para eliminar proveedores');
+      return;
+    }
+
     if (providerToDelete) {
       try {
         setIsLoading(true);
@@ -248,6 +281,11 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
   };
 
   const handleToggleStatus = async (providerId: number) => {
+    if (!canEditProviders) {
+      toast.error('No tienes permiso para editar proveedores');
+      return;
+    }
+
     try {
       const provider = providers.find(p => p.id_proveedores === providerId);
       if (!provider) return;
@@ -299,7 +337,14 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
             onToggleStatus={handleToggleStatus}
             providerTypes={Array.isArray(providerTypes) ? providerTypes : []}
             isAdmin={isAdmin}
-            hasPermission={hasPermission}
+            hasPermission={(perm) => {
+              // Centralizar permisos; forzar consistencia con can* calculados
+              if (perm === 'proveedores.leer') return canReadProviders;
+              if (perm === 'proveedores.crear') return canCreateProviders;
+              if (perm === 'proveedores.editar') return canEditProviders;
+              if (perm === 'proveedores.eliminar') return canDeleteProviders;
+              return hasPermission(perm);
+            }}
           />
         )}
         
@@ -331,7 +376,13 @@ export function ProviderManagement({ userRole = 'admin' }: ProviderManagementPro
             onDelete={handleInitiateDelete}
             onToggleStatus={handleToggleStatus}
             isAdmin={isAdmin}
-            hasPermission={hasPermission}
+            hasPermission={(perm) => {
+              if (perm === 'proveedores.leer') return canReadProviders;
+              if (perm === 'proveedores.crear') return canCreateProviders;
+              if (perm === 'proveedores.editar') return canEditProviders;
+              if (perm === 'proveedores.eliminar') return canDeleteProviders;
+              return hasPermission(perm);
+            }}
           />
         )}
       </AnimatePresence>

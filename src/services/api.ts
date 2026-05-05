@@ -1397,6 +1397,20 @@ export const permisosAPI = {
       return (response as any).data || [];
     }
   },
+
+  /** Alta de permiso en catálogo (si el backend lo expone). Body típico: nombre, descripcion. */
+  create: async (payload: { nombre: string; descripcion?: string }): Promise<Permiso | null> => {
+    const response = await fetchAPI<Permiso | { data: Permiso }>('/api/permisos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response) return null;
+    if (typeof response === 'object' && 'data' in response && response.data) {
+      return response.data;
+    }
+    return response as Permiso;
+  },
 };
 
 // =====================================================

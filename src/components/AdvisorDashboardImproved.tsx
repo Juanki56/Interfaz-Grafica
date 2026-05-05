@@ -112,6 +112,8 @@ import { UsersManagement } from './UsersManagement';
 import { EmployeeManagement } from './EmployeeManagement';
 import { RolesManagement } from './RolesManagement';
 import { DashboardAnalytics } from './DashboardAnalytics';
+import { ServiceManagement } from './ServiceManagement';
+import { BookingsManagement } from './BookingsManagement';
 
 export function AdvisorDashboardImproved() {
   const { user, adminActiveTab, setAdminActiveTab } = useAuth();
@@ -275,6 +277,13 @@ export function AdvisorDashboardImproved() {
   // Reset pagination when changing tabs or searching
   useEffect(() => {
     setCurrentPage(1);
+
+    // Evitar que queden modales abiertos al cambiar de módulo o filtro
+    setIsCreateModalOpen(false);
+    setIsEditModalOpen(false);
+    setIsViewModalOpen(false);
+    setSelectedItem(null);
+    setFormData({});
   }, [activeTab, searchTerm]);
 
   // Handle CRUD operations
@@ -948,6 +957,16 @@ export function AdvisorDashboardImproved() {
     // Special case for routes (read-only for advisors)
     if (activeTab === 'routes') {
       return <RoutesManagement userRole="advisor" />;
+    }
+
+    // Special case for bookings: usar el módulo actualizado (API + permisos + mismo diseño)
+    if (activeTab === 'bookings') {
+      return <BookingsManagement />;
+    }
+
+    // Special case for services: usar el módulo actualizado (API + permisos + mismo diseño)
+    if (activeTab === 'services') {
+      return <ServiceManagement />;
     }
 
     // Special case for sales - Use dedicated SalesManagement component for advisors (no annul option)

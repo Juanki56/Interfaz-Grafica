@@ -104,7 +104,7 @@ Esta convención está implementada en:
 
 ## Módulos soportados (frontend)
 Definidos como union type en [src/utils/permissionHelper.ts](src/utils/permissionHelper.ts):
-- Usuarios, Clientes, Propietarios, Empleados, Reservas, Fincas, Rutas, Servicios, Ventas, Abonos, Pagos, Proveedores, Restaurantes, Tours, Roles.
+- Usuarios, Clientes, Propietarios, Empleados, Reservas, Fincas, Rutas, Programaciones, Servicios, Ventas, Abonos, Pagos, Proveedores, Restaurantes, Tours, Roles.
 
 ## Hook principal: usePermissions
 En [src/hooks/usePermissions.tsx](src/hooks/usePermissions.tsx):

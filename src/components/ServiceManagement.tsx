@@ -493,10 +493,12 @@ export function ServiceManagement() {
 )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowViewDialog(false)}>Cerrar</Button>
-            <Button className="bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => { setShowViewDialog(false); if (selectedService) handleEdit(selectedService); }}>
-              <Edit className="w-4 h-4 mr-2" /> Editar
-            </Button>
+            {canEditService && (
+              <Button className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => { setShowViewDialog(false); if (selectedService) handleEdit(selectedService); }}>
+                <Edit className="w-4 h-4 mr-2" /> Editar
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
