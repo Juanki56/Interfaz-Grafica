@@ -91,6 +91,14 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
     if (canViewOwners) {
       loadPropietarios();
     }
+    // Escuchar cambios globales en propietarios para mantener sincronizados los selects
+    const handleOwnersChanged = () => {
+      if (canViewOwners) loadPropietarios();
+    };
+    window.addEventListener('propietarios:changed', handleOwnersChanged as EventListener);
+    return () => {
+      window.removeEventListener('propietarios:changed', handleOwnersChanged as EventListener);
+    };
   }, [permisos.loadingRoles, canViewFarms, canViewOwners]);
 
   const loadFarms = async () => {
@@ -128,7 +136,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
 
   const loadPropietarios = async () => {
     try {
-      const propietariosFromDB = await propietariosAPI.getAll();
+      const propietariosFromDB = await propietariosAPI.getActive();
       setPropietarios(propietariosFromDB);
       console.log('✅ Propietarios cargados:', propietariosFromDB);
     } catch (error) {
@@ -364,10 +372,12 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <option value="">− Sin propietario −</option>
-              {propietarios.map((prop) => (
-                <option key={prop.id_propietario} value={prop.id_propietario}>
-                  {prop.nombre} {prop.apellido || ''} {prop.numero_documento ? `(${prop.numero_documento})` : ''}
-                </option>
+              {propietarios
+                .filter(p => p.estado !== false)
+                .map((prop) => (
+                  <option key={prop.id_propietario} value={prop.id_propietario}>
+                    {prop.nombre} {prop.apellido || ''} {prop.numero_documento ? `(${prop.numero_documento})` : ''}
+                  </option>
               ))}
             </select>
           </div>
