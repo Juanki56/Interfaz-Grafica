@@ -43,10 +43,14 @@ import { DashboardLayout, DashboardSection } from './DashboardLayout';
 import {
   pagosAPI,
   reservasAPI,
+  rutasAPI,
+  programacionAPI,
   solicitudesPersonalizadasAPI,
   ventasAPI,
+  extractRecomendacionesParticipantes,
   type PagoCliente,
   type PagoSolicitud,
+  type Ruta,
   type SolicitudPersonalizada,
   type Venta,
 } from '../services/api';
@@ -276,6 +280,7 @@ export function ClientDashboardImproved() {
   const [selectedProgramming, setSelectedProgramming] = useState<ClientProgrammingSummary | null>(null);
   const [selectedProgrammingDetail, setSelectedProgrammingDetail] = useState<any>(null);
   const [selectedProgrammingBooking, setSelectedProgrammingBooking] = useState<any>(null);
+  const [selectedProgrammingRoute, setSelectedProgrammingRoute] = useState<Ruta | null>(null);
   const [isLoadingBookings, setIsLoadingBookings] = useState(false);
   const [isLoadingBookingDetail, setIsLoadingBookingDetail] = useState(false);
   const [isLoadingRequests, setIsLoadingRequests] = useState(false);
@@ -587,22 +592,51 @@ export function ClientDashboardImproved() {
   const loadProgrammingDetail = async (programming: ClientProgrammingSummary) => {
     try {
       setIsLoadingProgrammingDetail(true);
-      const [bookingDetail, programacionDetail] = await Promise.all([
-        reservasAPI.getById(programming.reservationId),
-        reservasAPI.getById(programming.reservationId)
-          .then((detail) => {
-            const item = Array.isArray(detail?.programaciones)
-              ? detail.programaciones.find((entry: any) => Number(entry.id_programacion) === programming.programacionId)
-              : null;
-            return item || null;
-          }),
-      ]);
+      setSelectedProgrammingRoute(null);
+      const bookingDetail = await reservasAPI.getById(programming.reservationId);
+      const line = Array.isArray(bookingDetail?.programaciones)
+        ? bookingDetail.programaciones.find(
+            (entry: any) => Number(entry.id_programacion) === programming.programacionId,
+          )
+        : null;
+
       setSelectedProgrammingBooking(bookingDetail);
-      setSelectedProgrammingDetail(programacionDetail);
+      setSelectedProgrammingDetail(line);
+
+      let idRuta = Number(
+        line?.id_ruta ?? (line as any)?.idRuta ?? (line as any)?.programacion?.id_ruta ?? 0,
+      );
+      if (!Number.isFinite(idRuta) || idRuta <= 0) {
+        try {
+          const prog = await programacionAPI.getById(programming.programacionId);
+          idRuta = Number(prog?.id_ruta ?? 0);
+        } catch {
+          idRuta = 0;
+        }
+      }
+
+      if (Number.isFinite(idRuta) && idRuta > 0) {
+        try {
+          const [rById, rActiva] = await Promise.all([
+            rutasAPI.getById(idRuta).catch(() => null),
+            rutasAPI.getActivaById(idRuta).catch(() => null),
+          ]);
+          const merged =
+            rById || rActiva
+              ? ({ ...(rActiva as object), ...(rById as object), id_ruta: idRuta } as Ruta)
+              : null;
+          setSelectedProgrammingRoute(merged);
+        } catch {
+          setSelectedProgrammingRoute(null);
+        }
+      } else {
+        setSelectedProgrammingRoute(null);
+      }
     } catch (error) {
       console.error('Error al cargar detalle de programación del cliente:', error);
       setSelectedProgrammingBooking(null);
       setSelectedProgrammingDetail(null);
+      setSelectedProgrammingRoute(null);
     } finally {
       setIsLoadingProgrammingDetail(false);
     }
@@ -737,6 +771,7 @@ export function ClientDashboardImproved() {
     setSelectedProgramming(programming);
     setSelectedProgrammingDetail(null);
     setSelectedProgrammingBooking(null);
+    setSelectedProgrammingRoute(null);
     setProgrammingView('detail');
   };
 
@@ -2206,6 +2241,7 @@ export function ClientDashboardImproved() {
               setSelectedProgramming(null);
               setSelectedProgrammingDetail(null);
               setSelectedProgrammingBooking(null);
+              setSelectedProgrammingRoute(null);
               setProgrammingView('list');
             }}>
               <ArrowLeft className="mr-2 h-4 w-4" />
@@ -2233,6 +2269,33 @@ export function ClientDashboardImproved() {
                   <div><p className="text-sm text-gray-600">Estado de la reserva</p><div className="mt-1">{getStatusBadge(selectedProgrammingBooking?.estado || 'Pendiente')}</div></div>
                 </CardContent>
               </Card>
+
+              {isLoadingProgrammingDetail ? (
+                <Card>
+                  <CardContent className="py-6 text-sm text-gray-600">Cargando recomendaciones de la ruta…</CardContent>
+                </Card>
+              ) : (
+                <Card className="border-teal-200 bg-teal-50/40">
+                  <CardHeader>
+                    <CardTitle className="text-teal-900">Recomendaciones para tu salida</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {extractRecomendacionesParticipantes(selectedProgrammingRoute) ? (
+                      <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                        {extractRecomendacionesParticipantes(selectedProgrammingRoute)}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-gray-600">
+                        No hay texto de recomendaciones para esta ruta en el sistema, o el servidor no lo envía en la
+                        API. Revisa también la ficha en <strong>Rutas</strong> o escribe a OCCITOUR.
+                      </p>
+                    )}
+                    <p className="text-xs text-teal-900/75 mt-3">
+                      Si OCCITOUR actualiza el plan, vuelve a pulsar &quot;Actualizar detalle&quot;.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
 
               <Card>
                 <CardHeader><CardTitle>Reserva relacionada</CardTitle></CardHeader>

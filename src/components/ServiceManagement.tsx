@@ -35,9 +35,23 @@ import {
   SelectTrigger, SelectValue
 } from "./ui/select";
 
+type AplicaServicioForm = "finca" | "ruta";
+
 const emptyForm = {
-  nombre: "", descripcion: "", precio: "", imagen_url: "", id_proveedores: "",
+  nombre: "",
+  descripcion: "",
+  precio: "",
+  imagen_url: "",
+  id_proveedores: "",
+  aplica_a: "ruta" as AplicaServicioForm,
 };
+
+function normalizarAplicaServicio(raw: unknown): AplicaServicioForm {
+  const v = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return v === "finca" ? "finca" : "ruta";
+}
 
 export function ServiceManagement() {
   const permisos = usePermissions();
@@ -134,6 +148,7 @@ export function ServiceManagement() {
       precio: formData.precio ? Number(formData.precio) : undefined,
       imagen_url: formData.imagen_url || undefined,
       id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
+      aplica_a: formData.aplica_a,
     });
     toast.success("Servicio creado exitosamente");
     setShowCreateDialog(false);
@@ -158,6 +173,7 @@ export function ServiceManagement() {
     precio: service.precio?.toString() || "",
     imagen_url: (service as any).imagen_url || "",
     id_proveedores: service.id_proveedores?.toString() || "",
+    aplica_a: normalizarAplicaServicio(service.aplica_a),
   });
   setShowEditDialog(true);
 };
@@ -176,6 +192,7 @@ export function ServiceManagement() {
       precio: formData.precio ? Number(formData.precio) : undefined,
       imagen_url: formData.imagen_url || undefined,
       id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
+      aplica_a: formData.aplica_a,
     } as any);
     toast.success("Servicio actualizado exitosamente");
     setShowEditDialog(false);
@@ -279,6 +296,28 @@ export function ServiceManagement() {
       </Select>
     </div>
   </div>
+  <div>
+    <Label>Ámbito del servicio *</Label>
+    <Select
+      value={formData.aplica_a}
+      onValueChange={(v: AplicaServicioForm) => setFormData((f) => ({ ...f, aplica_a: v }))}
+    >
+      <SelectTrigger>
+        <SelectValue placeholder="Selecciona ámbito" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="finca">
+          Finca — oferta global (reservas de finca, mismo catálogo para todas)
+        </SelectItem>
+        <SelectItem value="ruta">
+          Ruta — solo para rutas (elegibles al configurar cada ruta)
+        </SelectItem>
+      </SelectContent>
+    </Select>
+    <p className="text-xs text-gray-500 mt-1.5">
+      Los de <strong>finca</strong> aparecen en la reserva pública de fincas; los de <strong>ruta</strong> se asocian por ruta en programación.
+    </p>
+  </div>
 </div>
 );
 
@@ -338,6 +377,7 @@ export function ServiceManagement() {
   <TableRow className="border-green-200">
     <TableHead>Nombre</TableHead>
     <TableHead>Descripción</TableHead>
+    <TableHead>Ámbito</TableHead>
     <TableHead>Precio</TableHead>
     <TableHead>Proveedor</TableHead>
     <TableHead>Estado</TableHead>
@@ -350,6 +390,18 @@ export function ServiceManagement() {
   <TableCell className="font-medium">{service.nombre}</TableCell>
   <TableCell className="text-gray-600 text-sm max-w-[200px] truncate">
     {service.descripcion || "—"}
+  </TableCell>
+  <TableCell>
+    <Badge
+      variant="secondary"
+      className={
+        normalizarAplicaServicio(service.aplica_a) === "finca"
+          ? "bg-sky-100 text-sky-900 border-sky-200"
+          : "bg-amber-50 text-amber-900 border-amber-200"
+      }
+    >
+      {normalizarAplicaServicio(service.aplica_a) === "finca" ? "Finca" : "Ruta"}
+    </Badge>
   </TableCell>
   <TableCell>
     {service.precio != null
@@ -397,7 +449,7 @@ export function ServiceManagement() {
                 ))}
                 {paginatedServices.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                    <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                       <Settings className="w-12 h-12 mx-auto mb-2 opacity-30" />
                       <p>No hay servicios disponibles</p>
                     </TableCell>
@@ -479,6 +531,10 @@ export function ServiceManagement() {
     {[
       { label: "Nombre", value: selectedService.nombre },
       { label: "Descripción", value: selectedService.descripcion || "—" },
+      {
+        label: "Ámbito",
+        value: normalizarAplicaServicio(selectedService.aplica_a) === "finca" ? "Finca" : "Ruta",
+      },
       { label: "Precio", value: selectedService.precio ? `$${Number(selectedService.precio).toLocaleString("es-CO")}` : "—" },
       { label: "Proveedor", value: selectedService.proveedor_nombre || "Sin proveedor" },
       { label: "Estado", value: selectedService.estado ? "Activo" : "Inactivo" },

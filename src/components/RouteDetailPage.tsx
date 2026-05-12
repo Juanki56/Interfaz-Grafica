@@ -32,15 +32,13 @@ interface RouteDetailPageProps {
   onViewChange: (view: string, itemId?: string) => void;
 }
 
-const PRINCIPAL_STORAGE_IMAGE_RE = /\/principal\.(png|jpe?g|webp|gif|bmp)$/i;
-
 function bestRutaImageFromStorageUrls(
   imagenes: string[] | null | undefined,
   fallback: string | null | undefined
 ): string | null {
-  if (!imagenes?.length) return fallback?.trim() ? fallback : null;
-  const principal = imagenes.find((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
-  return principal || imagenes[0] || (fallback?.trim() ? fallback : null);
+  const urls = (imagenes ?? []).map((u) => String(u || '').trim()).filter(Boolean);
+  if (!urls.length) return fallback?.trim() ? fallback.trim() : null;
+  return urls[0] || (fallback?.trim() ? fallback.trim() : null);
 }
 
 function uniqueImageUrls(urls: string[]): string[] {
@@ -55,12 +53,8 @@ function uniqueImageUrls(urls: string[]): string[] {
   return out;
 }
 
-function orderGalleryPrincipalFirst(urls: string[]): string[] {
-  if (!urls.length) return urls;
-  const i = urls.findIndex((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
-  if (i <= 0) return urls;
-  const principal = urls[i];
-  return [principal, ...urls.slice(0, i), ...urls.slice(i + 1)];
+function orderGalleryUrls(urls: string[]): string[] {
+  return urls;
 }
 
 function normalizeString(value: unknown): string {
@@ -131,7 +125,7 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           rawImagenes = [];
         }
 
-        const orderedFromStorage = orderGalleryPrincipalFirst(uniqueImageUrls(rawImagenes));
+        const orderedFromStorage = orderGalleryUrls(uniqueImageUrls(rawImagenes));
         const storageImage = bestRutaImageFromStorageUrls(rawImagenes, base.imagen_url);
 
         let gallery: string[] = [];
@@ -333,6 +327,7 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           <div className="space-y-4">
             <div className="relative h-96 overflow-hidden rounded-2xl border border-green-100/80 shadow-xl">
               <ImageWithFallback
+                key={heroSrc ?? `hero-${heroIndex}`}
                 src={heroSrc}
                 alt={route.nombre}
                 loading="eager"
@@ -467,6 +462,26 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
                 </div>
               </div>
             </div>
+
+            {normalizeString(route.recomendaciones_participantes) ? (
+              <Card className="mb-8 border-teal-100 bg-gradient-to-br from-teal-50/90 to-white shadow-md overflow-hidden">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-xl text-teal-900 flex items-center gap-2">
+                    <Info className="w-5 h-5 shrink-0" />
+                    Recomendaciones para tu salida
+                  </CardTitle>
+                  <CardDescription className="text-teal-900/80">
+                    Qué llevar y cómo prepararte. El punto y hora exactos de encuentro para tu grupo los confirma
+                    OCCITOUR al asignar la programación.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap rounded-lg border border-teal-100 bg-white/80 p-4">
+                    {route.recomendaciones_participantes}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
 
             <Card className="bg-green-50 border-green-200 shadow-md">
               <CardHeader className="pb-2">

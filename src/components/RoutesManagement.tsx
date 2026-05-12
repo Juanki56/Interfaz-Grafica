@@ -13,7 +13,8 @@ import {
   ChevronRight,
   X,
   DollarSign,
-  CheckCircle
+  CheckCircle,
+  MapPin
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -62,12 +63,15 @@ interface Route {
   id_ruta: number;
   nombre: string;
   descripcion?: string | null;
+  ubicacion?: string | null;
   duracion_dias?: number | null;
   precio_base?: number | null;
   dificultad?: string | null;
   imagen_url?: string | null;
   estado?: boolean | null;
   fecha_creacion?: string | null;
+  recomendaciones_participantes?: string | null;
+  briefing_operativo_equipo?: string | null;
   servicios_predefinidos?: RutaServicioPredefinido[] | null;
   servicios_opcionales?: RutaServicioOpcional[] | null;
 }
@@ -131,10 +135,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const [formData, setFormData] = useState({
     nombre: '',
     descripcion: '',
+    ubicacion: '',
     duracion_dias: '',
     precio_base: '',
     dificultad: 'Moderado',
-    imagen_url: ''
+    imagen_url: '',
+    recomendaciones_participantes: '',
+    briefing_operativo_equipo: '',
   });
 
   const [createImageFiles, setCreateImageFiles] = useState<File[]>([]);
@@ -204,12 +211,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
             id_ruta: ruta.id_ruta,
             nombre: ruta.nombre,
             descripcion: ruta.descripcion,
+            ubicacion: (ruta as Ruta).ubicacion ?? null,
             duracion_dias: ruta.duracion_dias,
             precio_base: ruta.precio_base,
             dificultad: ruta.dificultad,
             imagen_url,
             estado: ruta.estado,
             fecha_creacion: ruta.fecha_creacion,
+            recomendaciones_participantes: (ruta as Ruta).recomendaciones_participantes ?? null,
+            briefing_operativo_equipo: (ruta as Ruta).briefing_operativo_equipo ?? null,
             servicios_predefinidos: ruta.servicios_predefinidos ?? [],
             servicios_opcionales: (ruta as any).servicios_opcionales ?? [],
           };
@@ -233,6 +243,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const filteredRoutes = routes.filter(route =>
     route.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     route.descripcion?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (route.ubicacion || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     route.dificultad?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -279,10 +290,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     setFormData({
       nombre: route.nombre || '',
       descripcion: route.descripcion || '',
+      ubicacion: route.ubicacion || '',
       duracion_dias: route.duracion_dias?.toString() || '',
       precio_base: route.precio_base?.toString() || '',
       dificultad: route.dificultad || 'Moderado',
-      imagen_url: route.imagen_url || ''
+      imagen_url: route.imagen_url || '',
+      recomendaciones_participantes: route.recomendaciones_participantes || '',
+      briefing_operativo_equipo: route.briefing_operativo_equipo || '',
     });
 
     const servicios = Array.isArray(route.servicios_predefinidos) ? route.servicios_predefinidos : [];
@@ -462,6 +476,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         precio_base: precio,
         dificultad: formData.dificultad || null,
         imagen_url: formData.imagen_url?.trim() || null,
+        ubicacion: formData.ubicacion?.trim() || null,
+        recomendaciones_participantes: formData.recomendaciones_participantes?.trim() || null,
+        briefing_operativo_equipo: formData.briefing_operativo_equipo?.trim() || null,
         estado: true,
         servicios_predefinidos: predefinedServices
           .map((s) => ({
@@ -489,7 +506,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       const createdIdRaw = createdPayload?.id_ruta ?? createdPayload?.id;
       const createdId = createdIdRaw != null ? Number(createdIdRaw) : null;
 
-      if (createdId && createImageFiles.length) {
+      if (createdId && createImageFiles.length > 0) {
         try {
           await rutasAPI.uploadImagenes(createdId, createImageFiles);
         } catch (e: any) {
@@ -563,6 +580,9 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
         precio_base: precio,
         dificultad: formData.dificultad || null,
         imagen_url: formData.imagen_url?.trim() || null,
+        ubicacion: formData.ubicacion?.trim() || null,
+        recomendaciones_participantes: formData.recomendaciones_participantes?.trim() || null,
+        briefing_operativo_equipo: formData.briefing_operativo_equipo?.trim() || null,
         estado: selectedRoute.estado,
         servicios_predefinidos: predefinedServices
           .map((s) => ({
@@ -586,7 +606,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       await rutasAPI.update(routeId, rutaData);
       console.log('✅ Ruta actualizada en BD');
 
-      if (editImageFiles.length) {
+      if (editImageFiles.length > 0) {
         try {
           await rutasAPI.uploadImagenes(routeId, editImageFiles);
         } catch (e: any) {
@@ -615,10 +635,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     setFormData({
       nombre: '',
       descripcion: '',
+      ubicacion: '',
       duracion_dias: '',
       precio_base: '',
       dificultad: 'Moderado',
-      imagen_url: ''
+      imagen_url: '',
+      recomendaciones_participantes: '',
+      briefing_operativo_equipo: '',
     });
     setCreateImageFiles([]);
     setEditImageFiles([]);
@@ -760,6 +783,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   <TableRow className="bg-gray-50">
                     <TableHead className="font-semibold">ID</TableHead>
                     <TableHead className="font-semibold">Nombre</TableHead>
+                    <TableHead className="font-semibold">Zona / municipios</TableHead>
                     <TableHead className="font-semibold">Descripción</TableHead>
                     <TableHead className="font-semibold">Duración (días)</TableHead>
                     <TableHead className="font-semibold">Precio Base</TableHead>
@@ -774,7 +798,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={canEditRoute ? 9 : 8} className="text-center py-12">
+                      <TableCell colSpan={canEditRoute ? 10 : 9} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-600"></div>
                           <p className="text-gray-500">Cargando rutas desde la base de datos...</p>
@@ -783,7 +807,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     </TableRow>
                   ) : currentRoutes.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={canEditRoute ? 9 : 8} className="text-center py-12">
+                      <TableCell colSpan={canEditRoute ? 10 : 9} className="text-center py-12">
                         <div className="flex flex-col items-center space-y-2">
                           <RouteIcon className="w-12 h-12 text-gray-400" />
                           <p className="text-gray-500">
@@ -820,6 +844,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                             )}
                             <p className="font-medium text-gray-900">{route.nombre}</p>
                           </div>
+                        </TableCell>
+                        <TableCell className="max-w-[140px]">
+                          <p className="text-sm text-gray-600 truncate" title={route.ubicacion || ''}>
+                            {route.ubicacion?.trim() || '—'}
+                          </p>
                         </TableCell>
                         <TableCell className="max-w-xs">
                           <p className="text-sm text-gray-600 truncate">
@@ -980,6 +1009,57 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 />
               </div>
 
+              <div>
+                <Label htmlFor="ubicacion">Zona / municipios</Label>
+                <Input
+                  id="ubicacion"
+                  value={formData.ubicacion}
+                  onChange={(e) => setFormData({ ...formData, ubicacion: e.target.value })}
+                  placeholder="Ej: Sopetrán, San Jerónimo, Santa Fe de Antioquia"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Dónde transcurre el tour en el catálogo. El punto exacto de encuentro de cada salida se define en la programación.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="recomendaciones_participantes">
+                  Recomendaciones para participantes (visible a clientes y en el catálogo)
+                </Label>
+                <Textarea
+                  id="recomendaciones_participantes"
+                  value={formData.recomendaciones_participantes}
+                  onChange={(e) =>
+                    setFormData({ ...formData, recomendaciones_participantes: e.target.value })
+                  }
+                  placeholder="Punto de encuentro, puntualidad, hidratación, vestimenta, seguridad…"
+                  rows={8}
+                  className="font-sans text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Este texto lo ven los clientes al ver la ruta y en el detalle de su programación.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="briefing_operativo_equipo">
+                  Briefing operativo / itinerario de equipo (solo guías y personal OCCITOUR)
+                </Label>
+                <Textarea
+                  id="briefing_operativo_equipo"
+                  value={formData.briefing_operativo_equipo}
+                  onChange={(e) =>
+                    setFormData({ ...formData, briefing_operativo_equipo: e.target.value })
+                  }
+                  placeholder="Horarios internos, roles, vehículos, APH, puntos de coordinación…"
+                  rows={8}
+                  className="font-sans text-sm"
+                />
+                <p className="text-xs text-amber-700 mt-1">
+                  No se muestra en la ficha pública de la ruta; sí en programación para guías y administración.
+                </p>
+              </div>
+
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="duracion_dias">Duración (días)</Label>
@@ -1024,7 +1104,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </div>
 
               <div>
-                <Label htmlFor="imagen_url">URL de Imagen</Label>
+                <Label htmlFor="imagen_url">URL de imagen (opcional)</Label>
                 <Input
                   id="imagen_url"
                   value={formData.imagen_url}
@@ -1306,6 +1386,57 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 />
               </div>
 
+              <div>
+                <Label htmlFor="edit-ubicacion">Zona / municipios</Label>
+                <Input
+                  id="edit-ubicacion"
+                  value={formData.ubicacion}
+                  onChange={(e) => setFormData({ ...formData, ubicacion: e.target.value })}
+                  placeholder="Ej: Sopetrán, San Jerónimo, Santa Fe de Antioquia"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Dónde transcurre el tour en el catálogo. El punto exacto de encuentro de cada salida se define en la programación.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="edit-recomendaciones_participantes">
+                  Recomendaciones para participantes (visible a clientes y en el catálogo)
+                </Label>
+                <Textarea
+                  id="edit-recomendaciones_participantes"
+                  value={formData.recomendaciones_participantes}
+                  onChange={(e) =>
+                    setFormData({ ...formData, recomendaciones_participantes: e.target.value })
+                  }
+                  placeholder="Punto de encuentro, puntualidad, hidratación, vestimenta, seguridad…"
+                  rows={8}
+                  className="font-sans text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Este texto lo ven los clientes al ver la ruta y en el detalle de su programación.
+                </p>
+              </div>
+
+              <div>
+                <Label htmlFor="edit-briefing_operativo_equipo">
+                  Briefing operativo / itinerario de equipo (solo guías y personal OCCITOUR)
+                </Label>
+                <Textarea
+                  id="edit-briefing_operativo_equipo"
+                  value={formData.briefing_operativo_equipo}
+                  onChange={(e) =>
+                    setFormData({ ...formData, briefing_operativo_equipo: e.target.value })
+                  }
+                  placeholder="Horarios internos, roles, vehículos, APH, puntos de coordinación…"
+                  rows={8}
+                  className="font-sans text-sm"
+                />
+                <p className="text-xs text-amber-700 mt-1">
+                  No se muestra en la ficha pública de la ruta; sí en programación para guías y administración.
+                </p>
+              </div>
+
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <Label htmlFor="edit-duracion_dias">Duración (días)</Label>
@@ -1350,7 +1481,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </div>
 
               <div>
-                <Label htmlFor="edit-imagen_url">URL de Imagen</Label>
+                <Label htmlFor="edit-imagen_url">URL de imagen (opcional)</Label>
                 <Input
                   id="edit-imagen_url"
                   value={formData.imagen_url}
@@ -1670,6 +1801,22 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 </div>
               </div>
 
+              {(selectedRoute.ubicacion || '').trim() ? (
+                <>
+                  <Separator />
+                  <div className="flex items-start gap-3 bg-slate-50 border border-slate-100 rounded-lg p-4">
+                    <MapPin className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+                    <div>
+                      <Label className="text-gray-600 mb-1 block font-semibold">Zona / municipios</Label>
+                      <p className="text-gray-900 leading-relaxed">{selectedRoute.ubicacion}</p>
+                      <p className="text-xs text-gray-500 mt-2">
+                        El lugar exacto de encuentro de cada salida aparece en la programación.
+                      </p>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+
               {/* Description */}
               {selectedRoute.descripcion && (
                 <>
@@ -1682,6 +1829,34 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                   </div>
                 </>
               )}
+
+              {selectedRoute.recomendaciones_participantes?.trim() ? (
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="text-gray-600 mb-2 block font-semibold">
+                      Recomendaciones para participantes
+                    </Label>
+                    <p className="text-gray-900 bg-emerald-50/80 border border-emerald-100 p-4 rounded-lg leading-relaxed whitespace-pre-wrap">
+                      {selectedRoute.recomendaciones_participantes}
+                    </p>
+                  </div>
+                </>
+              ) : null}
+
+              {selectedRoute.briefing_operativo_equipo?.trim() ? (
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="text-gray-600 mb-2 block font-semibold">
+                      Briefing operativo (equipo / guías)
+                    </Label>
+                    <p className="text-gray-900 bg-amber-50/80 border border-amber-200 p-4 rounded-lg leading-relaxed whitespace-pre-wrap">
+                      {selectedRoute.briefing_operativo_equipo}
+                    </p>
+                  </div>
+                </>
+              ) : null}
 
               {Array.isArray(selectedRoute.servicios_predefinidos) && selectedRoute.servicios_predefinidos.length > 0 && (
                 <>

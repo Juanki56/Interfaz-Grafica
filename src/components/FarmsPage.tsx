@@ -64,15 +64,17 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
       setLoadError(null);
       setIsLoading(true);
       try {
-        const backendFarms = await fincasAPI.getAll();
+        const backendFarms = await fincasAPI.getPublicas();
         if (cancelled) return;
         const list = Array.isArray(backendFarms) ? backendFarms : [];
         const active = list.filter((f) => f.estado !== false);
         setAllFarms(active.map(mapBackendFarmToCard));
-      } catch {
+      } catch (err: any) {
         if (!cancelled) {
           setAllFarms([]);
-          setLoadError('No se pudieron cargar las fincas. Revisa la conexión o inténtalo más tarde.');
+          setLoadError(
+            err?.message || 'No se pudieron cargar las fincas. Revisa la conexión o inténtalo más tarde.'
+          );
         }
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -210,9 +212,32 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
         {!isLoading && loadError && (
           <div className="rounded-xl border border-amber-200 bg-amber-50/90 p-8 text-center">
             <p className="text-gray-800">{loadError}</p>
-            <Button className="mt-4 bg-green-600 hover:bg-green-700" onClick={() => window.location.reload()}>
-              Reintentar
-            </Button>
+            <div className="mt-4 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              {/iniciar\s+ses(i|í)on/i.test(loadError) ? (
+                <Button
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => {
+                    const loginButton = document.querySelector('[data-login-trigger]') as HTMLElement | null;
+                    if (loginButton) {
+                      loginButton.click();
+                      return;
+                    }
+
+                    onViewChange('home');
+                    setTimeout(() => {
+                      const loginBtnRetry = document.querySelector('[data-login-trigger]') as HTMLElement | null;
+                      if (loginBtnRetry) loginBtnRetry.click();
+                    }, 150);
+                  }}
+                >
+                  Iniciar sesión
+                </Button>
+              ) : null}
+
+              <Button variant="outline" onClick={() => window.location.reload()}>
+                Reintentar
+              </Button>
+            </div>
           </div>
         )}
 

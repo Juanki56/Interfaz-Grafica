@@ -513,6 +513,7 @@ export function CreateRouteFormWithServices({
               selectedServices={selectedServices}
               onServicesChange={handleServicesChange}
               label="Servicios incluidos en la ruta"
+              contexto="ruta"
             />
           </div>
 

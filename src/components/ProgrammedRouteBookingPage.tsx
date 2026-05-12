@@ -56,6 +56,17 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
           if (!base) {
             setRuta(null);
           } else {
+            let rawImagenes: string[] = [];
+            try {
+              rawImagenes = await rutasAPI.getImagenes(idRuta);
+            } catch {
+              rawImagenes = [];
+            }
+            const firstGallery = String(rawImagenes[0] || '').trim();
+            const mergedImagenUrl = String(
+              (rById?.imagen_url || rActiva?.imagen_url || base.imagen_url || firstGallery || '') as string
+            ).trim();
+
             const sFromId = extractRutaServiciosPredefinidos(rById);
             const sFromActiva = extractRutaServiciosPredefinidos(rActiva);
             const servicios =
@@ -70,6 +81,7 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
               ...rById,
               id_ruta: idRuta,
               nombre: String(rById?.nombre || rActiva?.nombre || prog.ruta_nombre || 'Ruta'),
+              imagen_url: mergedImagenUrl || null,
               servicios_predefinidos: servicios,
             });
           }

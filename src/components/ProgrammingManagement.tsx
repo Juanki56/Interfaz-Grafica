@@ -22,7 +22,8 @@ import {
   Bed,
   Bus,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ClipboardList
 } from 'lucide-react';
 import { ProgrammingFormImproved } from './ProgrammingFormImproved';
 import { Button } from './ui/button';
@@ -61,17 +62,20 @@ import {
 import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
+import { cn } from './ui/utils';
 import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import {
   empleadosAPI,
   programacionAPI,
+  reservasAPI,
   rutasAPI,
   solicitudesPersonalizadasAPI,
   type Ruta,
   type Empleado as EmpleadoBackend,
   type Programacion as ProgramacionBackend,
+  type Reserva,
   type SolicitudPersonalizada,
 } from '../services/api';
 
@@ -719,8 +723,60 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [backendViewDetail, setBackendViewDetail] = useState<ProgramacionBackend | null>(null);
   const [backendViewLoading, setBackendViewLoading] = useState(false);
   const [backendViewError, setBackendViewError] = useState<string | null>(null);
+  const [backendViewReservas, setBackendViewReservas] = useState<Reserva[]>([]);
+  const [backendViewReservasLoading, setBackendViewReservasLoading] = useState(false);
+  const [backendViewReservasError, setBackendViewReservasError] = useState<string | null>(null);
+  /** Detalle de ruta al abrir "Ver detalle" (todos los roles): textos largos de recomendaciones / briefing */
+  const [viewModalRuta, setViewModalRuta] = useState<Ruta | null>(null);
+  const [viewModalRutaLoading, setViewModalRutaLoading] = useState(false);
+  const [reservaPreviewOpen, setReservaPreviewOpen] = useState(false);
+  const [reservaPreview, setReservaPreview] = useState<Reserva | null>(null);
+  const [reservaPreviewLoading, setReservaPreviewLoading] = useState(false);
 
   const backendGuides = backendEmpleados.filter(isGuideEmployee);
+
+  const getReservaRowId = (r: Reserva): number | null => {
+    const n = Number(r.id_reserva ?? r.id);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  const getReservaClienteLabel = (r: Reserva) =>
+    `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim() || 'Cliente';
+
+  const getReservaNotasResumen = (r: Reserva) => {
+    const raw = (r as Record<string, unknown>).observaciones;
+    const fromObs = typeof raw === 'string' ? raw : '';
+    const fromNotas = typeof r.notas === 'string' ? r.notas : '';
+    const t = (fromNotas || fromObs || '').trim();
+    return t;
+  };
+
+  const truncateResumenNotas = (text: string, max: number) => {
+    const t = text.trim();
+    if (!t) return '—';
+    if (t.length <= max) return t;
+    return `${t.slice(0, max)}…`;
+  };
+
+  const getReservaAcompanantes = (r: Reserva) =>
+    Array.isArray(r.acompanantes) ? r.acompanantes : [];
+
+  const openReservaPreview = async (id: number) => {
+    setReservaPreviewOpen(true);
+    setReservaPreview(null);
+    setReservaPreviewLoading(true);
+    try {
+      const full = await reservasAPI.getById(id);
+      setReservaPreview(full);
+    } catch (e: any) {
+      toast.error('No se pudo cargar la reserva', {
+        description: e?.message || 'Intenta de nuevo.',
+      });
+      setReservaPreviewOpen(false);
+    } finally {
+      setReservaPreviewLoading(false);
+    }
+  };
 
   const filteredCreateRoutes = backendRutas.filter((route) => {
     const query = backendCreateRouteQuery.trim().toLowerCase();
@@ -1006,14 +1062,53 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const currentProgrammings = filteredProgrammings.slice(startIndex, endIndex);
 
   // Handlers
+  const closeCreateProgrammingPage = () => {
+    setIsCreateModalOpen(false);
+    setBackendCreateStep(1);
+  };
+
+  const closeEditProgrammingPage = () => {
+    setIsEditModalOpen(false);
+    setBackendEditTargetId(null);
+  };
+
   const handleView = async (programming: Programming) => {
     setSelectedProgramming(programming);
     setIsViewModalOpen(true);
+
+    const routeId = Number(programming.routes[0]?.routeId);
+    if (Number.isFinite(routeId) && routeId > 0) {
+      setViewModalRutaLoading(true);
+      setViewModalRuta(null);
+      try {
+        let rutaDetalle: Ruta | null = null;
+        try {
+          rutaDetalle = await rutasAPI.getById(routeId);
+        } catch {
+          try {
+            rutaDetalle = await rutasAPI.getActivaById(routeId);
+          } catch {
+            rutaDetalle = null;
+          }
+        }
+        setViewModalRuta(rutaDetalle);
+      } catch {
+        setViewModalRuta(null);
+      } finally {
+        setViewModalRutaLoading(false);
+      }
+    } else {
+      setViewModalRuta(null);
+      setViewModalRutaLoading(false);
+    }
 
     if (!canUseBackend) {
       setBackendViewDetail(null);
       setBackendViewError(null);
       setBackendViewLoading(false);
+      setBackendViewReservas([]);
+      setBackendViewReservasLoading(false);
+      setBackendViewReservasError(null);
       return;
     }
 
@@ -1022,6 +1117,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       setBackendViewDetail(null);
       setBackendViewError('No se pudo identificar la programación seleccionada.');
       setBackendViewLoading(false);
+      setBackendViewReservas([]);
+      setBackendViewReservasLoading(false);
+      setBackendViewReservasError(null);
       return;
     }
 
@@ -1030,10 +1128,27 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       setBackendViewError(null);
       const detail = await programacionAPI.getById(id);
       setBackendViewDetail(detail);
+      setBackendViewLoading(false);
+
+      setBackendViewReservasLoading(true);
+      setBackendViewReservasError(null);
+      setBackendViewReservas([]);
+      try {
+        const reservas = await programacionAPI.getReservasForProgramacion(id, {
+          idRuta: detail?.id_ruta ?? null,
+        });
+        setBackendViewReservas(reservas);
+      } catch (e: any) {
+        setBackendViewReservas([]);
+        setBackendViewReservasError(e?.message || 'No se pudieron cargar las reservas de esta programación.');
+      } finally {
+        setBackendViewReservasLoading(false);
+      }
     } catch (e: any) {
       setBackendViewDetail(null);
       setBackendViewError(e?.message || 'No se pudo cargar el detalle operativo.');
-    } finally {
+      setBackendViewReservas([]);
+      setBackendViewReservasLoading(false);
       setBackendViewLoading(false);
     }
   };
@@ -1986,6 +2101,337 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     return clients.reduce((total, client) => {
       return total + 1 + client.companions.length;
     }, 0);
+  };
+
+
+  const renderStaffOperativeDetailBody = () => {
+    const routeTexts = viewModalRuta ?? selectedViewRoute;
+    const txtParticipantes = String(routeTexts?.recomendaciones_participantes ?? '').trim();
+    const txtBriefing = String(routeTexts?.briefing_operativo_equipo ?? '').trim();
+
+    return (
+    <div className="space-y-6 min-w-0 w-full max-w-full overflow-x-hidden">
+      {backendViewLoading ? (
+                  <Card className="border-green-200">
+                      <CardContent className="p-8 text-center text-gray-600">
+                        Cargando detalle operativo de la programación...
+                      </CardContent>
+                    </Card>
+                  ) : backendViewError ? (
+                    <Card className="border-red-200">
+                      <CardContent className="p-8 text-center text-red-600">
+                        {backendViewError}
+                      </CardContent>
+                    </Card>
+                  ) : backendViewDetail ? (
+                    <>
+                      <Card className="border-green-300 bg-gradient-to-r from-green-50 via-white to-emerald-50 shadow-sm">
+                        <CardContent className="p-6">
+                          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)] lg:gap-8">
+                            <div className="min-w-0 space-y-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge className="bg-green-700 text-white hover:bg-green-700">{selectedProgramming.programId}</Badge>
+                                {getStatusBadge(selectedProgramming.status)}
+                                <Badge variant="outline" className="border-green-300 text-green-700">
+                                  {backendViewDetail.es_personalizada ? 'Personalizada' : 'Estándar'}
+                                </Badge>
+                              </div>
+                              <div>
+                                <h3 className="text-2xl font-semibold leading-snug text-gray-900">
+                                  {backendViewDetail.ruta_nombre || selectedViewRoute?.nombre || 'Programación'}
+                                </h3>
+                                <p className="mt-2 text-sm leading-relaxed text-gray-600">
+                                  {selectedViewRoute?.descripcion || (backendViewDetail as any).ruta_descripcion || 'Sin descripción registrada para esta ruta.'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Salida</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {formatDisplayDateTime(backendViewDetail.fecha_salida, backendViewDetail.hora_salida)}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Regreso</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {formatDisplayDateTime(backendViewDetail.fecha_regreso, backendViewDetail.hora_regreso)}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Cupos</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {backendViewDetail.cupos_disponibles ?? '—'} / {backendViewDetail.cupos_totales ?? '—'}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Precio</p>
+                                <p className="font-medium text-gray-900 break-words">{formatCurrency(backendViewDetail.precio_programacion)}</p>
+                              </div>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,1fr)]">
+                        <Card className="border-blue-200">
+                          <CardHeader className="bg-blue-50">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              <Route className="w-5 h-5" />
+                              Ruta y logística
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-6 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                              <div>
+                                <Label className="text-gray-500">Duración</Label>
+                                <p className="font-medium text-gray-900">
+                                  {selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias
+                                    ? `${selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias} días`
+                                    : 'Sin definir'}
+                                </p>
+                              </div>
+                              <div>
+                                <Label className="text-gray-500">Dificultad</Label>
+                                <p className="font-medium text-gray-900">
+                                  {selectedViewRoute?.dificultad || (backendViewDetail as any).dificultad || 'Sin definir'}
+                                </p>
+                              </div>
+                              <div>
+                                <Label className="text-gray-500">Punto de encuentro</Label>
+                                <p className="font-medium text-gray-900">{backendViewDetail.lugar_encuentro || 'Sin definir'}</p>
+                              </div>
+                              <div>
+                                <Label className="text-gray-500">Creación</Label>
+                                <p className="font-medium text-gray-900">
+                                  {formatDisplayDate((backendViewDetail as any).fecha_creacion || selectedProgramming.createdAt)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 space-y-2">
+                              <p className="font-semibold text-gray-900">Servicios vinculados a la ruta</p>
+                              <p className="text-sm text-gray-600">
+                                {(Array.isArray(selectedViewRoute?.servicios_predefinidos) ? selectedViewRoute?.servicios_predefinidos.length : 0) || 0} predefinidos
+                                {' · '}
+                                {(Array.isArray(selectedViewRoute?.servicios_opcionales) ? selectedViewRoute?.servicios_opcionales.length : 0) || 0} opcionales
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {(selectedViewRoute?.servicios_predefinidos || []).slice(0, 4).map((servicio) => (
+                                  <Badge
+                                    key={servicio.id_ruta_servicio_predefinido ?? `pre-${servicio.id_servicio}`}
+                                    variant="outline"
+                                    className="border-green-200 text-green-700"
+                                  >
+                                    {servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}
+                                  </Badge>
+                                ))}
+                                {(selectedViewRoute?.servicios_opcionales || []).slice(0, 4).map((servicio) => (
+                                  <Badge
+                                    key={servicio.id_ruta_servicio_opcional ?? `opc-${servicio.id_servicio}`}
+                                    variant="outline"
+                                    className="border-amber-200 text-amber-700"
+                                  >
+                                    {servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <div className="space-y-5 min-w-0">
+                          <Card className="border-orange-200">
+                            <CardHeader className="bg-orange-50">
+                              <CardTitle className="text-lg flex items-center gap-2">
+                                <User className="w-5 h-5" />
+                                Guía asignado
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-6 space-y-4">
+                              <div className="flex items-center gap-3">
+                                <div className="w-12 h-12 rounded-full bg-orange-200 flex items-center justify-center">
+                                  <User className="w-6 h-6 text-orange-700" />
+                                </div>
+                                <div>
+                                  <p className="font-semibold text-gray-900">{getGuideDisplayName(selectedViewGuide)}</p>
+                                  <p className="text-sm text-gray-600">{selectedViewGuide?.cargo || selectedViewGuide?.rol_nombre || 'Sin asignación operativa'}</p>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
+                                  <p className="text-xs text-gray-500">Correo</p>
+                                  <p className="font-medium text-gray-900 break-all">{selectedViewGuide?.correo || 'Sin correo registrado'}</p>
+                                </div>
+                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
+                                  <p className="text-xs text-gray-500">Teléfono</p>
+                                  <p className="font-medium text-gray-900">
+                                    {selectedViewGuide?.telefono || (backendViewDetail as any).empleado_telefono || 'Sin teléfono registrado'}
+                                  </p>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+
+                          <Card className="border-purple-200">
+                            <CardHeader className="bg-purple-50">
+                              <CardTitle className="text-lg flex items-center gap-2">
+                                <Users className="w-5 h-5" />
+                                Capacidad comercial
+                              </CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-6">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3">
+                                  <p className="text-xs text-gray-500">Cupos totales</p>
+                                  <p className="font-semibold text-gray-900">{backendViewDetail.cupos_totales ?? '—'}</p>
+                                </div>
+                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3">
+                                  <p className="text-xs text-gray-500">Cupos disponibles</p>
+                                  <p className="font-semibold text-gray-900">{backendViewDetail.cupos_disponibles ?? '—'}</p>
+                                </div>
+                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3 col-span-2">
+                                  <p className="text-xs text-gray-500">Precio programado</p>
+                                  <p className="font-semibold text-gray-900">{formatCurrency(backendViewDetail.precio_programacion)}</p>
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        </div>
+                      </div>
+
+                      {viewModalRutaLoading ? (
+                        <p className="text-sm text-gray-500 px-1">Cargando textos de la ruta…</p>
+                      ) : null}
+                      {!viewModalRutaLoading && txtParticipantes ? (
+                        <Card className="border-emerald-200">
+                          <CardHeader className="bg-emerald-50">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              <Users className="w-5 h-5" />
+                              Recomendaciones para participantes
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-6">
+                            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                              {txtParticipantes}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      ) : null}
+                      {!viewModalRutaLoading && txtBriefing ? (
+                        <Card className="border-amber-200">
+                          <CardHeader className="bg-amber-50">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              <ClipboardList className="w-5 h-5" />
+                              Briefing operativo (equipo)
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-6">
+                            <p className="text-xs text-amber-900/80 mb-3">
+                              Uso interno OCCITOUR; comparte con el grupo operativo antes de la salida.
+                            </p>
+                            <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                              {txtBriefing}
+                            </p>
+                          </CardContent>
+                        </Card>
+                      ) : null}
+
+                      <Card className="border-teal-200">
+                        <CardHeader className="bg-teal-50">
+                          <CardTitle className="text-lg flex items-center gap-2">
+                            <Users className="w-5 h-5" />
+                            Reservas de esta salida
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-6">
+                          {backendViewReservasLoading ? (
+                            <p className="text-sm text-gray-600 text-center py-6">Cargando reservas…</p>
+                          ) : backendViewReservasError ? (
+                            <p className="text-sm text-red-600">{backendViewReservasError}</p>
+                          ) : backendViewReservas.length === 0 ? (
+                            <p className="text-sm text-gray-600">
+                              No hay reservas vinculadas a esta programación (o el listado del servidor no incluye la
+                              relación; revisa el módulo de reservas).
+                            </p>
+                          ) : (
+                            <div className="rounded-md border overflow-x-auto">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Reserva</TableHead>
+                                    <TableHead>Cliente</TableHead>
+                                    <TableHead className="text-center">Personas</TableHead>
+                                    <TableHead className="text-center w-[72px]">Acomp.</TableHead>
+                                    <TableHead>Estado</TableHead>
+                                    <TableHead>Pago</TableHead>
+                                    <TableHead className="min-w-[140px]">Notas (resumen)</TableHead>
+                                    <TableHead className="w-[120px] text-right">Acción</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {backendViewReservas.map((row, idx) => {
+                                    const rid = getReservaRowId(row);
+                                    const notas = getReservaNotasResumen(row);
+                                    return (
+                                      <TableRow key={rid != null ? String(rid) : `r-${idx}`}>
+                                        <TableCell className="font-mono text-sm">
+                                          {rid != null ? `#${rid}` : '—'}
+                                        </TableCell>
+                                        <TableCell>
+                                          <div className="font-medium text-gray-900">{getReservaClienteLabel(row)}</div>
+                                          {row.cliente_email ? (
+                                            <div className="text-xs text-gray-500 truncate max-w-[200px]">
+                                              {row.cliente_email}
+                                            </div>
+                                          ) : null}
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                          {row.numero_participantes ?? '—'}
+                                        </TableCell>
+                                        <TableCell className="text-center text-sm tabular-nums text-gray-700">
+                                          {Array.isArray(row.acompanantes) ? row.acompanantes.length : '—'}
+                                        </TableCell>
+                                        <TableCell className="text-sm">{row.estado ?? '—'}</TableCell>
+                                        <TableCell className="text-sm">{row.estado_pago ?? '—'}</TableCell>
+                                        <TableCell className="text-sm text-gray-700 max-w-[220px] align-top">
+                                          <span title={notas && notas !== '—' ? notas : ''}>
+                                            {truncateResumenNotas(notas, 90)}
+                                          </span>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                          <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            className="border-teal-300 text-teal-800"
+                                            disabled={rid == null}
+                                            onClick={() => rid != null && openReservaPreview(rid)}
+                                          >
+                                            Ver reserva
+                                          </Button>
+                                        </TableCell>
+                                      </TableRow>
+                                    );
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    </>
+                  ) : (
+                    <Card className="border-gray-200">
+                      <CardContent className="p-8 text-center text-gray-600">
+                        No se encontró información detallada para esta programación.
+                      </CardContent>
+                    </Card>
+                  )}
+
+    </div>
+    );
   };
 
   return (
@@ -2974,7 +3420,6 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         </>
       )}
 
-      {/* Modal Crear */}
       <Dialog
         open={isCreateModalOpen}
         onOpenChange={(open) => {
@@ -3055,8 +3500,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                   const refreshed = await programacionAPI.getAll();
                   setBackendProgramaciones(refreshed);
                   toast.success('Programación creada');
-                  setIsCreateModalOpen(false);
-                  setBackendCreateStep(1);
+                  closeCreateProgrammingPage();
                 } catch (err: any) {
                   toast.error('No se pudo crear la programación', {
                     description: err?.message || 'Error desconocido',
@@ -3262,6 +3706,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
                             placeholder="Ej: Parque principal, entrada de la finca, terminal..."
                           />
+
+                          <p className="mt-2 text-xs text-gray-500">
+                            Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
+                          </p>
                         </CardContent>
                       </Card>
                     </div>
@@ -3286,7 +3734,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-gray-200 shrink-0 bg-white">
-                <Button type="button" variant="outline" onClick={() => setIsCreateModalOpen(false)}>
+                <Button type="button" variant="outline" onClick={closeCreateProgrammingPage}>
                   Cancelar
                 </Button>
                 {backendCreateStep === 1 ? (
@@ -3319,7 +3767,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
             </form>
                       ) : (
                         <ProgrammingFormImproved
-                          onClose={() => setIsCreateModalOpen(false)}
+                          onClose={closeCreateProgrammingPage}
                           availableRoutes={availableRoutes}
                           availableClients={availableClients}
                           availableGuides={availableGuides}
@@ -3344,23 +3792,26 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             };
                             setProgrammings([newProgramming, ...programmings]);
                             toast.success('Programación creada exitosamente');
-                            setIsCreateModalOpen(false);
+                            closeCreateProgrammingPage();
                           }}
                           userName={userName}
                         />
                       )}
-                    </DialogContent>
-                  </Dialog>
+        </DialogContent>
+      </Dialog>
 
-                  {/* Modal Editar */}
-                  <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-                    <DialogContent className="max-w-7xl w-[96vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col min-h-0">
-                      <DialogHeader className="shrink-0">
-                        <DialogTitle className="text-green-800">Editar Programación</DialogTitle>
-                        <DialogDescription>
-                          Modifique los datos de la programación paso a paso
-                        </DialogDescription>
-                      </DialogHeader>
+      <Dialog
+        open={isEditModalOpen}
+        onOpenChange={(open) => {
+          setIsEditModalOpen(open);
+          if (!open) setBackendEditTargetId(null);
+        }}
+      >
+        <DialogContent className="max-w-7xl w-[96vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col min-h-0">
+          <DialogHeader className="shrink-0">
+            <DialogTitle className="text-green-800">Editar Programación</DialogTitle>
+            <DialogDescription>Modifique los datos de la programación paso a paso</DialogDescription>
+          </DialogHeader>
                       {isStaffRole ? (
                         <form
                           className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden"
@@ -3427,8 +3878,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               const refreshed = await programacionAPI.getAll();
                               setBackendProgramaciones(refreshed);
                               toast.success('Programación actualizada');
-                              setIsEditModalOpen(false);
-                              setBackendEditTargetId(null);
+                              closeEditProgrammingPage();
                             } catch (err: any) {
                               toast.error('No se pudo actualizar la programación', {
                                 description: err?.message || 'Error desconocido',
@@ -3573,6 +4023,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     onChange={(e) => setBackendEditForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
                                     placeholder="Ej: Parque principal / Entrada finca..."
                                   />
+
+                                  <p className="mt-2 text-xs text-gray-500">
+                                    Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
+                                  </p>
                                 </CardContent>
                               </Card>
                             </div>
@@ -3615,7 +4069,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           </div>
 
                           <div className="flex justify-end gap-2 pt-2">
-                            <Button type="button" variant="outline" onClick={() => setIsEditModalOpen(false)}>
+                            <Button type="button" variant="outline" onClick={closeEditProgrammingPage}>
                               Cancelar
                             </Button>
                             <Button type="submit" className="bg-green-700 hover:bg-green-800" disabled={backendEditSaving}>
@@ -3626,7 +4080,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                       ) : selectedProgramming ? (
                         <ProgrammingFormImproved
                           programming={selectedProgramming}
-                          onClose={() => setIsEditModalOpen(false)}
+                          onClose={closeEditProgrammingPage}
                           isEdit
                           availableRoutes={availableRoutes}
                           availableClients={availableClients}
@@ -3651,14 +4105,13 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               } : p
                             ));
                             toast.success('Programación actualizada exitosamente');
-                            setIsEditModalOpen(false);
+                            closeEditProgrammingPage();
                           }}
                           userName={userName}
                         />
                       ) : null}
-
-                    </DialogContent>
-                  </Dialog>
+        </DialogContent>
+      </Dialog>
 
       {/* Modal Ver Detalles */}
       <Dialog
@@ -3669,223 +4122,42 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
             setBackendViewDetail(null);
             setBackendViewError(null);
             setBackendViewLoading(false);
+            setBackendViewReservas([]);
+            setBackendViewReservasLoading(false);
+            setBackendViewReservasError(null);
+            setViewModalRuta(null);
+            setViewModalRutaLoading(false);
           }
         }}
       >
-        <DialogContent className="max-w-5xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>
-              {role === 'guide' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
-               role === 'client' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
-               `Detalles de la Programación - ${selectedProgramming?.programId}`}
-            </DialogTitle>
-            <DialogDescription>
-              {role === 'guide' ? 'Información completa de la programación donde estás asignado como guía' : 
-               role === 'client' ? 'Información completa de tu programación, grupo y ruta asignada' : 
-               'Información completa de la programación'}
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent
+          className={cn(
+            '!flex max-h-[92vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]',
+            isStaffRole ? 'w-[min(96vw,1280px)] max-w-[calc(100vw-2rem)]' : 'max-w-5xl',
+          )}
+        >
+          <div className="shrink-0 space-y-2 border-b px-6 py-4 pr-12">
+            <DialogHeader className="text-left">
+              <DialogTitle>
+                {role === 'guide' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
+                 role === 'client' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
+                 `Detalles de la Programación - ${selectedProgramming?.programId}`}
+              </DialogTitle>
+              <DialogDescription>
+                {role === 'guide' ? 'Información completa de la programación donde estás asignado como guía' : 
+                 role === 'client' ? 'Información completa de tu programación, grupo y ruta asignada' : 
+                 'Información completa de la programación'}
+              </DialogDescription>
+            </DialogHeader>
+          </div>
           {selectedProgramming && (
-            <ScrollArea className="max-h-[70vh] pr-4">
+            <div
+              className="min-h-0 w-full flex-1 overflow-y-scroll overflow-x-hidden px-6 pb-6 pt-2 [scrollbar-gutter:stable]"
+              style={{ maxHeight: 'calc(92vh - 7.5rem)' }}
+            >
               {isStaffRole ? (
-                <div className="space-y-6">
-                  {backendViewLoading ? (
-                    <Card className="border-green-200">
-                      <CardContent className="p-8 text-center text-gray-600">
-                        Cargando detalle operativo de la programación...
-                      </CardContent>
-                    </Card>
-                  ) : backendViewError ? (
-                    <Card className="border-red-200">
-                      <CardContent className="p-8 text-center text-red-600">
-                        {backendViewError}
-                      </CardContent>
-                    </Card>
-                  ) : backendViewDetail ? (
-                    <>
-                      <Card className="border-green-300 bg-gradient-to-r from-green-50 via-white to-emerald-50 shadow-sm">
-                        <CardContent className="p-6">
-                          <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
-                            <div className="space-y-3">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <Badge className="bg-green-700 text-white hover:bg-green-700">{selectedProgramming.programId}</Badge>
-                                {getStatusBadge(selectedProgramming.status)}
-                                <Badge variant="outline" className="border-green-300 text-green-700">
-                                  {backendViewDetail.es_personalizada ? 'Personalizada' : 'Estándar'}
-                                </Badge>
-                              </div>
-                              <div>
-                                <h3 className="text-2xl font-semibold text-gray-900">
-                                  {backendViewDetail.ruta_nombre || selectedViewRoute?.nombre || 'Programación'}
-                                </h3>
-                                <p className="text-sm text-gray-600 mt-1">
-                                  {selectedViewRoute?.descripcion || (backendViewDetail as any).ruta_descripcion || 'Sin descripción registrada para esta ruta.'}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3 min-w-0 lg:min-w-[320px]">
-                              <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Salida</p>
-                                <p className="font-medium text-gray-900">
-                                  {formatDisplayDateTime(backendViewDetail.fecha_salida, backendViewDetail.hora_salida)}
-                                </p>
-                              </div>
-                              <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Regreso</p>
-                                <p className="font-medium text-gray-900">
-                                  {formatDisplayDateTime(backendViewDetail.fecha_regreso, backendViewDetail.hora_regreso)}
-                                </p>
-                              </div>
-                              <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Cupos</p>
-                                <p className="font-medium text-gray-900">
-                                  {backendViewDetail.cupos_disponibles ?? '—'} / {backendViewDetail.cupos_totales ?? '—'}
-                                </p>
-                              </div>
-                              <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Precio</p>
-                                <p className="font-medium text-gray-900">{formatCurrency(backendViewDetail.precio_programacion)}</p>
-                              </div>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <div className="grid grid-cols-1 lg:grid-cols-[1.05fr_0.95fr] gap-5">
-                        <Card className="border-blue-200">
-                          <CardHeader className="bg-blue-50">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                              <Route className="w-5 h-5" />
-                              Ruta y logística
-                            </CardTitle>
-                          </CardHeader>
-                          <CardContent className="p-6 space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                              <div>
-                                <Label className="text-gray-500">Duración</Label>
-                                <p className="font-medium text-gray-900">
-                                  {selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias
-                                    ? `${selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias} días`
-                                    : 'Sin definir'}
-                                </p>
-                              </div>
-                              <div>
-                                <Label className="text-gray-500">Dificultad</Label>
-                                <p className="font-medium text-gray-900">
-                                  {selectedViewRoute?.dificultad || (backendViewDetail as any).dificultad || 'Sin definir'}
-                                </p>
-                              </div>
-                              <div>
-                                <Label className="text-gray-500">Punto de encuentro</Label>
-                                <p className="font-medium text-gray-900">{backendViewDetail.lugar_encuentro || 'Sin definir'}</p>
-                              </div>
-                              <div>
-                                <Label className="text-gray-500">Creación</Label>
-                                <p className="font-medium text-gray-900">
-                                  {formatDisplayDate((backendViewDetail as any).fecha_creacion || selectedProgramming.createdAt)}
-                                </p>
-                              </div>
-                            </div>
-
-                            <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 space-y-2">
-                              <p className="font-semibold text-gray-900">Servicios vinculados a la ruta</p>
-                              <p className="text-sm text-gray-600">
-                                {(Array.isArray(selectedViewRoute?.servicios_predefinidos) ? selectedViewRoute?.servicios_predefinidos.length : 0) || 0} predefinidos
-                                {' · '}
-                                {(Array.isArray(selectedViewRoute?.servicios_opcionales) ? selectedViewRoute?.servicios_opcionales.length : 0) || 0} opcionales
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {(selectedViewRoute?.servicios_predefinidos || []).slice(0, 4).map((servicio) => (
-                                  <Badge
-                                    key={servicio.id_ruta_servicio_predefinido ?? `pre-${servicio.id_servicio}`}
-                                    variant="outline"
-                                    className="border-green-200 text-green-700"
-                                  >
-                                    {servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}
-                                  </Badge>
-                                ))}
-                                {(selectedViewRoute?.servicios_opcionales || []).slice(0, 4).map((servicio) => (
-                                  <Badge
-                                    key={servicio.id_ruta_servicio_opcional ?? `opc-${servicio.id_servicio}`}
-                                    variant="outline"
-                                    className="border-amber-200 text-amber-700"
-                                  >
-                                    {servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        <div className="space-y-5">
-                          <Card className="border-orange-200">
-                            <CardHeader className="bg-orange-50">
-                              <CardTitle className="text-lg flex items-center gap-2">
-                                <User className="w-5 h-5" />
-                                Guía asignado
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent className="p-6 space-y-4">
-                              <div className="flex items-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-orange-200 flex items-center justify-center">
-                                  <User className="w-6 h-6 text-orange-700" />
-                                </div>
-                                <div>
-                                  <p className="font-semibold text-gray-900">{getGuideDisplayName(selectedViewGuide)}</p>
-                                  <p className="text-sm text-gray-600">{selectedViewGuide?.cargo || selectedViewGuide?.rol_nombre || 'Sin asignación operativa'}</p>
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Correo</p>
-                                  <p className="font-medium text-gray-900 break-all">{selectedViewGuide?.correo || 'Sin correo registrado'}</p>
-                                </div>
-                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Teléfono</p>
-                                  <p className="font-medium text-gray-900">
-                                    {selectedViewGuide?.telefono || (backendViewDetail as any).empleado_telefono || 'Sin teléfono registrado'}
-                                  </p>
-                                </div>
-                              </div>
-                            </CardContent>
-                          </Card>
-
-                          <Card className="border-purple-200">
-                            <CardHeader className="bg-purple-50">
-                              <CardTitle className="text-lg flex items-center gap-2">
-                                <Users className="w-5 h-5" />
-                                Capacidad comercial
-                              </CardTitle>
-                            </CardHeader>
-                            <CardContent className="p-6">
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Cupos totales</p>
-                                  <p className="font-semibold text-gray-900">{backendViewDetail.cupos_totales ?? '—'}</p>
-                                </div>
-                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Cupos disponibles</p>
-                                  <p className="font-semibold text-gray-900">{backendViewDetail.cupos_disponibles ?? '—'}</p>
-                                </div>
-                                <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3 col-span-2">
-                                  <p className="text-xs text-gray-500">Precio programado</p>
-                                  <p className="font-semibold text-gray-900">{formatCurrency(backendViewDetail.precio_programacion)}</p>
-                                </div>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <Card className="border-gray-200">
-                      <CardContent className="p-8 text-center text-gray-600">
-                        No se encontró información detallada para esta programación.
-                      </CardContent>
-                    </Card>
-                  )}
+                <div className="min-w-0 max-w-full pr-2">
+                  {renderStaffOperativeDetailBody()}
                 </div>
               ) : (
                 <div className="space-y-6">
@@ -4009,6 +4281,52 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                     </div>
                   </CardContent>
                 </Card>
+
+                {viewModalRutaLoading ? (
+                  <Card className="border-slate-200">
+                    <CardContent className="p-4 text-sm text-gray-600">
+                      Cargando recomendaciones de la ruta…
+                    </CardContent>
+                  </Card>
+                ) : null}
+                {role === 'client' &&
+                !viewModalRutaLoading &&
+                String(viewModalRuta?.recomendaciones_participantes ?? '').trim() ? (
+                  <Card className="border-emerald-200">
+                    <CardHeader className="bg-emerald-50">
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <Users className="w-5 h-5" />
+                        Recomendaciones para tu salida
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                        {viewModalRuta!.recomendaciones_participantes}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : null}
+                {role === 'guide' &&
+                !viewModalRutaLoading &&
+                String(viewModalRuta?.briefing_operativo_equipo ?? '').trim() ? (
+                  <Card className="border-amber-200">
+                    <CardHeader className="bg-amber-50">
+                      <CardTitle className="text-lg flex items-center gap-2">
+                        <ClipboardList className="w-5 h-5" />
+                        Briefing operativo (equipo)
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-6">
+                      <p className="text-xs text-amber-900/80 mb-3">
+                        Itinerario y coordinación interna. El punto de encuentro oficial con el grupo puede
+                        figurar también en la programación.
+                      </p>
+                      <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                        {viewModalRuta!.briefing_operativo_equipo}
+                      </p>
+                    </CardContent>
+                  </Card>
+                ) : null}
 
                 {/* Clientes y Acompañantes */}
                 <Card className="border-purple-200">
@@ -4209,8 +4527,120 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                 )}
                 </div>
               )}
-            </ScrollArea>
+            </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={reservaPreviewOpen}
+        onOpenChange={(open) => {
+          setReservaPreviewOpen(open);
+          if (!open) setReservaPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {(() => {
+                const id = reservaPreview ? getReservaRowId(reservaPreview) : null;
+                return id != null ? `Reserva #${id}` : 'Reserva';
+              })()}
+            </DialogTitle>
+            <DialogDescription>Información completa de esta reserva.</DialogDescription>
+          </DialogHeader>
+          {reservaPreviewLoading ? (
+            <p className="text-sm text-gray-600 py-8 text-center">Cargando…</p>
+          ) : reservaPreview ? (
+            <div className="space-y-4 text-sm">
+              <div>
+                <Label className="text-gray-500">Cliente</Label>
+                <p className="font-medium text-gray-900">{getReservaClienteLabel(reservaPreview)}</p>
+              </div>
+              {(reservaPreview.cliente_email || reservaPreview.cliente_telefono) && (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  { !!reservaPreview.cliente_email && (
+                    <div>
+                      <Label className="text-gray-500">Correo</Label>
+                      <p className="break-all text-gray-900">{reservaPreview.cliente_email}</p>
+                    </div>
+                  )}
+                  { !!reservaPreview.cliente_telefono && (
+                    <div>
+                      <Label className="text-gray-500">Teléfono</Label>
+                      <p className="text-gray-900">{reservaPreview.cliente_telefono}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-gray-500">Participantes</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.numero_participantes ?? '—'}</p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Fecha reserva</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.fecha_reserva ?? '—'}</p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Estado</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.estado ?? '—'}</p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Pago</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.estado_pago ?? '—'}</p>
+                </div>
+              </div>
+              <div className="rounded-lg border border-purple-200 bg-purple-50/40 p-4">
+                <Label className="flex items-center gap-2 text-gray-800">
+                  <Users className="h-4 w-4 text-purple-700" />
+                  Acompañantes ({getReservaAcompanantes(reservaPreview).length})
+                </Label>
+                {getReservaAcompanantes(reservaPreview).length > 0 ? (
+                  <div className="mt-3 overflow-x-auto rounded-md border border-purple-100 bg-white">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-muted/0">
+                          <TableHead>Nombre</TableHead>
+                          <TableHead>Documento</TableHead>
+                          <TableHead>Teléfono</TableHead>
+                          <TableHead className="whitespace-nowrap">F. nacimiento</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {getReservaAcompanantes(reservaPreview).map((acompanante, aidx) => (
+                          <TableRow key={acompanante.id_detalle_reserva_acompanante ?? `ac-${aidx}`}>
+                            <TableCell className="font-medium text-gray-900">
+                              {`${acompanante.nombre || ''} ${acompanante.apellido || ''}`.trim() || '—'}
+                            </TableCell>
+                            <TableCell>
+                              {[acompanante.tipo_documento, acompanante.numero_documento].filter(Boolean).join(' ').trim() || '—'}
+                            </TableCell>
+                            <TableCell>{acompanante.telefono?.trim() || '—'}</TableCell>
+                            <TableCell className="whitespace-nowrap">
+                              {acompanante.fecha_nacimiento
+                                ? formatDisplayDate(acompanante.fecha_nacimiento)
+                                : '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-gray-600">
+                    Esta reserva no tiene acompañantes registrados en el sistema.
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label className="text-gray-500">Notas / observaciones</Label>
+                <p className="mt-1 whitespace-pre-wrap rounded-md border bg-gray-50 p-3 text-gray-800">
+                  {getReservaNotasResumen(reservaPreview) || 'Sin notas registradas.'}
+                </p>
+              </div>
+            </div>
+          ) : null}
         </DialogContent>
       </Dialog>
 

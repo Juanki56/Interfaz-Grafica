@@ -180,6 +180,7 @@ export function HeaderNavigation({ currentView, onViewChange, onLogin }: HeaderN
                 <Button
                   onClick={onLogin}
                   variant="outline"
+                  data-login-trigger
                   size="sm"
                   className="sm:hidden"
                 >

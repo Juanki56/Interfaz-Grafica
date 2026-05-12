@@ -1,29 +1,49 @@
-import { useState, createContext, useContext, useEffect } from 'react';
+import { Suspense, lazy, useState, createContext, useContext, useEffect } from 'react';
 import { Mountain } from 'lucide-react';
 import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
 import { ForgotPasswordForm } from './components/ForgotPasswordForm';
 import { VerifyEmailForm } from './components/VerifyEmailForm';
 import { ResetPasswordForm } from './components/ResetPasswordForm';
-import { AdminDashboardWithDropdown as AdminDashboard } from './components/AdminDashboardWithDropdown';
-import { AdvisorDashboardImproved as AdvisorDashboard } from './components/AdvisorDashboardImproved';
-import { GuideDashboardImproved as GuideDashboard } from './components/GuideDashboardImproved';
-import { ClientDashboardImproved as ClientDashboard } from './components/ClientDashboardImproved';
-import { Navigation } from './components/Navigation';
 import { PublicNavigation } from './components/PublicNavigation';
 import { HeaderNavigation } from './components/HeaderNavigation';
 import { HomePage } from './components/HomePage';
-import { RoutesPage } from './components/RoutesPage';
-import { RouteDetailPage } from './components/RouteDetailPage';
-import { FarmsPage } from './components/FarmsPage';
-import { FarmDetailPage } from './components/FarmDetailPage';
-import { ProgrammedRouteBookingPage } from './components/ProgrammedRouteBookingPage';
-import { UserProfile } from './components/UserProfile';
-import { ProgrammingManagement } from './components/ProgrammingManagement';
 import { WhatsAppButton } from './components/WhatsAppButton';
-import { ServicesProvider } from './hooks/useServices';
+import { ServicesProvider } from './hooks/ServicesProvider';
 import { buildApiUrl, getAuthHeaders, API_CONFIG } from './config/api.config';
 import { decodeJWT, debugToken } from './utils/jwtDecoder';
+
+const Navigation = lazy(() => import('./components/Navigation').then((m) => ({ default: m.Navigation })));
+
+const AdminDashboard = lazy(() =>
+  import('./components/AdminDashboardWithDropdown').then((m) => ({ default: m.AdminDashboardWithDropdown }))
+);
+const AdvisorDashboard = lazy(() =>
+  import('./components/AdvisorDashboardImproved').then((m) => ({ default: m.AdvisorDashboardImproved }))
+);
+const GuideDashboard = lazy(() =>
+  import('./components/GuideDashboardImproved').then((m) => ({ default: m.GuideDashboardImproved }))
+);
+const ClientDashboard = lazy(() =>
+  import('./components/ClientDashboardImproved').then((m) => ({ default: m.ClientDashboardImproved }))
+);
+
+const RoutesPage = lazy(() => import('./components/RoutesPage').then((m) => ({ default: m.RoutesPage })));
+const RouteDetailPage = lazy(() =>
+  import('./components/RouteDetailPage').then((m) => ({ default: m.RouteDetailPage }))
+);
+const FarmsPage = lazy(() => import('./components/FarmsPage').then((m) => ({ default: m.FarmsPage })));
+const FarmDetailPage = lazy(() =>
+  import('./components/FarmDetailPage').then((m) => ({ default: m.FarmDetailPage }))
+);
+const ProgrammedRouteBookingPage = lazy(() =>
+  import('./components/ProgrammedRouteBookingPage').then((m) => ({ default: m.ProgrammedRouteBookingPage }))
+);
+
+const ProgrammingManagement = lazy(() =>
+  import('./components/ProgrammingManagement').then((m) => ({ default: m.ProgrammingManagement }))
+);
+const UserProfile = lazy(() => import('./components/UserProfile').then((m) => ({ default: m.UserProfile })));
 
 const ROLE_MAPPING: Record<string, 'admin' | 'advisor' | 'guide' | 'client'> = {
   administrador: 'admin',
@@ -1199,7 +1219,11 @@ export default function App() {
       >
         <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
         {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (
-          <>
+          <Suspense
+            fallback={
+              <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+            }
+          >
             <Navigation />
             <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen">
               {currentView === 'dashboard' ? renderDashboard() : 
@@ -1214,7 +1238,7 @@ export default function App() {
                ) :
                currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
             </main>
-          </>
+          </Suspense>
         ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking') ? (
           <>
             <HeaderNavigation 
@@ -1223,7 +1247,13 @@ export default function App() {
               onLogin={handleShowLogin}
             />
             <main className="pt-16 min-h-screen">
-              {renderPublicView()}
+              <Suspense
+                fallback={
+                  <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                }
+              >
+                {renderPublicView()}
+              </Suspense>
             </main>
             <WhatsAppButton />
           </>
@@ -1235,7 +1265,13 @@ export default function App() {
               onLogin={handleShowLogin}
             />
             <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen">
-              {renderPublicView()}
+              <Suspense
+                fallback={
+                  <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                }
+              >
+                {renderPublicView()}
+              </Suspense>
             </main>
           </>
         )}

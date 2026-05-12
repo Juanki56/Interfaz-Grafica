@@ -18,6 +18,7 @@ import {
   solicitudesPersonalizadasAPI,
   extractRutaServiciosPredefinidos,
   extractRutaServiciosOpcionales,
+  extractRecomendacionesParticipantes,
   type Ruta,
   type SolicitudPersonalizada,
 } from '../services/api';
@@ -219,15 +220,18 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
 
     let cancelled = false;
     setIsLoadingRouteDetail(true);
-    rutasAPI
-      .getById(idRuta)
-      .then((detail) => {
+    Promise.all([rutasAPI.getById(idRuta).catch(() => null), rutasAPI.getActivaById(idRuta).catch(() => null)])
+      .then(([rById, rActiva]) => {
         if (cancelled) return;
-        setRouteDetail(detail);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setRouteDetail(null);
+        const merged =
+          rById || rActiva
+            ? ({
+                ...(rActiva as object),
+                ...(rById as object),
+                id_ruta: idRuta,
+              } as Ruta)
+            : null;
+        setRouteDetail(merged);
       })
       .finally(() => {
         if (cancelled) return;
@@ -579,6 +583,24 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
               </div>
             </div>
 
+            {type === 'ruta' ? (
+              <div className="mb-6 rounded-lg border border-teal-200 bg-teal-50/90 px-4 py-4">
+                <h4 className="font-semibold text-teal-900 mb-2">Recomendaciones para tu salida</h4>
+                {isLoadingRouteDetail ? (
+                  <p className="text-sm text-gray-500">Cargando recomendaciones de la ruta…</p>
+                ) : extractRecomendacionesParticipantes(routeDetail) ? (
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
+                    {extractRecomendacionesParticipantes(routeDetail)}
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-600">
+                    Aún no hay recomendaciones publicadas para esta ruta en el sistema, o el servidor no las está
+                    enviando. Pide detalles a OCCITOUR o revisa la ficha completa en <strong>Rutas</strong> del menú.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
             {!createdSolicitud ? (
               <div className="space-y-6">
                 <div>
@@ -673,7 +695,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                         <SelectTrigger>
                           <SelectValue placeholder="Seleccionar" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent disablePortal>
                           {Array.from({ length: maxCompanions + 1 }, (_, i) => (
                             <SelectItem key={i} value={i.toString()}>
                               {i} acompañante{i !== 1 ? 's' : ''}
@@ -737,7 +759,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                                 <SelectTrigger>
                                   <SelectValue placeholder="Selecciona" />
                                 </SelectTrigger>
-                                <SelectContent>
+                                <SelectContent disablePortal>
                                   <SelectItem value="CC">CC</SelectItem>
                                   <SelectItem value="TI">TI</SelectItem>
                                   <SelectItem value="CE">CE</SelectItem>
@@ -986,7 +1008,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                           <SelectTrigger>
                             <SelectValue placeholder="Selecciona" />
                           </SelectTrigger>
-                          <SelectContent>
+                          <SelectContent disablePortal>
                             <SelectItem value="Transferencia">Transferencia</SelectItem>
                             <SelectItem value="QR">QR</SelectItem>
                             <SelectItem value="PSE">PSE</SelectItem>
@@ -1190,7 +1212,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                       <SelectTrigger>
                         <SelectValue placeholder="Seleccionar" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent disablePortal>
                         {Array.from({ length: Math.min(tour.capacity, 10) }, (_, i) => (
                           <SelectItem key={i} value={i.toString()}>
                             {i} acompañante{i !== 1 ? 's' : ''}
@@ -1270,7 +1292,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                             <SelectTrigger className="w-full">
                               <SelectValue placeholder="Seleccionar noches" />
                             </SelectTrigger>
-                            <SelectContent>
+                            <SelectContent disablePortal>
                               {Array.from({ length: 7 }, (_, i) => (
                                 <SelectItem key={i + 1} value={(i + 1).toString()}>
                                   {i + 1} noche{i + 1 > 1 ? 's' : ''}

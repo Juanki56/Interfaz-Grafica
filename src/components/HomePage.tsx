@@ -11,7 +11,7 @@ import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { useAuth } from '../App';
 import { motion } from 'motion/react';
-import heroImage from 'figma:asset/d8d3bc172f99829d8ecd1672db5f890e39054e24.png';
+import heroImage from '../assets/hero.webp';
 
 interface HomePageProps {
   onViewChange: (view: string, itemId?: string) => void;
@@ -42,30 +42,64 @@ export function HomePage({ onViewChange }: HomePageProps) {
   const [routes, setRoutes] = useState<Ruta[]>([]);
   const [programaciones, setProgramaciones] = useState<Programacion[]>([]);
   const [homeFincas, setHomeFincas] = useState<Finca[]>([]);
+  const [loadingRoutes, setLoadingRoutes] = useState(true);
+  const [loadingProgramaciones, setLoadingProgramaciones] = useState(true);
+  const [loadingFincas, setLoadingFincas] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
-    (async () => {
-      try {
-        const [routesData, progData, fincasData] = await Promise.all([
-          rutasAPI.getActivas(),
-          programacionAPI.getPublicas(),
-          fincasAPI.getAll(),
-        ]);
+    setLoadingRoutes(true);
+    setLoadingProgramaciones(true);
+    setLoadingFincas(true);
+
+    // Importante: NO esperar a que terminen los 3 endpoints para pintar.
+    // Si uno se demora (p.ej. rutas), no debe bloquear rutas programadas/fincas.
+    rutasAPI
+      .getActivas({ limit: 24, cacheTtlMs: 2 * 60_000 })
+      .then((routesData) => {
         if (cancelled) return;
         setRoutes(Array.isArray(routesData) ? routesData : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setRoutes([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingRoutes(false);
+      });
+
+    programacionAPI
+      .getPublicas({ limit: 40, cacheTtlMs: 60_000 })
+      .then((progData) => {
+        if (cancelled) return;
         setProgramaciones(Array.isArray(progData) ? progData : []);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setProgramaciones([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingProgramaciones(false);
+      });
+
+    fincasAPI
+      .getPublicas({ limit: 4, cacheTtlMs: 5 * 60_000 })
+      .then((fincasData) => {
+        if (cancelled) return;
         const activas = Array.isArray(fincasData) ? fincasData.filter((f) => f.estado !== false) : [];
         setHomeFincas(activas.slice(0, 4));
-      } catch {
-        if (!cancelled) {
-          setRoutes([]);
-          setProgramaciones([]);
-          setHomeFincas([]);
-        }
-      }
-    })();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHomeFincas([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingFincas(false);
+      });
 
     return () => {
       cancelled = true;
@@ -185,6 +219,8 @@ export function HomePage({ onViewChange }: HomePageProps) {
                           <ImageWithFallback
                             src={imagen}
                             alt={nombre}
+                            loading="lazy"
+                            decoding="async"
                             className="w-full h-full object-cover"
                           />
                           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
@@ -268,6 +304,12 @@ export function HomePage({ onViewChange }: HomePageProps) {
               <CarouselNext className="border-green-300" />
             </Carousel>
           </div>
+        ) : loadingProgramaciones ? (
+          <Card className="border-dashed border-green-200 bg-white/80">
+            <CardContent className="py-10 text-center text-gray-600">
+              Cargando rutas programadas...
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-dashed border-green-200 bg-white/80">
             <CardContent className="py-10 text-center text-gray-600">
@@ -288,6 +330,9 @@ export function HomePage({ onViewChange }: HomePageProps) {
             src={heroImage}
             alt="Paisaje montañoso colombiano con senderista contemplando la naturaleza"
             className="w-full h-full object-cover"
+            loading="eager"
+            decoding="async"
+            fetchPriority="high"
             style={{ filter: 'saturate(0.8) opacity(0.9)' }}
           />
           <div className="absolute inset-0 bg-black/50"></div>
@@ -325,7 +370,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
       {renderScheduledRoutesSection()}
 
       {/* Featured Route Section */}
-      {featuredRoute && (
+      {featuredRoute ? (
         <section className="py-20 px-4">
           <div className="max-w-7xl mx-auto">
             <div className="text-center mb-12">
@@ -339,6 +384,8 @@ export function HomePage({ onViewChange }: HomePageProps) {
                   <ImageWithFallback
                     src={featuredRoute.imagen_url || CATALOG_IMAGE_PLACEHOLDER}
                     alt={featuredRoute.nombre}
+                    loading="lazy"
+                    decoding="async"
                     className="w-full h-full object-cover"
                   />
                   <Badge className="absolute top-4 left-4 bg-green-600 text-white">
@@ -393,7 +440,26 @@ export function HomePage({ onViewChange }: HomePageProps) {
             </Card>
           </div>
         </section>
-      )}
+      ) : loadingRoutes ? (
+        <section className="py-20 px-4">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-4xl mb-4 text-gray-800">Ruta Destacada</h2>
+              <p className="text-xl text-gray-600">Cargando catálogo...</p>
+            </div>
+            <Card className="overflow-hidden bg-white shadow-xl">
+              <div className="grid md:grid-cols-2 gap-0">
+                <div className="h-64 md:h-full bg-gray-100" />
+                <CardContent className="p-8">
+                  <div className="h-8 w-2/3 bg-gray-100 rounded mb-4" />
+                  <div className="h-4 w-full bg-gray-100 rounded mb-2" />
+                  <div className="h-4 w-5/6 bg-gray-100 rounded" />
+                </CardContent>
+              </div>
+            </Card>
+          </div>
+        </section>
+      ) : null}
 
       {/* Features Section */}
       <section className="py-20 px-4 bg-white">
@@ -445,13 +511,16 @@ export function HomePage({ onViewChange }: HomePageProps) {
         viewport={{ once: true }}
         transition={{ duration: 0.8 }}
       >
-        {/* Background Image */}
-        <div 
-          className="absolute inset-0 bg-cover bg-center"
-          style={{
-            backgroundImage: 'url(https://images.unsplash.com/photo-1571245692302-0aa602fc33b4?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxiZWF1dGlmdWwlMjBmYXJtJTIwaG91c2UlMjBuYXR1cmV8ZW58MXx8fHwxNzY1MjIwNzE0fDA&ixlib=rb-4.1.0&q=80&w=1080)',
-          }}
-        >
+        {/* Background Image (lazy) */}
+        <div className="absolute inset-0">
+          <ImageWithFallback
+            src="https://images.unsplash.com/photo-1571245692302-0aa602fc33b4?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxiZWF1dGlmdWwlMjBmYXJtJTIwaG91c2UlMjBuYXR1cmV8ZW58MXx8fHwxNzY1MjIwNzE0fDA&ixlib=rb-4.1.0&q=80&w=1080"
+            alt=""
+            aria-hidden="true"
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
           <div className="absolute inset-0 bg-gradient-to-r from-green-900/50 to-emerald-900/40"></div>
         </div>
 
@@ -504,12 +573,31 @@ export function HomePage({ onViewChange }: HomePageProps) {
           </motion.div>
 
           {destacadasFincas.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/70 py-14 text-center">
-              <p className="text-gray-700 mb-4">Aún no hay fincas públicas para mostrar aquí.</p>
-              <Button variant="outline" className="border-green-600 text-green-700" onClick={() => onViewChange('farms')}>
-                Ir al catálogo de fincas
-              </Button>
-            </div>
+            loadingFincas ? (
+              <div className="grid md:grid-cols-2 gap-8">
+                <Card className="overflow-hidden shadow-xl border-2 border-emerald-200">
+                  <div className="h-80 bg-gray-100" />
+                  <CardContent className="p-6">
+                    <div className="h-5 w-1/2 bg-gray-100 rounded mb-3" />
+                    <div className="h-4 w-full bg-gray-100 rounded" />
+                  </CardContent>
+                </Card>
+                <Card className="overflow-hidden shadow-xl border-2 border-sky-200">
+                  <div className="h-80 bg-gray-100" />
+                  <CardContent className="p-6">
+                    <div className="h-5 w-1/2 bg-gray-100 rounded mb-3" />
+                    <div className="h-4 w-full bg-gray-100 rounded" />
+                  </CardContent>
+                </Card>
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-dashed border-emerald-200 bg-white/70 py-14 text-center">
+                <p className="text-gray-700 mb-4">Aún no hay fincas públicas para mostrar aquí.</p>
+                <Button variant="outline" className="border-green-600 text-green-700" onClick={() => onViewChange('farms')}>
+                  Ir al catálogo de fincas
+                </Button>
+              </div>
+            )
           ) : (
             <div className="grid md:grid-cols-2 gap-8">
               {destacadasFincas.map((finca, idx) => {

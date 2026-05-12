@@ -1,26 +1,56 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Coffee, TreePine, Music, UtensilsCrossed, UserCheck, Sparkles, Check } from 'lucide-react';
+import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Coffee, TreePine, Sparkles, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { FarmBookingModal } from './FarmBookingModal';
 import { useAuth } from '../App';
-import { fincasAPI, type Finca as BackendFinca } from '../services/api';
+import { fincasAPI, serviciosAPI, type Finca as BackendFinca, type Servicio } from '../services/api';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { inferirServicioAplicacion, servicioVisibleEnContexto } from '../utils/servicioAplicacion';
+import type { LucideIcon } from 'lucide-react';
 
 interface FarmDetailPageProps {
   farmId: string;
   onViewChange: (view: string, itemId?: string) => void;
 }
 
-// Servicios adicionales disponibles
-const additionalServices = [
-  { id: 'dj', name: 'DJ', price: 500000, icon: Music },
-  { id: 'banquete', name: 'Banquete', price: 800000, icon: UtensilsCrossed },
-  { id: 'meseros', name: 'Meseros', price: 300000, icon: UserCheck },
-  { id: 'decoracion', name: 'Decoración', price: 600000, icon: Sparkles },
-];
+/** Ítem para UI de reserva (modal + checklist): mismo contrato que antes esperaba `FarmBookingModal`. */
+type FincaReservaServicioItem = {
+  id: string;
+  name: string;
+  price: number;
+  icon: LucideIcon;
+};
+
+function servicioCatalogoActivo(s: Servicio): boolean {
+  const e = s.estado;
+  if (e === false) return false;
+  const t = String(e ?? '')
+    .trim()
+    .toLowerCase();
+  if (t === 'inactivo' || t === 'inactive') return false;
+  return true;
+}
+
+function mapServiciosApiAFincaReserva(rows: Servicio[]): FincaReservaServicioItem[] {
+  const out: FincaReservaServicioItem[] = [];
+  for (const s of rows) {
+    if (!servicioCatalogoActivo(s)) continue;
+    const aplic = inferirServicioAplicacion(s as unknown as Record<string, unknown>);
+    if (!servicioVisibleEnContexto(aplic, 'finca')) continue;
+    const name = String(s.nombre || '').trim();
+    if (!name) continue;
+    out.push({
+      id: String(s.id_servicio),
+      name,
+      price: Number(s.precio ?? 0),
+      icon: Sparkles,
+    });
+  }
+  return out;
+}
 
 const PRINCIPAL_STORAGE_IMAGE_RE = /\/principal\.(png|jpe?g|webp|gif|bmp)$/i;
 
@@ -88,6 +118,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
   const { user } = useAuth();
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [fincaExtraServices, setFincaExtraServices] = useState<FincaReservaServicioItem[]>([]);
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [farm, setFarm] = useState<FarmDetailModel | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -96,6 +127,8 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
     let cancelled = false;
     setFarm(null);
     setCurrentImageIndex(0);
+    setSelectedServices([]);
+    setFincaExtraServices([]);
     setLoadState('loading');
 
     const numericFarmId = Number(farmId);
@@ -106,7 +139,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
 
     const loadFarm = async () => {
       try {
-        const backendFarm = await fincasAPI.getById(numericFarmId);
+        const backendFarm = await fincasAPI.getPublicaById(numericFarmId);
         if (cancelled) return;
         if (!backendFarm) {
           setLoadState('error');
@@ -114,10 +147,15 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
         }
 
         let imagenes: string[] = [];
+        let extrasRaw: Servicio[] = [];
         try {
-          imagenes = await fincasAPI.getImagenes(numericFarmId);
+          [imagenes, extrasRaw] = await Promise.all([
+            fincasAPI.getImagenes(numericFarmId).catch(() => [] as string[]),
+            serviciosAPI.getDisponiblesFincaPublicos().catch(() => [] as Servicio[]),
+          ]);
         } catch {
           imagenes = [];
+          extrasRaw = [];
         }
 
         const orderedStorage = orderGalleryPrincipalFirst(uniqueImageUrls(imagenes));
@@ -139,6 +177,10 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
               );
 
         const model = buildFarmDetail(enriched, gallery);
+        const extrasMapped = mapServiciosApiAFincaReserva(extrasRaw);
+        if (cancelled) return;
+        setFincaExtraServices(extrasMapped);
+        setSelectedServices((prev) => prev.filter((id) => extrasMapped.some((s) => s.id === id)));
         setFarm(model);
         setLoadState('ready');
       } catch {
@@ -462,45 +504,63 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                   <CardTitle>Selecciona los servicios que necesites</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {additionalServices.map(service => {
-                    const ServiceIcon = service.icon;
-                    const isSelected = selectedServices.includes(service.id);
-                    
-                    return (
-                      <div 
-                        key={service.id} 
-                        className={`flex items-center justify-between p-4 rounded-lg border-2 transition-all cursor-pointer ${
-                          isSelected 
-                            ? 'border-green-500 bg-green-50' 
-                            : 'border-gray-200 bg-white hover:border-green-300'
-                        }`}
-                        onClick={() => handleServiceChange(service.id)}
-                      >
-                        <div className="flex items-center space-x-4">
-                          <div className={`p-3 rounded-lg ${
-                            isSelected ? 'bg-green-600' : 'bg-gray-100'
-                          }`}>
-                            <ServiceIcon className={`w-6 h-6 ${
-                              isSelected ? 'text-white' : 'text-gray-600'
-                            }`} />
+                  <p className="text-sm text-gray-500 -mt-1">
+                    Solo se muestran servicios marcados para aplicar en fincas (no los exclusivos de rutas).
+                  </p>
+                  {fincaExtraServices.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50/80 py-8 text-center text-sm text-gray-600">
+                      No hay servicios adicionales de finca disponibles por ahora. Puedes reservar igualmente;
+                      si necesitas algo especial, indícalo en observaciones al confirmar.
+                    </p>
+                  ) : (
+                    fincaExtraServices.map((service) => {
+                      const ServiceIcon = service.icon;
+                      const isSelected = selectedServices.includes(service.id);
+
+                      return (
+                        <div
+                          key={service.id}
+                          role="button"
+                          tabIndex={0}
+                          className={`flex cursor-pointer items-center justify-between rounded-lg border-2 p-4 transition-all ${
+                            isSelected
+                              ? 'border-green-500 bg-green-50'
+                              : 'border-gray-200 bg-white hover:border-green-300'
+                          }`}
+                          onClick={() => handleServiceChange(service.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleServiceChange(service.id);
+                            }
+                          }}
+                        >
+                          <div className="flex items-center space-x-4">
+                            <div
+                              className={`rounded-lg p-3 ${isSelected ? 'bg-green-600' : 'bg-gray-100'}`}
+                            >
+                              <ServiceIcon
+                                className={`h-6 w-6 ${isSelected ? 'text-white' : 'text-gray-600'}`}
+                              />
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-800">{service.name}</p>
+                              <p className="text-sm text-gray-500">
+                                ${service.price.toLocaleString('es-CO')}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="font-medium text-gray-800">{service.name}</p>
-                            <p className="text-sm text-gray-500">
-                              ${service.price.toLocaleString()}
-                            </p>
+                          <div
+                            className={`flex h-6 w-6 items-center justify-center rounded-full border-2 ${
+                              isSelected ? 'border-green-600 bg-green-600' : 'border-gray-300'
+                            }`}
+                          >
+                            {isSelected && <Check className="h-4 w-4 text-white" />}
                           </div>
                         </div>
-                        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
-                          isSelected 
-                            ? 'border-green-600 bg-green-600' 
-                            : 'border-gray-300'
-                        }`}>
-                          {isSelected && <Check className="w-4 h-4 text-white" />}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -528,8 +588,8 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                           <p className="text-sm text-gray-500 uppercase tracking-wide">
                             Servicios Adicionales:
                           </p>
-                          {selectedServices.map(serviceId => {
-                            const service = additionalServices.find(s => s.id === serviceId);
+                          {selectedServices.map((serviceId) => {
+                            const service = fincaExtraServices.find((s) => s.id === serviceId);
                             return service ? (
                               <div key={serviceId} className="flex justify-between items-center text-sm">
                                 <span className="text-gray-600">{service.name}</span>
@@ -551,7 +611,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                         {(
                           (farm.pricePerNight > 0 ? farm.pricePerNight : 0) +
                           selectedServices.reduce((total, serviceId) => {
-                            const service = additionalServices.find((s) => s.id === serviceId);
+                            const service = fincaExtraServices.find((s) => s.id === serviceId);
                             return total + (service?.price || 0);
                           }, 0)
                         ).toLocaleString('es-CO')}
@@ -595,7 +655,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
           isOpen={isBookingModalOpen}
           onClose={() => setIsBookingModalOpen(false)}
           farm={farm}
-          availableServices={additionalServices}
+          availableServices={fincaExtraServices}
           selectedServices={selectedServices}
         />
       )}

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowLeft,
   Calendar,
@@ -16,7 +17,9 @@ import { toast } from 'sonner';
 import { useAuth } from '../App';
 import {
   reservasAPI,
+  rutasAPI,
   extractRutaServiciosPredefinidos,
+  extractRecomendacionesParticipantes,
   type PagoReservaProgramada,
   type Programacion,
   type Ruta,
@@ -24,6 +27,7 @@ import {
   type VentaReserva,
 } from '../services/api';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -75,9 +79,6 @@ const OCCITOURS_PAYMENT_INFO = {
   bancolombiaTipoCuenta: 'Ahorros',
   bancolombiaNumeroCuenta: '12345678901',
 };
-
-const FALLBACK_ROUTE_IMAGE =
-  'https://images.unsplash.com/photo-1551632811-561732d1e306?auto=format&fit=crop&w=1400&q=80';
 
 function formatDurationDays(duracionDias?: number | null): string {
   if (duracionDias == null || Number.isNaN(Number(duracionDias))) return '—';
@@ -181,6 +182,9 @@ export function ProgrammedRouteBookingModal({
   const [createdCheckout, setCreatedCheckout] = useState<CreatedCheckoutState | null>(null);
   const [registeredPayment, setRegisteredPayment] = useState<PagoReservaProgramada | null>(null);
   const [proofFileName, setProofFileName] = useState('');
+  const [routeImages, setRouteImages] = useState<string[]>([]);
+  const [selectedRouteImageIndex, setSelectedRouteImageIndex] = useState(0);
+  const [isRouteImageLightboxOpen, setIsRouteImageLightboxOpen] = useState(false);
   const [paymentData, setPaymentData] = useState({
     metodo_pago: 'Transferencia',
     numero_transaccion: '',
@@ -224,6 +228,9 @@ export function ProgrammedRouteBookingModal({
     setIsPaying(false);
     setCreatedCheckout(null);
     setRegisteredPayment(null);
+    setRouteImages([]);
+    setSelectedRouteImageIndex(0);
+    setIsRouteImageLightboxOpen(false);
     setPaymentData({
       metodo_pago: 'Transferencia',
       numero_transaccion: '',
@@ -234,6 +241,103 @@ export function ProgrammedRouteBookingModal({
     });
     setProofFileName('');
   }, [isOpen, programacion?.id_programacion]);
+
+  const primaryRouteImageUrl = useMemo(
+    () => String(ruta?.imagen_url || programacion?.ruta_imagen_url || '').trim(),
+    [ruta?.imagen_url, programacion?.ruta_imagen_url]
+  );
+
+  const resolvedDefaultRouteImage = useMemo(
+    () => primaryRouteImageUrl || CATALOG_IMAGE_PLACEHOLDER,
+    [primaryRouteImageUrl]
+  );
+
+  const resolvedRouteImages = useMemo(() => {
+    return routeImages.length > 0 ? routeImages : [resolvedDefaultRouteImage];
+  }, [routeImages, resolvedDefaultRouteImage]);
+
+  useEffect(() => {
+    if (!isRouteImageLightboxOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setIsRouteImageLightboxOpen(false);
+        return;
+      }
+
+      if (resolvedRouteImages.length <= 1) return;
+
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setSelectedRouteImageIndex((idx) => (idx - 1 + resolvedRouteImages.length) % resolvedRouteImages.length);
+      }
+
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        setSelectedRouteImageIndex((idx) => (idx + 1) % resolvedRouteImages.length);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRouteImageLightboxOpen, resolvedRouteImages.length]);
+
+  useEffect(() => {
+    if (!isRouteImageLightboxOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [isRouteImageLightboxOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const idRuta = Number(ruta?.id_ruta ?? programacion?.id_ruta);
+
+    if (!Number.isFinite(idRuta) || idRuta <= 0) {
+      setRouteImages(primaryRouteImageUrl ? [primaryRouteImageUrl] : []);
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const list = await rutasAPI.getImagenes(idRuta);
+        if (cancelled) return;
+        const all = [primaryRouteImageUrl, ...(Array.isArray(list) ? list : [])]
+          .map((x) => String(x || '').trim())
+          .filter(Boolean);
+        const unique: string[] = [];
+        const seen = new Set<string>();
+        for (const src of all) {
+          if (seen.has(src)) continue;
+          seen.add(src);
+          unique.push(src);
+        }
+        setRouteImages(unique);
+      } catch {
+        if (cancelled) return;
+        setRouteImages(primaryRouteImageUrl ? [primaryRouteImageUrl] : []);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, ruta?.id_ruta, programacion?.id_ruta, primaryRouteImageUrl]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSelectedRouteImageIndex((current) => {
+      if (routeImages.length <= 0) return 0;
+      if (current < 0) return 0;
+      if (current >= routeImages.length) return 0;
+      return current;
+    });
+  }, [isOpen, routeImages]);
 
   useEffect(() => {
     if (!createdCheckout || registeredPayment || !isOpen) return;
@@ -512,8 +616,12 @@ export function ProgrammedRouteBookingModal({
   const renderBookingBody = () => {
     if (!programacion) return null;
 
-    const heroImage = String(ruta?.imagen_url || '').trim() || FALLBACK_ROUTE_IMAGE;
+    const defaultHeroImage = resolvedDefaultRouteImage;
+    const images = resolvedRouteImages;
+    const safeIndex = Math.max(0, Math.min(selectedRouteImageIndex, images.length - 1));
+    const heroImage = images[safeIndex] || defaultHeroImage;
     const descripcionRuta = normalizeMultilineText(ruta?.descripcion);
+    const recomendacionesTxt = extractRecomendacionesParticipantes(ruta);
     const serviciosIncluidos: RutaServicioPredefinido[] = extractRutaServiciosPredefinidos(ruta);
     const guiaNombre = [programacion.empleado_nombre, programacion.empleado_apellido]
       .map((x) => String(x || '').trim())
@@ -532,63 +640,138 @@ export function ProgrammedRouteBookingModal({
             ? `Regreso: ${horaRegreso}`
             : 'Horario por confirmar';
     const estadoSalida = estadoSalidaParaCliente(programacion.estado);
-    const heroMinHeight = layout === 'page' ? 'min-h-[220px] sm:min-h-[260px] md:min-h-[300px]' : 'min-h-[160px]';
+    const heroImageMaxHClass =
+      layout === 'page'
+        ? 'max-h-[200px] sm:max-h-[240px] md:max-h-[260px]'
+        : 'max-h-[160px] sm:max-h-[200px]';
+    const canNavigateImages = images.length > 1;
+    const photosLabel = canNavigateImages ? `${images.length} fotos` : '1 foto';
 
     return (
-      <div className={scrollAreaClassName}>
-            <div
-              className={`relative w-full overflow-hidden rounded-2xl border border-green-100 shadow-xl ${heroMinHeight}`}
-            >
-              <ImageWithFallback
-                src={heroImage}
-                alt={routeName}
-                className="absolute inset-0 h-full w-full object-cover"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/45 to-black/10" />
-              <div className="relative flex h-full min-h-[inherit] flex-col justify-end p-5 sm:p-7 md:p-8">
-                <div className="flex flex-wrap items-center gap-2 mb-3">
-                  <Badge variant="outline" translate="no" className={estadoSalida.badgeClassName}>
-                    {estadoSalida.label}
-                  </Badge>
-                  <Badge
-                    translate="no"
+      <>
+        <div className={scrollAreaClassName}>
+          <div
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setSelectedRouteImageIndex(0);
+                setIsRouteImageLightboxOpen(true);
+              }
+            }}
+            onClick={() => {
+              setSelectedRouteImageIndex(0);
+              setIsRouteImageLightboxOpen(true);
+            }}
+            className="flex w-full cursor-pointer flex-col overflow-hidden rounded-2xl border border-green-100 bg-white shadow-xl isolate"
+          >
+            {/* Franja horizontal a todo el ancho: imagen completa (sin recorte) */}
+            <div className="relative w-full bg-gradient-to-b from-emerald-950/[0.06] to-emerald-900/10">
+              <div className="absolute top-3 right-3 z-10 flex max-w-[min(100%,14rem)] flex-wrap items-center justify-end gap-2 sm:top-4 sm:right-4 sm:max-w-none">
+                <Badge
+                  variant="secondary"
+                  className="border border-green-200/90 bg-white/95 text-green-900 shadow-sm backdrop-blur-sm"
+                >
+                  {photosLabel}
+                </Badge>
+                {canNavigateImages ? (
+                  <Button
+                    type="button"
                     variant="secondary"
-                    className="border border-green-200/90 bg-white/95 text-green-900 shadow-sm backdrop-blur-sm"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedRouteImageIndex(0);
+                      setIsRouteImageLightboxOpen(true);
+                    }}
+                    className="border border-green-200/90 bg-white/95 text-green-900 shadow-sm backdrop-blur-sm hover:bg-white"
                   >
-                    {cuposDisponibles} cupos disponibles
-                    {cuposTotales > 0 ? ` · ${cuposTotales} totales` : ''}
-                  </Badge>
-                </div>
-                <h2 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white drop-shadow-sm leading-tight">
-                  {routeName}
-                </h2>
-                <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-white/90">
-                  {ruta?.ubicacion ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <MapPin className="w-4 h-4 opacity-90" />
-                      {ruta.ubicacion}
-                    </span>
-                  ) : null}
-                  <span className="inline-flex items-center gap-1.5 max-w-full">
-                    <MapPin className="w-4 h-4 shrink-0 opacity-90" />
-                    <span className="line-clamp-2">
-                      <span className="text-white/80">Encuentro: </span>
-                      {lugarEncuentroText}
-                    </span>
-                  </span>
-                  {ruta?.dificultad ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <Compass className="w-4 h-4 opacity-90" />
-                      {ruta.dificultad}
-                    </span>
-                  ) : null}
-                  <span className="inline-flex items-center gap-1.5">
-                    <Clock className="w-4 h-4 opacity-90" />
-                    {formatDurationDays(ruta?.duracion_dias)}
-                  </span>
-                </div>
+                    Ver galería
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex w-full items-center justify-center px-3 pb-4 pt-14 sm:px-4 sm:pb-5 sm:pt-12 md:pt-11">
+                <ImageWithFallback
+                  src={heroImage}
+                  alt={routeName}
+                  loading={layout === 'page' ? 'eager' : 'lazy'}
+                  decoding="async"
+                  className={`pointer-events-none h-auto w-full object-contain object-center ${heroImageMaxHClass}`}
+                />
               </div>
             </div>
+
+            {/* Texto e información: flujo normal bajo la foto (nada superpuesto) */}
+            <div className="border-t border-green-100/90 bg-white px-4 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6">
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <Badge variant="outline" translate="no" className={estadoSalida.badgeClassName}>
+                  {estadoSalida.label}
+                </Badge>
+                <Badge
+                  translate="no"
+                  variant="secondary"
+                  className="border border-green-200/90 bg-green-50 text-green-900 shadow-sm"
+                >
+                  {cuposDisponibles} cupos disponibles
+                  {cuposTotales > 0 ? ` · ${cuposTotales} totales` : ''}
+                </Badge>
+              </div>
+
+              <h2 className="text-xl font-bold leading-tight text-gray-900 sm:text-2xl md:text-3xl">{routeName}</h2>
+
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+                {ruta?.ubicacion ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <MapPin className="h-4 w-4 shrink-0 text-green-600" />
+                    {ruta.ubicacion}
+                  </span>
+                ) : null}
+                <span className="inline-flex max-w-full items-center gap-1.5">
+                  <MapPin className="h-4 w-4 shrink-0 text-green-600" />
+                  <span className="line-clamp-2">
+                    <span className="text-gray-500">Encuentro: </span>
+                    {lugarEncuentroText}
+                  </span>
+                </span>
+                {ruta?.dificultad ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <Compass className="h-4 w-4 shrink-0 text-green-600" />
+                    {ruta.dificultad}
+                  </span>
+                ) : null}
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock className="h-4 w-4 shrink-0 text-green-600" />
+                  {formatDurationDays(ruta?.duracion_dias)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {canNavigateImages ? (
+            <p className="mt-2 text-sm text-green-800">
+              Haz click en la foto principal para ver todas las imágenes.
+            </p>
+          ) : null}
+
+            <Card className="overflow-hidden border-teal-200 shadow-md bg-teal-50/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-lg text-teal-900">Recomendaciones para tu salida</CardTitle>
+                <CardDescription className="text-teal-900/80">
+                  Léelas antes del día del tour. Si hay cambios de última hora, OCCITOUR te avisará.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {recomendacionesTxt ? (
+                  <p className="text-gray-800 leading-relaxed text-[15px] whitespace-pre-wrap">{recomendacionesTxt}</p>
+                ) : (
+                  <p className="text-sm text-gray-600">
+                    Aún no hay recomendaciones publicadas para esta ruta, o el servidor no las devuelve en la API.
+                    Revisa la ficha en <strong>Rutas</strong> o contacta a OCCITOUR.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
 
             {descripcionRuta ? (
               <Card className="overflow-hidden border-green-100/80 shadow-md bg-white/95">
@@ -1181,6 +1364,112 @@ export function ProgrammedRouteBookingModal({
               </Card>
             ) : null}
       </div>
+
+      {isRouteImageLightboxOpen && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="fixed inset-0 flex flex-col"
+              style={{ zIndex: 100 }}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Galería de fotos"
+              onClick={() => setIsRouteImageLightboxOpen(false)}
+            >
+              <div className="absolute inset-0 bg-black/50" aria-hidden="true" />
+              <div
+                className="relative mx-auto flex h-full min-h-0 w-full flex-col px-3 pb-4 pt-3 sm:px-5 sm:pb-6 sm:pt-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex shrink-0 items-center justify-between gap-2 pb-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-white">{routeName}</p>
+                    <p className="text-xs text-white opacity-70">
+                      Foto {safeIndex + 1} de {images.length}
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setIsRouteImageLightboxOpen(false)}
+                    className="shrink-0 bg-white/90 text-gray-900 hover:bg-white"
+                  >
+                    Cerrar
+                  </Button>
+                </div>
+
+                <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-2xl bg-black/50 p-2">
+                  {canNavigateImages ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSelectedRouteImageIndex((idx) => (idx - 1 + images.length) % images.length)
+                      }
+                      className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/90 p-2 text-gray-900 shadow-md hover:bg-white sm:left-3"
+                      aria-label="Foto anterior"
+                    >
+                      <ArrowLeft className="h-5 w-5" />
+                    </button>
+                  ) : null}
+
+                  <ImageWithFallback
+                    src={heroImage}
+                    alt={routeName}
+                    loading="eager"
+                    decoding="async"
+                    className="max-h-full max-w-full object-contain"
+                  />
+
+                  {canNavigateImages ? (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRouteImageIndex((idx) => (idx + 1) % images.length)}
+                      className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/90 p-2 text-gray-900 shadow-md hover:bg-white sm:right-3"
+                      aria-label="Foto siguiente"
+                    >
+                      <ArrowLeft className="h-5 w-5 rotate-180" />
+                    </button>
+                  ) : null}
+                </div>
+
+                {canNavigateImages ? (
+                  <div className="mt-3 shrink-0 overflow-x-auto pb-1">
+                    <div className="flex gap-1.5 sm:gap-2">
+                      {images.map((src, index) => {
+                        const isActive = index === safeIndex;
+                        return (
+                          <button
+                            key={`lightbox-${src}-${index}`}
+                            type="button"
+                            onClick={() => setSelectedRouteImageIndex(index)}
+                            className={`relative h-10 w-14 shrink-0 overflow-hidden rounded-lg bg-black/50 transition sm:h-12 sm:w-16 sm:rounded-xl ${
+                              isActive ? 'ring-2 ring-green-300' : 'hover:opacity-90'
+                            }`}
+                            aria-label={`Ver foto ${index + 1}`}
+                          >
+                            <ImageWithFallback
+                              src={src}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="h-full w-full object-contain"
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+
+                <p className="mt-2 shrink-0 text-center text-xs text-white opacity-70">
+                  Esc para cerrar · flechas para cambiar foto
+                </p>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+    </>
     );
   };
 
@@ -1208,7 +1497,7 @@ export function ProgrammedRouteBookingModal({
           </div>
         </header>
 
-        <div className="flex-1 w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10 pb-32">
+        <div className="w-full max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-10 pb-32">
           {renderBookingBody()}
         </div>
 

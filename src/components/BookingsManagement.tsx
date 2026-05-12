@@ -51,7 +51,14 @@ import {
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
+import { Calendar as BookingCalendar } from './ui/calendar';
 import { programacionAPI, reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
+import {
+  addDays,
+  durationDaysFromRutaDetail,
+  normalizeOccupiedYmd,
+  toYMD,
+} from '../utils/routeDateCalendar';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 
@@ -179,6 +186,8 @@ const EMPTY_FORM = {
   routeId: '',
   farmId: '',
   serviceType: 'ruta' as 'ruta' | 'finca',
+  /** programada = salida del calendario con cupos; taquilla_personalizada = fecha en mostrador, crea programación al guardar */
+  rutaReservaModo: 'programada' as 'programada' | 'taquilla_personalizada',
   programacionId: '',
   companions: 0,
   total: 0,
@@ -188,6 +197,12 @@ const EMPTY_FORM = {
   checkOut: '',
   nights: 1,
   nightlyPrice: 0,
+  personalizadaFechaSalida: '',
+  personalizadaFechaRegreso: '',
+  personalizadaHoraSalida: '',
+  personalizadaHoraRegreso: '',
+  personalizadaLugarEncuentro: '',
+  personalizadaCuposSalida: '',
 };
 
 export function BookingsManagement() {
@@ -206,6 +221,9 @@ export function BookingsManagement() {
   const [rutas, setRutas] = useState<ServiceOption[]>([]);
   const [fincas, setFincas] = useState<ServiceOption[]>([]);
   const [programacionesRuta, setProgramacionesRuta] = useState<ProgramacionOption[]>([]);
+  const [taquillaOccupiedDates, setTaquillaOccupiedDates] = useState<Set<string>>(new Set());
+  const [isLoadingTaquillaCalendar, setIsLoadingTaquillaCalendar] = useState(false);
+  const [taquillaAvailabilityWarning, setTaquillaAvailabilityWarning] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -240,18 +258,92 @@ export function BookingsManagement() {
     [clientes, formData.clientId]
   );
 
-  const filteredProgramacionesRuta = useMemo(() => {
-    if (formData.serviceType !== 'ruta' || !formData.routeId) return [];
+  /** Salidas que aún admiten reserva manual (no canceladas ni ya completadas). */
+  const programacionesReservables = useMemo(() => {
     return programacionesRuta.filter((programacion) => {
-      if (programacion.routeId !== formData.routeId) return false;
+      const s = String(programacion.status || '').toLowerCase();
+      if (s.includes('cancel')) return false;
+      if (s.includes('complet')) return false;
       return true;
     });
-  }, [programacionesRuta, formData.serviceType, formData.routeId]);
+  }, [programacionesRuta]);
+
+  const routeIdsConSalidaActiva = useMemo(() => {
+    const ids = new Set<string>();
+    for (const p of programacionesReservables) {
+      ids.add(p.routeId);
+    }
+    return ids;
+  }, [programacionesReservables]);
+
+  const rutasConSalidaProgramada = useMemo(
+    () => rutas.filter((r) => routeIdsConSalidaActiva.has(r.id)),
+    [rutas, routeIdsConSalidaActiva]
+  );
+
+  const routesForCurrentModo = useMemo(() => {
+    if (formData.serviceType !== 'ruta') return [];
+    if (formData.rutaReservaModo === 'taquilla_personalizada') return rutas;
+    return rutasConSalidaProgramada;
+  }, [formData.serviceType, formData.rutaReservaModo, rutas, rutasConSalidaProgramada]);
+
+  const filteredProgramacionesRuta = useMemo(() => {
+    if (formData.serviceType !== 'ruta' || !formData.routeId) return [];
+    return programacionesReservables.filter((programacion) => programacion.routeId === formData.routeId);
+  }, [programacionesReservables, formData.serviceType, formData.routeId]);
 
   const selectedProgramacion = useMemo(
     () => filteredProgramacionesRuta.find((item) => item.id === formData.programacionId) || null,
     [filteredProgramacionesRuta, formData.programacionId]
   );
+
+  const taquillaDurationDays = useMemo(
+    () => durationDaysFromRutaDetail(formRutaDetalle?.duracion_dias),
+    [formRutaDetalle?.duracion_dias]
+  );
+
+  const taquillaCalendarModifiers = useMemo(() => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    return {
+      past: (date: Date) => {
+        const d = new Date(date);
+        d.setHours(0, 0, 0, 0);
+        return d < startOfToday;
+      },
+      reserved: (date: Date) => taquillaOccupiedDates.has(toYMD(date)),
+    };
+  }, [taquillaOccupiedDates]);
+
+  const taquillaCalendarClassNames = useMemo(
+    () => ({
+      past: 'rdp-day-past bg-slate-100 text-slate-400 line-through decoration-slate-400/90 opacity-65',
+      reserved:
+        'rdp-day-reserved bg-gray-200 text-gray-600 line-through decoration-gray-500 shadow-inner opacity-95 border border-gray-400/50',
+    }),
+    []
+  );
+
+  const isTaquillaStartDateDisabled = (date: Date) => {
+    const base = new Date(date);
+    base.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (base < today) return true;
+    for (let i = 0; i < taquillaDurationDays; i += 1) {
+      if (taquillaOccupiedDates.has(toYMD(addDays(base, i)))) return true;
+    }
+    return false;
+  };
+
+  const taquillaSelectedCalendarDate = formData.personalizadaFechaSalida
+    ? new Date(`${formData.personalizadaFechaSalida}T00:00:00`)
+    : undefined;
+
+  const formatTaquillaSelectedDate = (date: Date | undefined) => {
+    if (!date) return 'Selecciona una fecha';
+    return date.toLocaleDateString('es-CO', { year: 'numeric', month: 'short', day: '2-digit' });
+  };
 
   const formOptionalServicesTotal = useMemo(() => {
     if (!formRutaDetalle) return 0;
@@ -410,8 +502,31 @@ export function BookingsManagement() {
   const loadProgramacionesRuta = async () => {
     try {
       setIsLoadingProgramacionesRuta(true);
-      const data = await programacionAPI.getAll();
-      const mapped = (data || [])
+      let raw: any[] = [];
+      try {
+        raw = await programacionAPI.getPublicas();
+      } catch {
+        raw = [];
+      }
+      if (!raw.length) {
+        try {
+          const all = await programacionAPI.getAll();
+          const today = new Date().toISOString().slice(0, 10);
+          raw = (all || []).filter((p: any) => {
+            if (p?.es_personalizada) return false;
+            const est = String(p?.estado || '').toLowerCase();
+            if (est.includes('cancel')) return false;
+            if (est.includes('complet')) return false;
+            const fr = String(p?.fecha_regreso ?? p?.fecha_salida ?? '').slice(0, 10);
+            if (fr && fr < today) return false;
+            return Math.max(0, Number(p?.cupos_disponibles ?? 0)) > 0;
+          });
+        } catch {
+          raw = [];
+        }
+      }
+
+      const mapped = (raw || [])
         .filter((programacion: any) => !programacion?.es_personalizada)
         .map((programacion: any) => ({
           id: String(programacion.id_programacion),
@@ -525,6 +640,41 @@ export function BookingsManagement() {
   }, [formData.serviceType, formData.routeId]);
 
   useEffect(() => {
+    if (formData.serviceType !== 'ruta' || formData.rutaReservaModo !== 'taquilla_personalizada') {
+      setTaquillaOccupiedDates(new Set());
+      setTaquillaAvailabilityWarning(false);
+      return;
+    }
+    const idRuta = Number(formData.routeId);
+    if (!Number.isFinite(idRuta) || idRuta <= 0) {
+      setTaquillaOccupiedDates(new Set());
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingTaquillaCalendar(true);
+    setTaquillaAvailabilityWarning(false);
+    programacionAPI
+      .getFechasOcupadasRuta(idRuta)
+      .then((dates) => {
+        if (cancelled) return;
+        setTaquillaOccupiedDates(
+          new Set((dates || []).map((d) => normalizeOccupiedYmd(String(d))).filter(Boolean))
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaquillaOccupiedDates(new Set());
+        setTaquillaAvailabilityWarning(true);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingTaquillaCalendar(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
+
+  useEffect(() => {
     if (activeView !== 'detail') return;
     const idReserva = Number(selectedBooking?.id);
     if (!Number.isFinite(idReserva) || idReserva <= 0) return;
@@ -560,10 +710,28 @@ export function BookingsManagement() {
 
   useEffect(() => {
     if (formData.serviceType !== 'ruta') return;
-    const totalCalculado = Math.max(0, Number(selectedProgramacion?.price || 0)) * participantTotal + formOptionalServicesTotal;
+    const opc = formOptionalServicesTotal;
+    if (formData.rutaReservaModo === 'programada') {
+      const totalCalculado =
+        Math.max(0, Number(selectedProgramacion?.price || 0)) * participantTotal + opc;
+      if (Number(formData.total || 0) === totalCalculado) return;
+      setFormData((prev) => ({ ...prev, total: totalCalculado }));
+      return;
+    }
+    const unit = Number(formRutaDetalle?.precio_base ?? 0);
+    if (unit <= 0) return;
+    const totalCalculado = unit * participantTotal + opc;
     if (Number(formData.total || 0) === totalCalculado) return;
     setFormData((prev) => ({ ...prev, total: totalCalculado }));
-  }, [formData.serviceType, selectedProgramacion?.price, participantTotal, formOptionalServicesTotal]);
+  }, [
+    formData.serviceType,
+    formData.rutaReservaModo,
+    selectedProgramacion?.price,
+    participantTotal,
+    formOptionalServicesTotal,
+    formRutaDetalle?.precio_base,
+    formData.total,
+  ]);
 
   useEffect(() => {
     if (formData.serviceType !== 'ruta') return;
@@ -572,6 +740,23 @@ export function BookingsManagement() {
     if (stillValid) return;
     setFormData((prev) => ({ ...prev, programacionId: '' }));
   }, [filteredProgramacionesRuta, formData.serviceType, formData.programacionId]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta') return;
+    if (!formData.routeId) return;
+    const ok = routesForCurrentModo.some((r) => r.id === formData.routeId);
+    if (ok) return;
+    setFormData((prev) => ({ ...prev, routeId: '', programacionId: '' }));
+    setFormRutaDetalle(null);
+    setFormRutaOpcionalesSeleccion({});
+  }, [formData.serviceType, formData.routeId, routesForCurrentModo]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta' || formData.rutaReservaModo !== 'taquilla_personalizada') return;
+    const d = formData.personalizadaFechaSalida?.trim();
+    if (!d) return;
+    setFormData((prev) => (prev.bookingDate === d ? prev : { ...prev, bookingDate: d }));
+  }, [formData.serviceType, formData.rutaReservaModo, formData.personalizadaFechaSalida]);
 
   useEffect(() => {
     if (formData.serviceType !== 'finca') return;
@@ -732,20 +917,80 @@ export function BookingsManagement() {
           throw new Error('Selecciona una ruta.');
         }
 
-        if (!selectedProgramacion) {
-          throw new Error('Selecciona una programación disponible para esa ruta.');
-        }
-        if (Number(selectedProgramacion.availableSeats || 0) < participantTotal) {
-          throw new Error('La programación seleccionada no tiene cupos suficientes para esa cantidad de personas.');
-        }
+        if (formData.rutaReservaModo === 'programada') {
+          if (!selectedProgramacion) {
+            throw new Error('Selecciona una programación disponible para esa ruta.');
+          }
+          if (Number(selectedProgramacion.availableSeats || 0) < participantTotal) {
+            throw new Error(
+              'La programación seleccionada no tiene cupos suficientes para esa cantidad de personas.'
+            );
+          }
 
-        const idProgramacion = Number(selectedProgramacion.id);
+          const idProgramacion = Number(selectedProgramacion.id);
 
-        await reservasAPI.agregarProgramacion(idReserva, {
-          id_programacion: idProgramacion,
-          cantidad_personas: participantTotal,
-          precio_unitario: Number(selectedProgramacion.price || 0),
-        });
+          await reservasAPI.agregarProgramacion(idReserva, {
+            id_programacion: idProgramacion,
+            cantidad_personas: participantTotal,
+            precio_unitario: Number(selectedProgramacion.price || 0),
+          });
+        } else {
+          const fs = formData.personalizadaFechaSalida?.trim();
+          if (!fs) {
+            throw new Error('Indica la fecha de salida para la reserva en taquilla.');
+          }
+          let fr = formData.personalizadaFechaRegreso?.trim() || fs;
+          if (fr < fs) {
+            throw new Error('La fecha de regreso no puede ser anterior a la fecha de salida.');
+          }
+          const cuposNum = Number(formData.personalizadaCuposSalida);
+          const cuposTotales =
+            Number.isFinite(cuposNum) && cuposNum >= participantTotal
+              ? Math.floor(cuposNum)
+              : Math.max(participantTotal, 1);
+
+          const opcTotal = formOptionalServicesTotal;
+          const totalReserva = Number(formData.total || 0);
+          const lineTotal = Math.max(0, totalReserva - opcTotal);
+          let precioUnitario = Number(formRutaDetalle?.precio_base ?? 0);
+          if (precioUnitario <= 0 && participantTotal > 0) {
+            precioUnitario = lineTotal / participantTotal;
+          }
+          if (!Number.isFinite(precioUnitario) || precioUnitario <= 0) {
+            throw new Error(
+              'No se pudo calcular el precio por persona. Revisa el precio base de la ruta o el total de la reserva.'
+            );
+          }
+
+          const hs = formData.personalizadaHoraSalida?.trim();
+          const hr = formData.personalizadaHoraRegreso?.trim();
+
+          const rawProg = await programacionAPI.create({
+            id_ruta: Number(formData.routeId),
+            fecha_salida: fs,
+            fecha_regreso: fr,
+            hora_salida: hs || null,
+            hora_regreso: hr || null,
+            lugar_encuentro: formData.personalizadaLugarEncuentro?.trim() || null,
+            cupos_totales: cuposTotales,
+            precio_programacion: precioUnitario,
+            es_personalizada: true,
+          });
+
+          const createdProg = (rawProg as any)?.data ?? rawProg;
+          const idNuevaProgramacion = Number(createdProg?.id_programacion);
+          if (!Number.isFinite(idNuevaProgramacion) || idNuevaProgramacion <= 0) {
+            throw new Error(
+              'No se pudo crear la salida en taquilla. Verifica que tu usuario sea empleado o administrador.'
+            );
+          }
+
+          await reservasAPI.agregarProgramacion(idReserva, {
+            id_programacion: idNuevaProgramacion,
+            cantidad_personas: participantTotal,
+            precio_unitario: precioUnitario,
+          });
+        }
 
         await applySelectedServices(idReserva, formRutaOpcionalesSeleccion, formRutaDetalle);
       } else {
@@ -1520,6 +1765,13 @@ export function BookingsManagement() {
                                 routeId: '',
                                 farmId: '',
                                 programacionId: '',
+                                rutaReservaModo: 'programada',
+                                personalizadaFechaSalida: '',
+                                personalizadaFechaRegreso: '',
+                                personalizadaHoraSalida: '',
+                                personalizadaHoraRegreso: '',
+                                personalizadaLugarEncuentro: '',
+                                personalizadaCuposSalida: '',
                                 checkIn: '',
                                 checkOut: '',
                                 nights: 1,
@@ -1540,30 +1792,95 @@ export function BookingsManagement() {
                         </div>
 
                         {formData.serviceType === 'ruta' ? (
-                          <div>
-                            <Label>Ruta *</Label>
-                            <Select
-                              value={formData.routeId}
-                              onValueChange={(value) => {
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  routeId: value,
-                                  farmId: '',
-                                  programacionId: '',
-                                }));
-                              }}
-                            >
-                              <SelectTrigger className="bg-gray-50">
-                                <SelectValue placeholder="Seleccione una ruta" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {rutas.map((route) => (
-                                  <SelectItem key={route.id} value={route.id}>
-                                    {route.name}
+                          <div className="space-y-3">
+                            <div>
+                              <Label>¿Cómo vas a tomar la ruta? *</Label>
+                              <Select
+                                value={formData.rutaReservaModo}
+                                onValueChange={(value) => {
+                                  const v = value as 'programada' | 'taquilla_personalizada';
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    rutaReservaModo: v,
+                                    routeId: '',
+                                    programacionId: '',
+                                    personalizadaFechaSalida:
+                                      v === 'taquilla_personalizada' ? prev.bookingDate || '' : '',
+                                    personalizadaFechaRegreso:
+                                      v === 'taquilla_personalizada' ? prev.bookingDate || '' : '',
+                                    personalizadaHoraSalida: '',
+                                    personalizadaHoraRegreso: '',
+                                    personalizadaLugarEncuentro: '',
+                                    personalizadaCuposSalida: '',
+                                  }));
+                                  setFormRutaDetalle(null);
+                                  setFormRutaOpcionalesSeleccion({});
+                                }}
+                              >
+                                <SelectTrigger className="bg-gray-50">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="programada">
+                                    Salida del calendario (cupos ya creados)
                                   </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                                  <SelectItem value="taquilla_personalizada">
+                                    Mostrador: elijo la fecha aquí (cliente físico, sin solicitud web)
+                                  </SelectItem>
+                                </SelectContent>
+                              </Select>
+                              <p className="mt-1 text-xs text-gray-500">
+                                La segunda opción crea la salida al guardar la reserva (programación
+                                personalizada interna), lista para cobrar en taquilla.
+                              </p>
+                            </div>
+                            <div>
+                              <Label>Ruta *</Label>
+                              <Select
+                                value={formData.routeId}
+                                disabled={
+                                  formData.rutaReservaModo === 'programada' && isLoadingProgramacionesRuta
+                                }
+                                onValueChange={(value) => {
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    routeId: value,
+                                    farmId: '',
+                                    programacionId: '',
+                                  }));
+                                }}
+                              >
+                                <SelectTrigger className="bg-gray-50">
+                                  <SelectValue
+                                    placeholder={
+                                      formData.rutaReservaModo === 'programada' &&
+                                      isLoadingProgramacionesRuta
+                                        ? 'Cargando rutas con salida…'
+                                        : formData.rutaReservaModo === 'programada' &&
+                                            routesForCurrentModo.length === 0
+                                          ? 'No hay rutas con salida en calendario'
+                                          : 'Seleccione una ruta'
+                                    }
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {routesForCurrentModo.map((route) => (
+                                    <SelectItem key={route.id} value={route.id}>
+                                      {route.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <p className="mt-1 text-xs text-gray-500">
+                                {formData.rutaReservaModo === 'taquilla_personalizada'
+                                  ? 'Todas las rutas del catálogo. Luego defines fecha y cupos de esta salida.'
+                                  : isLoadingProgramacionesRuta
+                                    ? 'Sincronizando calendario…'
+                                    : routesForCurrentModo.length === 0
+                                      ? 'No hay salidas activas: cambia a “Mostrador” arriba o crea programaciones en el módulo Programación.'
+                                      : 'Solo rutas que tienen al menos una salida programada y reservable.'}
+                              </p>
+                            </div>
                           </div>
                         ) : (
                           <div>
@@ -1598,56 +1915,237 @@ export function BookingsManagement() {
 
                       {formData.serviceType === 'ruta' ? (
                         <>
-                          <div>
-                            <Label>Salida programada *</Label>
-                            <Select
-                              value={formData.programacionId}
-                              onValueChange={(value) =>
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  programacionId: value,
-                                }))
-                              }
-                            >
-                              <SelectTrigger className="bg-gray-50">
-                                <SelectValue placeholder="Selecciona una programación disponible" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {filteredProgramacionesRuta.map((programacion) => (
-                                  <SelectItem key={programacion.id} value={programacion.id}>
-                                    {`${programacion.routeName} • ${programacion.date}${programacion.startTime ? ` ${programacion.startTime}` : ''} • ${programacion.availableSeats}/${programacion.totalSeats} cupos${programacion.availableSeats < participantTotal ? ' • Cupo insuficiente' : ''}`}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <p className="mt-1 text-xs text-gray-500">
-                              {isLoadingProgramacionesRuta
-                                ? 'Cargando salidas operativas...'
-                                : filteredProgramacionesRuta.length > 0
-                                  ? 'Elige la salida operativa real donde quedará registrada la reserva.'
-                                  : 'No hay programaciones operativas registradas para esta ruta.'}
-                            </p>
-                          </div>
-
-                          {selectedProgramacion && (
-                            <div className="grid grid-cols-1 gap-4 rounded-lg border bg-green-50 p-4 md:grid-cols-4">
+                          {formData.rutaReservaModo === 'programada' ? (
+                            <>
                               <div>
-                                <p className="text-xs text-gray-500">Fecha salida</p>
-                                <p className="font-medium text-gray-900">{selectedProgramacion.date}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Hora</p>
-                                <p className="font-medium text-gray-900">{selectedProgramacion.startTime || 'Por definir'}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Punto encuentro</p>
-                                <p className="font-medium text-gray-900">{selectedProgramacion.meetingPoint}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-gray-500">Cupos</p>
-                                <p className={`font-medium ${selectedProgramacion.availableSeats < participantTotal ? 'text-red-700' : 'text-gray-900'}`}>
-                                  {selectedProgramacion.availableSeats} disponibles de {selectedProgramacion.totalSeats}
+                                <Label>Salida programada *</Label>
+                                <Select
+                                  value={formData.programacionId}
+                                  onValueChange={(value) =>
+                                    setFormData((prev) => ({
+                                      ...prev,
+                                      programacionId: value,
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger className="bg-gray-50">
+                                    <SelectValue placeholder="Selecciona una programación disponible" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {filteredProgramacionesRuta.map((programacion) => (
+                                      <SelectItem key={programacion.id} value={programacion.id}>
+                                        {`${programacion.routeName} • ${programacion.date}${programacion.startTime ? ` ${programacion.startTime}` : ''} • ${programacion.availableSeats}/${programacion.totalSeats} cupos${programacion.availableSeats < participantTotal ? ' • Cupo insuficiente' : ''}`}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="mt-1 text-xs text-gray-500">
+                                  {isLoadingProgramacionesRuta
+                                    ? 'Cargando salidas operativas...'
+                                    : filteredProgramacionesRuta.length > 0
+                                      ? 'Elige la salida del calendario (cupos ya publicados).'
+                                      : 'No hay salidas operativas para esta ruta en el calendario — usa “Mostrador” o crea la salida en Programación.'}
                                 </p>
+                              </div>
+
+                              {selectedProgramacion && (
+                                <div className="grid grid-cols-1 gap-4 rounded-lg border bg-green-50 p-4 md:grid-cols-4">
+                                  <div>
+                                    <p className="text-xs text-gray-500">Fecha salida</p>
+                                    <p className="font-medium text-gray-900">
+                                      {selectedProgramacion.date}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-500">Hora</p>
+                                    <p className="font-medium text-gray-900">
+                                      {selectedProgramacion.startTime || 'Por definir'}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-500">Punto encuentro</p>
+                                    <p className="font-medium text-gray-900">
+                                      {selectedProgramacion.meetingPoint}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-500">Cupos</p>
+                                    <p
+                                      className={`font-medium ${selectedProgramacion.availableSeats < participantTotal ? 'text-red-700' : 'text-gray-900'}`}
+                                    >
+                                      {selectedProgramacion.availableSeats} disponibles de{' '}
+                                      {selectedProgramacion.totalSeats}
+                                    </p>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <div className="space-y-4 rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+                              <p className="text-sm font-medium text-amber-950">
+                                Salida en taquilla: se crea al guardar y se vincula a esta reserva (sin
+                                solicitud del cliente).
+                              </p>
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                <div className="md:col-span-2">
+                                  <Label>Fecha de salida *</Label>
+                                  {taquillaAvailabilityWarning ? (
+                                    <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                                      No se cargaron las fechas ocupadas. Confirma disponibilidad o recarga; el
+                                      calendario puede estar incompleto.
+                                    </div>
+                                  ) : null}
+                                  <p className="mb-2 text-sm text-gray-600">
+                                    Fecha elegida:{' '}
+                                    <span className="font-medium text-gray-900">
+                                      {formatTaquillaSelectedDate(taquillaSelectedCalendarDate)}
+                                    </span>
+                                  </p>
+                                  <div className="rounded-xl border border-amber-200 bg-white p-4 shadow-sm">
+                                    {isLoadingTaquillaCalendar ? (
+                                      <p className="py-10 text-center text-sm text-gray-500">
+                                        Cargando calendario…
+                                      </p>
+                                    ) : !formData.routeId ? (
+                                      <p className="py-6 text-center text-sm text-gray-500">
+                                        Primero elige una ruta para ver disponibilidad (igual que en reserva
+                                        personalizada del sitio).
+                                      </p>
+                                    ) : (
+                                      <>
+                                        <div className="flex justify-center overflow-x-auto">
+                                          <BookingCalendar
+                                            mode="single"
+                                            weekStartsOn={1}
+                                            selected={taquillaSelectedCalendarDate}
+                                            onSelect={(date) => {
+                                              if (!date) return;
+                                              const ymd = toYMD(date);
+                                              const reg = toYMD(addDays(date, taquillaDurationDays - 1));
+                                              setFormData((prev) => ({
+                                                ...prev,
+                                                personalizadaFechaSalida: ymd,
+                                                personalizadaFechaRegreso: reg,
+                                              }));
+                                            }}
+                                            disabled={isTaquillaStartDateDisabled}
+                                            modifiers={taquillaCalendarModifiers}
+                                            modifiersClassNames={taquillaCalendarClassNames}
+                                            defaultMonth={taquillaSelectedCalendarDate || new Date()}
+                                            className="rounded-md"
+                                          />
+                                        </div>
+                                        <div className="mt-4 flex flex-wrap justify-center gap-x-4 gap-y-2 border-t border-amber-100 pt-3 text-xs text-gray-600">
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <span className="h-3.5 w-3.5 rounded border border-green-300 bg-white shadow-sm" />
+                                            Disponible
+                                          </span>
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <span className="h-3.5 w-3.5 rounded border border-slate-200 bg-slate-100 opacity-75">
+                                              —
+                                            </span>
+                                            Pasado
+                                          </span>
+                                          <span className="inline-flex items-center gap-1.5">
+                                            <span className="h-3.5 w-3.5 rounded border border-dashed border-gray-400 bg-gray-200 shadow-inner" />
+                                            Ocupado o conflicto por duración
+                                          </span>
+                                        </div>
+                                        {taquillaDurationDays > 1 ? (
+                                          <p className="mt-2 text-center text-xs text-gray-500">
+                                            La ruta dura {taquillaDurationDays} días: un día gris bloquea iniciar
+                                            la salida si el viaje cruzaría esa fecha ocupada.
+                                          </p>
+                                        ) : (
+                                          <p className="mt-2 text-center text-xs text-gray-500">
+                                            Misma lógica que el calendario del cliente: días ocupados o en
+                                            conflicto no son seleccionables.
+                                          </p>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label>Fecha de regreso (ajustable)</Label>
+                                  <Input
+                                    type="date"
+                                    className="max-w-xs bg-white"
+                                    value={formData.personalizadaFechaRegreso}
+                                    onChange={(e) =>
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        personalizadaFechaRegreso: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                  <p className="mt-1 text-xs text-gray-500">
+                                    Se rellena sola según la duración en la ficha de la ruta ({taquillaDurationDays}{' '}
+                                    día(s)); corrige si hace falta.
+                                  </p>
+                                </div>
+                                <div>
+                                  <Label>Hora salida</Label>
+                                  <Input
+                                    type="time"
+                                    className="bg-white"
+                                    value={formData.personalizadaHoraSalida}
+                                    onChange={(e) =>
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        personalizadaHoraSalida: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <Label>Hora regreso</Label>
+                                  <Input
+                                    type="time"
+                                    className="bg-white"
+                                    value={formData.personalizadaHoraRegreso}
+                                    onChange={(e) =>
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        personalizadaHoraRegreso: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <Label>Punto de encuentro</Label>
+                                  <Input
+                                    className="bg-white"
+                                    placeholder="Ej. Parque principal — se puede completar luego"
+                                    value={formData.personalizadaLugarEncuentro}
+                                    onChange={(e) =>
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        personalizadaLugarEncuentro: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                                <div>
+                                  <Label>Cupos de esta salida</Label>
+                                  <Input
+                                    type="number"
+                                    min={participantTotal}
+                                    className="bg-white"
+                                    placeholder={String(Math.max(participantTotal, 1))}
+                                    value={formData.personalizadaCuposSalida}
+                                    onChange={(e) =>
+                                      setFormData((prev) => ({
+                                        ...prev,
+                                        personalizadaCuposSalida: e.target.value,
+                                      }))
+                                    }
+                                  />
+                                  <p className="mt-1 text-xs text-gray-500">
+                                    Mínimo {participantTotal} (participantes de esta reserva). Si lo dejas
+                                    vacío, se usa ese mínimo.
+                                  </p>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -1865,11 +2363,19 @@ export function BookingsManagement() {
                     {activeView === 'create' && formData.serviceType === 'ruta' && (
                       <>
                         <div>
-                          <p className="text-sm text-gray-600">Programación seleccionada</p>
+                          <p className="text-sm text-gray-600">
+                            {formData.rutaReservaModo === 'programada'
+                              ? 'Salida del calendario'
+                              : 'Taquilla (fecha elegida)'}
+                          </p>
                           <p className="font-medium text-gray-900">
-                            {selectedProgramacion
-                              ? `#${selectedProgramacion.id} · ${selectedProgramacion.date}`
-                              : 'Sin seleccionar'}
+                            {formData.rutaReservaModo === 'programada'
+                              ? selectedProgramacion
+                                ? `#${selectedProgramacion.id} · ${selectedProgramacion.date}`
+                                : 'Sin seleccionar'
+                              : formData.personalizadaFechaSalida
+                                ? `${formData.personalizadaFechaSalida}${formData.personalizadaHoraSalida ? ` · ${formData.personalizadaHoraSalida}` : ''}`
+                                : 'Indica la fecha de salida'}
                           </p>
                         </div>
                         <div>
@@ -1908,8 +2414,15 @@ export function BookingsManagement() {
                   <CardContent className="space-y-3 text-sm text-gray-600">
                     <p>Toda reserva nueva se crea como `Pendiente`.</p>
                     <p>`Confirmada` solo se permite cuando la venta esté en `Parcial` o `Pagado`.</p>
-                    <p>Para rutas manuales, primero se elige una programación operativa real; ya no se escribe el ID a mano.</p>
-                    <p>El total de una ruta se calcula con el precio de la programación seleccionada y los opcionales agregados.</p>
+                    <p>
+                      Modo <strong>calendario</strong>: solo rutas con salida ya creada; eliges la salida con cupos.
+                      Modo <strong>mostrador</strong>: cualquier ruta del catálogo, defines fecha (y cupos) aquí; al guardar se
+                      crea la programación interna y se descuenta el cupo — sin solicitud web del cliente.
+                    </p>
+                    <p>
+                      El total en calendario sigue el precio de la salida elegida; en mostrador usa el precio base de la ruta
+                      (o reparte el total entre participantes si el base es 0) más opcionales.
+                    </p>
                     <p>Los acompañantes del formulario se registran directamente en `detalle_reserva_acompanante` al crear la reserva.</p>
                     <p>Los comprobantes y validaciones pertenecen a `Ventas` y `Abonos`.</p>
                   </CardContent>
