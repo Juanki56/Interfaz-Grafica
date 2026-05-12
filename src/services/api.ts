@@ -1526,41 +1526,197 @@ export const fincasAPI = {
 // =====================================================
 // PROPIETARIOS
 // =====================================================
+// Normalizador flexible para soportar distintos formatos/fields del backend
+function normalizePropietario(raw: any): Propietario {
+  if (!raw || typeof raw !== 'object') return raw as Propietario;
+
+  const id = Number(raw.id_propietario ?? raw.id ?? raw.id_owner ?? raw.idPropietario ?? raw.owner_id) || 0;
+  const nombre = raw.nombre ?? raw.nombre_propietario ?? raw.firstName ?? raw.name ?? '';
+  const apellido = raw.apellido ?? raw.lastName ?? raw.surname ?? '';
+  const numero_documento = raw.numero_documento ?? raw.numeroDocumento ?? raw.document_number ?? raw.documento ?? '';
+  const telefono = raw.telefono ?? raw.telefono_contacto ?? raw.phone ?? raw.contact_phone ?? '';
+  const email = raw.email ?? raw.correo ?? raw.propietario_email ?? '';
+  const direccion = raw.direccion ?? raw.address ?? raw.propietario_direccion ?? '';
+  const estado = raw.estado == null ? (raw.active ?? raw.estado_propietario ?? true) : Boolean(raw.estado);
+  const fecha_registro = raw.fecha_registro ?? raw.created_at ?? raw.fecha_creacion ?? null;
+
+  return {
+    id_propietario: id,
+    nombre,
+    apellido,
+    tipo_documento: raw.tipo_documento ?? raw.tipoDocumento ?? undefined,
+    numero_documento,
+    telefono,
+    email,
+    direccion,
+    estado,
+    fecha_registro,
+  } as Propietario;
+}
+
+// Intentar múltiples endpoints/fallbacks usados por diferentes versiones del backend
+async function tryEndpointsForJson<T = any>(endpoints: string[]): Promise<T> {
+  let lastError: any = null;
+  for (const ep of endpoints) {
+    try {
+      const res = await fetchAPI<T>(ep);
+      return res;
+    } catch (err) {
+      lastError = err;
+      // continue to next endpoint
+    }
+  }
+  throw lastError;
+}
 
 export const propietariosAPI = {
   getAll: async (): Promise<Propietario[]> => {
-    const response = await fetchAPI<{ data: Propietario[] }>('/api/propietarios');
-    return response.data || [];
+    try {
+      const response = await tryEndpointsForJson<any>(['/api/propietarios', '/api/owners']);
+      const arr = unwrapApiArray(response);
+      return arr.map(normalizePropietario);
+    } catch (err) {
+      console.error('Error fetching propietarios (getAll):', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Obtener solo propietarios activos (para selects/relaciones)
+   */
+  getActive: async (): Promise<Propietario[]> => {
+    try {
+      const response = await tryEndpointsForJson<any>(['/api/propietarios', '/api/owners']);
+      const arr = unwrapApiArray(response);
+      return arr.map(normalizePropietario).filter((p: Propietario) => p.estado !== false);
+    } catch (err) {
+      console.error('Error fetching active propietarios (getActive):', err);
+      throw err;
+    }
   },
 
   getById: async (id: number): Promise<Propietario> => {
-    const response = await fetchAPI<{ data: Propietario }>(`/api/propietarios/${id}`);
-    return response.data;
+    try {
+      const response = await tryEndpointsForJson<any>([`/api/propietarios/${id}`, `/api/owners/${id}`]);
+      const payload = response?.data ?? response;
+      return normalizePropietario(payload as any);
+    } catch (err) {
+      console.error(`Error fetching propietario ${id}:`, err);
+      throw err;
+    }
   },
 
-  create: async (propietarioData: Partial<Propietario>) => {
-    return fetchAPI('/api/propietarios', {
-      method: 'POST',
-      body: JSON.stringify(propietarioData),
-    });
+  create: async (propietarioData: Partial<Propietario> | FormData) => {
+    // Soportar FormData si el caller ya la envía
+    const isForm = propietarioData instanceof FormData;
+    const body = isForm ? (propietarioData as FormData) : ((): any => {
+      // Si algún campo es File/Blob, convertir a FormData
+      const hasFile = Object.values(propietarioData as any).some(v => v instanceof File || v instanceof Blob);
+      if (hasFile) {
+        const fd = new FormData();
+        for (const key of Object.keys(propietarioData as any)) {
+          const val = (propietarioData as any)[key];
+          if (val != null) fd.append(key, val as any);
+        }
+        return fd;
+      }
+      return JSON.stringify(propietarioData);
+    })();
+
+    const endpoints = ['/api/propietarios', '/api/owners'];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, {
+          method: 'POST',
+          body,
+        });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'create', payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error('Error creating propietario:', lastError);
+    throw lastError;
   },
 
-  update: async (id: number, propietarioData: Partial<Propietario>) => {
-    return fetchAPI(`/api/propietarios/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(propietarioData),
-    });
+  update: async (id: number, propietarioData: Partial<Propietario> | FormData) => {
+    const isForm = propietarioData instanceof FormData;
+    const body = isForm ? propietarioData as FormData : ((): any => {
+      const hasFile = Object.values(propietarioData as any).some(v => v instanceof File || v instanceof Blob);
+      if (hasFile) {
+        const fd = new FormData();
+        for (const key of Object.keys(propietarioData as any)) {
+          const val = (propietarioData as any)[key];
+          if (val != null) fd.append(key, val as any);
+        }
+        return fd;
+      }
+      return JSON.stringify(propietarioData);
+    })();
+
+    const endpoints = [`/api/propietarios/${id}`, `/api/owners/${id}`];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, {
+          method: 'PUT',
+          body,
+        });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'update', id, payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error(`Error updating propietario ${id}:`, lastError);
+    throw lastError;
   },
 
   delete: async (id: number) => {
-    return fetchAPI(`/api/propietarios/${id}`, {
-      method: 'DELETE',
-    });
+    const endpoints = [`/api/propietarios/${id}`, `/api/owners/${id}`];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, { method: 'DELETE' });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'delete', id, payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error(`Error deleting propietario ${id}:`, lastError);
+    throw lastError;
   },
 
   getFincas: async (id: number) => {
-    const response = await fetchAPI<{ data: Finca[] }>(`/api/propietarios/${id}/fincas`);
-    return response.data || [];
+    try {
+      const response = await tryEndpointsForJson<any>([`/api/propietarios/${id}/fincas`, `/api/owners/${id}/fincas`]);
+      const arr = unwrapApiArray(response);
+      return arr as Finca[];
+    } catch (err) {
+      console.error(`Error fetching fincas for propietario ${id}:`, err);
+      throw err;
+    }
   },
 };
 

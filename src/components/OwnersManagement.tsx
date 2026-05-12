@@ -60,6 +60,8 @@ interface OwnersManagementProps {
 export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) {
   const permisos = usePermissions();
   const ownerPerms = createModulePermissions(permisos, 'Propietarios');
+  const isAdvisorRole = permisos.currentUserRole?.toLowerCase() === 'asesor';
+  const isConsultationMode = isReadOnly || isAdvisorRole;
   
   const [owners, setOwners] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +71,8 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState<any>(null);
+  const [ownerFincas, setOwnerFincas] = useState<any[]>([]);
+  const [fincasLoading, setFincasLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 5;
 
@@ -86,6 +90,11 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   // Cargar propietarios desde la BD
   useEffect(() => {
     loadPropietarios();
+    const handleOwnersChanged = () => {
+      loadPropietarios();
+    };
+    window.addEventListener('propietarios:changed', handleOwnersChanged as EventListener);
+    return () => window.removeEventListener('propietarios:changed', handleOwnersChanged as EventListener);
   }, []);
 
   const loadPropietarios = async () => {
@@ -119,12 +128,14 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   };
 
   // Filtrar propietarios
-  const filteredOwners = owners.filter(owner => {
-    const searchLower = searchTerm.toLowerCase();
-    return owner.fullName.toLowerCase().includes(searchLower) ||
-           owner.documentNumber.includes(searchLower) ||
-           owner.email.toLowerCase().includes(searchLower);
-  });
+  const filteredOwners = owners
+    .filter(owner => !isAdvisorRole || owner.isActive)
+    .filter(owner => {
+      const searchLower = searchTerm.toLowerCase();
+      return owner.fullName.toLowerCase().includes(searchLower) ||
+             owner.documentNumber.includes(searchLower) ||
+             owner.email.toLowerCase().includes(searchLower);
+    });
 
   // Paginación
   const paginatedOwners = filteredOwners.slice(
@@ -140,16 +151,39 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
 
   // Crear propietario
   const handleCreateOwner = async () => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes crear propietarios');
+      return;
+    }
+
     if (!ownerPerms.canCreate()) {
       toast.error('No tienes permiso para crear propietarios');
       return;
     }
     
     if (!formData.nombre || !formData.telefono) {
-      toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
+      toast.error('Por favor complete los campos requeridos: Nombres y Teléfono');
       return;
     }
-    
+
+    // Validaciones adicionales antes de enviar
+    if (formData.email && !formData.email.includes('@')) {
+      toast.error('Correo inválido: debe contener @');
+      return;
+    }
+
+    const emailLower = (formData.email || '').trim().toLowerCase();
+    if (emailLower && owners.some(o => o.email && o.email.trim().toLowerCase() === emailLower)) {
+      toast.error('El correo ya está registrado');
+      return;
+    }
+
+    const doc = (formData.numero_documento || '').trim();
+    if (doc && owners.some(o => o.documentNumber && o.documentNumber.trim() === doc)) {
+      toast.error('El documento ya está registrado');
+      return;
+    }
+
     try {
       const propietarioData = {
         nombre: formData.nombre,
@@ -176,6 +210,11 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
 
   // Editar propietario
   const handleEditOwner = (owner: any) => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes editar propietarios');
+      return;
+    }
+
     setSelectedOwner(owner);
     const original = owner._original;
     setFormData({
@@ -191,16 +230,39 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   };
 
   const handleUpdateOwner = async () => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes editar propietarios');
+      return;
+    }
+
     if (!ownerPerms.canEdit()) {
       toast.error('No tienes permiso para editar propietarios');
       return;
     }
     
     if (!formData.nombre || !formData.telefono) {
-      toast.error('Por favor complete los campos requeridos: Nombre y Teléfono');
+      toast.error('Por favor complete los campos requeridos: Nombres y Teléfono');
       return;
     }
-    
+
+    // Validaciones adicionales antes de enviar (excluir el propietario actual)
+    if (formData.email && !formData.email.includes('@')) {
+      toast.error('Correo inválido: debe contener @');
+      return;
+    }
+
+    const emailLower = (formData.email || '').trim().toLowerCase();
+    if (emailLower && owners.some(o => o.id !== selectedOwner.id && o.email && o.email.trim().toLowerCase() === emailLower)) {
+      toast.error('El correo ya está registrado');
+      return;
+    }
+
+    const doc = (formData.numero_documento || '').trim();
+    if (doc && owners.some(o => o.id !== selectedOwner.id && o.documentNumber && o.documentNumber.trim() === doc)) {
+      toast.error('El documento ya está registrado');
+      return;
+    }
+
     try {
       const propietarioData = {
         nombre: formData.nombre,
@@ -228,11 +290,21 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
 
   // Eliminar propietario
   const handleDeleteOwner = (owner: any) => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes eliminar propietarios');
+      return;
+    }
+
     setSelectedOwner(owner);
     setIsDeleteModalOpen(true);
   };
 
   const confirmDeleteOwner = async () => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes eliminar propietarios');
+      return;
+    }
+
     if (!ownerPerms.canDelete()) {
       toast.error('No tienes permiso para eliminar propietarios');
       return;
@@ -253,9 +325,47 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
   };
 
   // Ver detalles
-  const handleViewOwner = (owner: any) => {
+  const handleViewOwner = async (owner: any) => {
     setSelectedOwner(owner);
     setIsViewModalOpen(true);
+    setOwnerFincas([]);
+    try {
+      setFincasLoading(true);
+      const fincas = await propietariosAPI.getFincas(parseInt(owner.id));
+      setOwnerFincas(fincas || []);
+    } catch (err) {
+      console.warn('Error cargando fincas del propietario:', err);
+    } finally {
+      setFincasLoading(false);
+    }
+  };
+
+  // Activar/Desactivar propietario y sincronizar con backend
+  const handleToggleOwnerActive = async (owner: any, checked: boolean) => {
+    if (isConsultationMode) {
+      toast.error('Modo consulta: no puedes cambiar el estado del propietario');
+      return;
+    }
+
+    if (!ownerPerms.canEdit()) {
+      toast.error('No tienes permiso para cambiar el estado del propietario');
+      return;
+    }
+
+    // Actualización optimista
+    setOwners(prev => prev.map(o => o.id === owner.id ? { ...o, isActive: checked } : o));
+
+    try {
+      await propietariosAPI.update(parseInt(owner.id), { estado: checked });
+      // Re-consultar para obtener estado actualizado del backend
+      await loadPropietarios();
+      toast.success(checked ? 'Propietario activado' : 'Propietario desactivado');
+    } catch (err) {
+      // Revertir en caso de error
+      setOwners(prev => prev.map(o => o.id === owner.id ? { ...o, isActive: !checked } : o));
+      console.error('Error actualizando estado del propietario:', err);
+      toast.error('Error al actualizar el estado del propietario');
+    }
   };
 
   // Reset form
@@ -295,13 +405,15 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
           <p className="text-gray-600">
             {!ownerPerms.canView()
               ? 'Acceso denegado. No tienes permiso para ver propietarios'
-              : ownerPerms.canCreate() || ownerPerms.canEdit()
+              : !isConsultationMode && (ownerPerms.canCreate() || ownerPerms.canEdit())
               ? 'Administra los propietarios de fincas y establecimientos turísticos'
+              : isAdvisorRole
+              ? 'Consulta y busca propietarios activos'
               : 'Consulta la información de los propietarios registrados'
             }
           </p>
         </div>
-        {ownerPerms.canCreate() && (
+        {!isConsultationMode && ownerPerms.canCreate() && (
           <Button
             onClick={() => setIsCreateModalOpen(true)}
             className="bg-green-600 hover:bg-green-700"
@@ -365,94 +477,97 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedOwners.map((owner) => (
-                  <TableRow key={owner.id}>
-                    <TableCell className="font-medium">#{owner.id}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        <User className="w-4 h-4 text-gray-500" />
-                        <span className="font-medium">{owner.fullName}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-1">
-                        <Badge variant="outline" className="text-xs">
-                          {owner.documentType}
-                        </Badge>
-                        <span className="text-sm">{owner.documentNumber}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-1 text-sm">
-                        <Phone className="w-3 h-3 text-gray-400" />
-                        <span>{owner.phone}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-1 text-sm">
-                        <Mail className="w-3 h-3 text-gray-400" />
-                        <span>{owner.email}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="max-w-xs truncate text-sm">
-                      {owner.address}
-                    </TableCell>
-                    <TableCell>
-                      {ownerPerms.canEdit() && (
-                        <Switch
-                          checked={owner.isActive}
-                          onCheckedChange={(checked) => {
-                            setOwners(owners.map(o => 
-                              o.id === owner.id ? { ...o, isActive: checked } : o
-                            ));
-                            toast.success(checked ? 'Propietario activado' : 'Propietario desactivado');
-                          }}
-                          className="data-[state=checked]:bg-green-600"
-                        />
-                      )}
-                      {!ownerPerms.canEdit() && (
-                        <Badge 
-                          variant={owner.isActive ? 'default' : 'secondary'}
-                          className={owner.isActive ? 'bg-green-500' : 'bg-gray-400'}
-                        >
-                          {owner.isActive ? 'Activo' : 'Inactivo'}
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleViewOwner(owner)}
-                          className="border-green-600 text-green-600 hover:bg-green-50"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        {ownerPerms.canEdit() && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleEditOwner(owner)}
-                            className="border-blue-600 text-blue-600 hover:bg-blue-50"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {ownerPerms.canDelete() && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleDeleteOwner(owner)}
-                            className="border-red-600 text-red-600 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
+                {paginatedOwners.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-8 text-center text-gray-600">
+                      No se encontraron resultados
                     </TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  paginatedOwners.map((owner) => (
+                    <TableRow key={owner.id}>
+                      <TableCell className="font-medium">#{owner.id}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center space-x-2">
+                          <User className="w-4 h-4 text-gray-500" />
+                          <span className="font-medium">{owner.fullName}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center space-x-1">
+                          <Badge variant="outline" className="text-xs">
+                            {owner.documentType}
+                          </Badge>
+                          <span className="text-sm">{owner.documentNumber}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center space-x-1 text-sm">
+                          <Phone className="w-3 h-3 text-gray-400" />
+                          <span>{owner.phone}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center space-x-1 text-sm">
+                          <Mail className="w-3 h-3 text-gray-400" />
+                          <span>{owner.email}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-xs truncate text-sm">
+                        {owner.address}
+                      </TableCell>
+                      <TableCell>
+                        {!isConsultationMode && ownerPerms.canEdit() && (
+                          <Switch
+                            checked={owner.isActive}
+                            onCheckedChange={(checked) => handleToggleOwnerActive(owner, !!checked)}
+                            className="data-[state=checked]:bg-green-600"
+                          />
+                        )}
+                        {(isConsultationMode || !ownerPerms.canEdit()) && (
+                          <Badge 
+                            variant={owner.isActive ? 'default' : 'secondary'}
+                            className={owner.isActive ? 'bg-green-500' : 'bg-gray-400'}
+                          >
+                            {owner.isActive ? 'Activo' : 'Inactivo'}
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center space-x-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleViewOwner(owner)}
+                            className="border-green-600 text-green-600 hover:bg-green-50"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                          {!isConsultationMode && ownerPerms.canEdit() && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleEditOwner(owner)}
+                              className="border-blue-600 text-blue-600 hover:bg-blue-50"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                          )}
+                          {!isConsultationMode && ownerPerms.canDelete() && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleDeleteOwner(owner)}
+                              className="border-red-600 text-red-600 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
 
@@ -539,7 +654,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="nombre">Nombre *</Label>
+                <Label htmlFor="nombre">Nombres *</Label>
                 <Input
                   id="nombre"
                   placeholder="Juan"
@@ -548,7 +663,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                 />
               </div>
               <div>
-                <Label htmlFor="apellido">Apellido</Label>
+                <Label htmlFor="apellido">Apellidos</Label>
                 <Input
                   id="apellido"
                   placeholder="Pérez García"
@@ -576,16 +691,26 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                   id="numero_documento"
                   placeholder="1234567890"
                   value={formData.numero_documento}
-                  onChange={(e) => setFormData({ ...formData, numero_documento: e.target.value })}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setFormData({ ...formData, numero_documento: digits });
+                  }}
                 />
               </div>
               <div>
                 <Label htmlFor="telefono">Teléfono *</Label>
                 <Input
                   id="telefono"
-                  placeholder="+57 300 000 0000"
+                  placeholder="3000000000"
                   value={formData.telefono}
-                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setFormData({ ...formData, telefono: digits });
+                  }}
                 />
               </div>
               <div>
@@ -641,7 +766,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="nombre">Nombre *</Label>
+                <Label htmlFor="nombre">Nombres *</Label>
                 <Input
                   id="nombre"
                   placeholder="Juan"
@@ -650,7 +775,7 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                 />
               </div>
               <div>
-                <Label htmlFor="apellido">Apellido</Label>
+                <Label htmlFor="apellido">Apellidos</Label>
                 <Input
                   id="apellido"
                   placeholder="Pérez García"
@@ -678,16 +803,26 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                   id="numero_documento"
                   placeholder="1234567890"
                   value={formData.numero_documento}
-                  onChange={(e) => setFormData({ ...formData, numero_documento: e.target.value })}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setFormData({ ...formData, numero_documento: digits });
+                  }}
                 />
               </div>
               <div>
                 <Label htmlFor="telefono">Teléfono *</Label>
                 <Input
                   id="telefono"
-                  placeholder="+57 300 000 0000"
+                  placeholder="3000000000"
                   value={formData.telefono}
-                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '');
+                    setFormData({ ...formData, telefono: digits });
+                  }}
                 />
               </div>
               <div>
@@ -826,6 +961,27 @@ export function OwnersManagement({ isReadOnly = false }: OwnersManagementProps) 
                     <p className="font-medium">{selectedOwner.address}</p>
                   </div>
                 </div>
+              </div>
+
+              {/* Fincas relacionadas */}
+              <div className="bg-purple-50 p-4 rounded-lg">
+                <h4 className="font-medium text-purple-800 mb-3 flex items-center">
+                  <FileText className="w-4 h-4 mr-2" />
+                  Fincas relacionadas
+                </h4>
+                {fincasLoading ? (
+                  <p className="text-sm text-gray-600">Cargando fincas...</p>
+                ) : ownerFincas && ownerFincas.length ? (
+                  <ul className="list-disc pl-5">
+                    {ownerFincas.map((f: any, idx: number) => (
+                      <li key={f.id_finca ?? f.id ?? idx} className="text-sm font-medium">
+                        {f.nombre ?? f.name ?? f.nombre_finca ?? 'Sin nombre'}
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-gray-600">No tiene fincas asociadas</p>
+                )}
               </div>
 
               {/* Estado y Registro */}
