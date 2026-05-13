@@ -280,7 +280,6 @@ export function CreateTourFormWithServices({ isOpen, onClose, onTourCreated, edi
               selectedServices={formData.services}
               onServicesChange={handleServicesChange}
               label="Servicios adicionales disponibles"
-              contexto="ruta"
             />
           </div>
 
