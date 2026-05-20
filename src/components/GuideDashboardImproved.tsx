@@ -59,9 +59,9 @@ export function GuideDashboardImproved() {
               >
                 <CardContent className="p-6 text-center">
                   <Calendar className="w-8 h-8 text-emerald-600 mx-auto mb-3" />
-                  <h3 className="text-emerald-800 mb-2">Programación</h3>
+                  <h3 className="text-emerald-800 mb-2">Mis programaciones</h3>
                   <p className="text-sm text-gray-600">
-                    Gestionar horarios y tours
+                    Salidas donde estás asignado como guía principal
                   </p>
                 </CardContent>
               </Card>

@@ -94,7 +94,7 @@ export function Navigation() {
       case 'advisor':
         return 'Asesor';
       case 'guide':
-        return 'Guía Turstico';
+        return 'Guía turístico';
       case 'client':
         return 'Cliente';
       default:
@@ -191,7 +191,7 @@ export function Navigation() {
             onClick={() => setCurrentView('programming')}
           >
             <Calendar className="w-5 h-5" />
-            <span>Programación</span>
+            <span>{user?.role === 'guide' ? 'Mis programaciones' : 'Programación'}</span>
           </Button>
 
           <Button
@@ -367,7 +367,7 @@ export function Navigation() {
                 }}
               >
                 <Calendar className="w-5 h-5" />
-                <span>Programación</span>
+                <span>{user?.role === 'guide' ? 'Mis programaciones' : 'Programación'}</span>
               </Button>
 
               <Button

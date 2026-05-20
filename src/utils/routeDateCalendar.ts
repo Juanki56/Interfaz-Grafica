@@ -24,7 +24,25 @@ export function normalizeOccupiedYmd(value: string): string {
   return '';
 }
 
+/**
+ * La columna API `duracion_dias` almacena ahora **horas** de la ruta.
+ * Días de calendario necesarios para bloqueos de disponibilidad (mínimo 1).
+ */
+export function durationCalendarDaysFromRutaHoras(duracion_horas: unknown): number {
+  const h = Number(duracion_horas);
+  if (!Number.isFinite(h) || h <= 0) return 1;
+  return Math.max(1, Math.ceil(h / 24));
+}
+
+/** @deprecated usar durationCalendarDaysFromRutaHoras — mismo nombre de columna, valor en horas */
 export function durationDaysFromRutaDetail(duracion_dias: unknown): number {
-  const n = Number(duracion_dias);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+  return durationCalendarDaysFromRutaHoras(duracion_dias);
+}
+
+/** Texto para catálogo / cliente: duración en horas (campo `duracion_dias` del API = horas). */
+export function formatRutaDuracionHoras(duracion_horas?: number | null): string {
+  if (duracion_horas == null || Number.isNaN(Number(duracion_horas))) return '—';
+  const h = Math.floor(Number(duracion_horas));
+  if (h <= 0) return '—';
+  return h === 1 ? '1 hora' : `${h} horas`;
 }

@@ -90,6 +90,10 @@ export interface Reserva {
   id_cliente: number;
   fecha_reserva: string;
   estado: string;
+  /** Cuándo se creó la reserva (si el backend lo envía). Sirve para ordenar “última reserva” en cliente. */
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+  fecha_registro?: string | null;
 
   // Totales (según implementación backend puede venir como total o monto_total)
   total?: number | string | null;
@@ -102,6 +106,12 @@ export interface Reserva {
   monto_pagado?: number | string | null;
   saldo_pendiente?: number | string | null;
   metodo_pago?: string | null;
+
+  /** Motivo mostrado al cliente cuando el equipo rechaza un comprobante / abono (persistido en la reserva). */
+  motivo_desaprobacion_pago?: string | null;
+
+  fecha_cancelacion?: string | null;
+  motivo_cancelacion?: string | null;
 
   // Campos de JOIN (si el backend devuelve vista enriquecida)
   cliente_nombre?: string | null;
@@ -136,7 +146,8 @@ export interface Ruta {
   ubicacion?: string | null;          // text/varchar NULL (según BD)
   capacidad_maxima?: number | null;   // int4 NULL (según BD)
   destacado?: boolean | null;         // bool NULL (según BD)
-  duracion_dias?: number | null;      // int4 NULL en BD
+  /** Horas de duración de la ruta (columna BD `duracion_dias`; valor = horas). */
+  duracion_dias?: number | null;
   precio_base?: number | null;        // numeric NULL en BD
   dificultad?: string | null;         // varchar NULL en BD
   imagen_url?: string | null;         // text NULL en BD
@@ -428,6 +439,12 @@ export interface Programacion {
   precio_programacion?: number | string | null;
   estado?: string | null;
   es_personalizada?: boolean | null;
+  /** Si la salida proviene de aprobar una solicitud personalizada */
+  id_solicitud_personalizada?: number | null;
+  /**
+   * Guías de apoyo además del `id_empleado` principal (si el backend lo expone en GET/PUT).
+   */
+  guias_apoyo?: number[] | null;
 
   ruta_nombre?: string | null;
   /** URL de imagen si el backend la incluye en el JOIN (p. ej. detalle de programación). */
@@ -524,6 +541,24 @@ export interface SolicitudPersonalizada {
   id_empleado_cotizador?: number | null;
   id_programacion?: number | null;
 
+  /**
+   * Revisión operativa (staff, PATCH /cotizar). Si el backend las persiste, prevalecen
+   * sobre fecha_deseada / fecha_regreso_deseada al reabrir la solicitud.
+   */
+  fecha_salida_operativa?: string | null;
+  fecha_regreso_operativa?: string | null;
+  hora_salida_operativa?: string | null;
+  hora_regreso_operativa?: string | null;
+  /** Guía principal acordado antes de convertir (opcional hasta convertir). */
+  id_empleado_guia?: number | null;
+  /** Hasta un guía de apoyo adicional (2 guías en total con el principal). */
+  guias_apoyo_preasignados?: number[] | null;
+
+  /** Fecha de creación de la solicitud si el API la expone. */
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+  fecha_registro?: string | null;
+
   // Campos enriquecidos (JOIN backend)
   reserva_codigo_qr?: string | null;
   reserva_estado?: string | null;
@@ -537,6 +572,8 @@ export interface SolicitudPersonalizada {
   id_venta?: number | null;
   venta_estado_pago?: string | null;
   venta_saldo_pendiente?: number | string | null;
+  venta_monto_total?: number | string | null;
+  venta_monto_pagado?: number | string | null;
 }
 
 export interface PagoSolicitud {
@@ -1160,14 +1197,72 @@ export const reservasAPI = {
     });
   },
 
-  cancelar: async (id: number, motivo: string) => {
+  cancelar: async (
+    id: number,
+    motivo: string,
+    options?: {
+      cancelado_por?: string;
+      /** Si el backend lo soporta, libera cupos / vínculo con programación al cancelar. */
+      liberar_programacion?: boolean;
+    },
+  ) => {
+    const body: Record<string, unknown> = {
+      motivo_cancelacion: motivo,
+      cancelado_por: options?.cancelado_por ?? 'Usuario',
+    };
+    if (options?.liberar_programacion) {
+      body.liberar_programacion = true;
+    }
     return fetchAPI(`/api/reservas/${id}/cancelar`, {
       method: 'POST',
-      body: JSON.stringify({
-        motivo_cancelacion: motivo,
-        cancelado_por: 'Usuario'
-      }),
+      body: JSON.stringify(body),
     });
+  },
+
+  /**
+   * Intenta eliminar cada vínculo reserva↔programación (detalle).
+   * Útil como refuerzo si el endpoint de cancelar aún no desvincula. Ignora fallos por fila.
+   */
+  liberarProgramacionesVinculadas: async (
+    idReserva: number,
+  ): Promise<{ intentos: number; eliminados: number }> => {
+    let intentos = 0;
+    let eliminados = 0;
+    let detalle: Reserva;
+    try {
+      detalle = await reservasAPI.getById(idReserva);
+    } catch {
+      return { intentos: 0, eliminados: 0 };
+    }
+    const lines = Array.isArray((detalle as any).programaciones) ? (detalle as any).programaciones : [];
+    for (const line of lines) {
+      const idDet = Number(line?.id_detalle_reserva_programacion ?? line?.id_detalle ?? line?.id ?? 0);
+      const idProg = Number(line?.id_programacion ?? 0);
+      let removed = false;
+      if (Number.isFinite(idDet) && idDet > 0) {
+        intentos += 1;
+        try {
+          await fetchAPI(`/api/reservas/${idReserva}/programacion/${idDet}`, { method: 'DELETE' });
+          removed = true;
+          eliminados += 1;
+        } catch {
+          /* intentar variante por id_programacion */
+        }
+      }
+      if (!removed && Number.isFinite(idProg) && idProg > 0) {
+        intentos += 1;
+        try {
+          await fetchAPI(`/api/reservas/${idReserva}/programacion`, {
+            method: 'DELETE',
+            body: JSON.stringify({ id_programacion: idProg }),
+          });
+          eliminados += 1;
+        } catch {
+          /* backend puede no exponer DELETE */
+        }
+      }
+    }
+    return { intentos, eliminados };
   },
 
   delete: async (id: number) => {
@@ -1190,6 +1285,8 @@ export const reservasAPI = {
           id_programacion: number;
           cantidad_personas?: number;
           precio_unitario?: number | string | null;
+          /** Total esperado del grupo (titular + acompañantes); el backend puede ignorarlo si no lo usa. */
+          monto_total?: number | string | null;
         }
   ) => {
     const payload =
@@ -1244,6 +1341,8 @@ export const reservasAPI = {
   pagarCompleto: async (
     idReserva: number,
     payload: {
+      /** Monto que el cliente declara haber pagado (total de la salida); el backend puede ignorarlo si no lo usa. */
+      monto?: number | null;
       metodo_pago?: string | null;
       numero_transaccion?: string | null;
       comprobante_url: string;
@@ -1296,6 +1395,51 @@ export const ventasAPI = {
     return unwrapApiArray<Venta>(response);
   },
 };
+
+/** Respuesta GET /api/dashboard/resumen */
+export interface DashboardSerieBucket {
+  bucket_iso: string;
+  total?: number;
+  confirmadas?: number;
+  pendientes?: number;
+  canceladas?: number;
+  monto_total?: number;
+  monto_pagado?: number;
+  monto_aprobado?: number;
+}
+
+export interface DashboardResumenData {
+  periodo: {
+    fecha_inicio: string;
+    fecha_fin: string;
+    agrupacion: 'day' | 'week' | 'month';
+  };
+  reservas: {
+    pendientes: number;
+    confirmadas: number;
+    canceladas: number;
+    completadas: number;
+    total: number;
+    por_estado: Array<{ estado: string; total: number }>;
+    serie_temporal: DashboardSerieBucket[];
+  };
+  ventas: {
+    total_periodo: number;
+    ventas_mes: number;
+    monto_total_periodo: number;
+    monto_pagado_periodo: number;
+    por_estado_pago: Record<string, number>;
+    por_estado_tabla: Array<{ estado_pago: string; total: number }>;
+    serie_temporal: DashboardSerieBucket[];
+  };
+  pagos: {
+    dinero_recibido: number;
+    abonos_pendientes_monto: number;
+    abonos_pendientes_cantidad: number;
+    ingresos_serie: DashboardSerieBucket[];
+    ingresos_mensuales: Array<{ bucket_iso: string; monto_aprobado: number }>;
+  };
+}
 
 // =====================================================
 // PAGOS / ABONOS DE CLIENTES
@@ -1469,6 +1613,12 @@ export const fincasAPI = {
     const f = (response?.data ?? response) as Finca;
     const out = await enrichFincasImagenFromStorageIfMissing([f], true);
     return out[0];
+  },
+
+  /** Público: YYYY-MM-DD con noche ya reservada (Pendiente/Confirmada), para calendario de reserva */
+  getFechasOcupadasPublicas: async (id: number): Promise<string[]> => {
+    const response = await fetchAPI<any>(`/api/fincas/publicas/${id}/fechas-ocupadas`, { skipAuth: true });
+    return unwrapApiArray<string>(response);
   },
 
   getAll: async (): Promise<Finca[]> => {
@@ -1729,10 +1879,39 @@ export const dashboardAPI = {
     return fetchAPI('/api/dashboard/estadisticas');
   },
 
+  /** Mismo que getEstadisticas pero devuelve solo el objeto útil `data`. */
+  getEstadisticasGenerales: async (): Promise<Record<string, unknown>> => {
+    const response = await fetchAPI<any>('/api/dashboard/estadisticas');
+    return (response?.data ?? response) as Record<string, unknown>;
+  },
+
+  /** KPI y series para Analytics (filtro por fechas ISO YYYY-MM-DD). */
+  getResumen: async (params: {
+    fecha_inicio: string;
+    fecha_fin: string;
+    agrupacion?: 'day' | 'week' | 'month';
+  }): Promise<DashboardResumenData> => {
+    const qs = new URLSearchParams({
+      fecha_inicio: params.fecha_inicio,
+      fecha_fin: params.fecha_fin,
+    });
+    if (params.agrupacion) qs.set('agrupacion', params.agrupacion);
+    const response = await fetchAPI<{ success?: boolean; data: DashboardResumenData }>(
+      `/api/dashboard/resumen?${qs.toString()}`,
+    );
+    const wrapped = response as any;
+    if (wrapped?.data != null && typeof wrapped.data === 'object' && wrapped.data.periodo) {
+      return wrapped.data as DashboardResumenData;
+    }
+    return wrapped as DashboardResumenData;
+  },
+
+  /** Legado — el backend puede no exponer esta ruta. */
   getReservasRecientes: async () => {
     return fetchAPI('/api/dashboard/reservas-recientes');
   },
 
+  /** Legado — rutas reales del backend suelen ser `/api/dashboard/reservas-mes` / `ventas-mes`. */
   getVentasPorMes: async () => {
     return fetchAPI('/api/dashboard/ventas-por-mes');
   },
@@ -2202,7 +2381,7 @@ export const solicitudesPersonalizadasAPI = {
   crearPago: async (
     id: number,
     payload: {
-      monto: number;
+      monto?: number;
       metodo_pago?: string | null;
       numero_transaccion?: string | null;
       comprobante_url: string;
@@ -2211,9 +2390,11 @@ export const solicitudesPersonalizadasAPI = {
       observaciones?: string | null;
     }
   ) => {
+    const bodyPayload: any = { ...payload };
+    if (bodyPayload.monto === undefined) delete bodyPayload.monto;
     return fetchAPI(`/api/solicitudes-personalizadas/${id}/pagos`, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify(bodyPayload),
     });
   },
 
@@ -2231,6 +2412,13 @@ export const solicitudesPersonalizadasAPI = {
     payload: {
       precio_cotizado?: number | null;
       estado?: string | null;
+      fecha_salida?: string | null;
+      fecha_regreso?: string | null;
+      hora_salida?: string | null;
+      hora_regreso?: string | null;
+      lugar_encuentro?: string | null;
+      id_empleado?: number | null;
+      guias_apoyo?: number[] | null;
     }
   ) => {
     return fetchAPI(`/api/solicitudes-personalizadas/${id}/cotizar`, {
@@ -2250,6 +2438,7 @@ export const solicitudesPersonalizadasAPI = {
       hora_regreso?: string | null;
       cupos_totales?: number | null;
       id_empleado?: number | null;
+      guias_apoyo?: number[] | null;
       lugar_encuentro?: string | null;
       precio_cotizado?: number | null;
     }
@@ -2351,14 +2540,17 @@ export const programacionAPI = {
     opts?: { idRuta?: number | null },
   ): Promise<Reserva[]> => {
     let fromEndpoint: Reserva[] | undefined;
+    let reservasDesdeEndpoint = false;
     try {
       const response = await fetchAPI<any>(`/api/programaciones/${idProgramacion}/reservas`);
       fromEndpoint = unwrapApiArray<Reserva>(response);
+      reservasDesdeEndpoint = true;
     } catch {
       fromEndpoint = undefined;
+      reservasDesdeEndpoint = false;
     }
 
-    if (fromEndpoint && fromEndpoint.length > 0) {
+    if (reservasDesdeEndpoint && Array.isArray(fromEndpoint)) {
       return fromEndpoint;
     }
 
@@ -2426,6 +2618,11 @@ export const programacionAPI = {
     }
 
     return enriched;
+  },
+
+  getMisAsignaciones: async (): Promise<Programacion[]> => {
+    const response = await fetchAPI<any>('/api/programaciones/mis-programaciones');
+    return unwrapApiArray<Programacion>(response);
   },
 
   create: async (data: Partial<Programacion>) => {

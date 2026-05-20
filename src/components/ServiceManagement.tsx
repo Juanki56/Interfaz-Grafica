@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   Plus, Edit, Trash2, Eye, Settings,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Search, Filter,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
@@ -37,13 +37,22 @@ import {
 
 type AplicaServicioForm = "finca" | "ruta";
 
-const emptyForm = {
+type ServicioFormData = {
+  nombre: string;
+  descripcion: string;
+  precio: string;
+  imagen_url: string;
+  id_proveedores: string;
+  aplica_a: AplicaServicioForm;
+};
+
+const emptyForm: ServicioFormData = {
   nombre: "",
   descripcion: "",
   precio: "",
   imagen_url: "",
   id_proveedores: "",
-  aplica_a: "ruta" as AplicaServicioForm,
+  aplica_a: "ruta",
 };
 
 function normalizarAplicaServicio(raw: unknown): AplicaServicioForm {
@@ -51,6 +60,109 @@ function normalizarAplicaServicio(raw: unknown): AplicaServicioForm {
     .trim()
     .toLowerCase();
   return v === "finca" ? "finca" : "ruta";
+}
+
+function servicioEstaActivo(service: ServicioConProveedor): boolean {
+  const e = service.estado;
+  if (e === true) return true;
+  if (e === false) return false;
+  const t = String(e ?? "").trim().toLowerCase();
+  if (t.includes("inactiv")) return false;
+  if (t.includes("activ")) return true;
+  return true;
+}
+
+/** Fuera del padre: si se define como componente interno y se usa `<Inner />`, React desmonta el árbol en cada render y se pierde el foco de los inputs. */
+function ServicioFormFields({
+  formData,
+  setFormData,
+  proveedores,
+}: {
+  formData: ServicioFormData;
+  setFormData: Dispatch<SetStateAction<ServicioFormData>>;
+  proveedores: Proveedor[];
+}) {
+  return (
+    <div className="grid gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Nombre *</Label>
+          <Input
+            value={formData.nombre}
+            onChange={(e) => setFormData((f) => ({ ...f, nombre: e.target.value }))}
+            placeholder="Nombre del servicio"
+          />
+        </div>
+        <div>
+          <Label>Precio</Label>
+          <Input
+            type="number"
+            value={formData.precio}
+            onChange={(e) => setFormData((f) => ({ ...f, precio: e.target.value }))}
+            placeholder="0"
+          />
+        </div>
+      </div>
+      <div>
+        <Label>Descripción</Label>
+        <Textarea
+          value={formData.descripcion}
+          onChange={(e) => setFormData((f) => ({ ...f, descripcion: e.target.value }))}
+          placeholder="Descripción del servicio"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label>Imagen URL</Label>
+          <Input
+            value={formData.imagen_url}
+            onChange={(e) => setFormData((f) => ({ ...f, imagen_url: e.target.value }))}
+            placeholder="https://..."
+          />
+        </div>
+        <div>
+          <Label>Proveedor</Label>
+          <Select
+            value={formData.id_proveedores || undefined}
+            onValueChange={(v: string) => setFormData((f) => ({ ...f, id_proveedores: v }))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Selecciona proveedor" />
+            </SelectTrigger>
+            <SelectContent>
+              {proveedores.map((p) => (
+                <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
+                  {p.nombre}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div>
+        <Label>Ámbito del servicio *</Label>
+        <Select
+          value={formData.aplica_a}
+          onValueChange={(v: AplicaServicioForm) => setFormData((f) => ({ ...f, aplica_a: v }))}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Selecciona ámbito" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="finca">
+              Finca — oferta global (reservas de finca, mismo catálogo para todas)
+            </SelectItem>
+            <SelectItem value="ruta">
+              Ruta — solo para rutas (elegibles al configurar cada ruta)
+            </SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-gray-500 mt-1.5">
+          Los de <strong>finca</strong> aparecen en la reserva pública de fincas; los de <strong>ruta</strong> se asocian por ruta en programación.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export function ServiceManagement() {
@@ -65,6 +177,10 @@ export function ServiceManagement() {
 
   const [services, setServices] = useState<ServicioConProveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [aplicaFilter, setAplicaFilter] = useState<string>("__all__");
+  const [estadoFilter, setEstadoFilter] = useState<string>("__all__");
+  const [proveedorFilter, setProveedorFilter] = useState<string>("__all__");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -79,7 +195,7 @@ export function ServiceManagement() {
 
   
 
-  const [formData, setFormData] = useState(emptyForm);
+  const [formData, setFormData] = useState<ServicioFormData>(emptyForm);
 
   const cargarServicios = async () => {
     try {
@@ -116,10 +232,71 @@ export function ServiceManagement() {
     init();
   }, [permisos.loadingRoles, canViewServices]);
 
-  const filteredServices = services.filter((service) =>
-    (service.nombre ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (service.descripcion ?? "").toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const hasActiveFilters =
+    aplicaFilter !== "__all__" || estadoFilter !== "__all__" || proveedorFilter !== "__all__";
+
+  const clearFilters = () => {
+    setAplicaFilter("__all__");
+    setEstadoFilter("__all__");
+    setProveedorFilter("__all__");
+  };
+
+  const proveedorOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    proveedores.forEach((p) => {
+      if (p?.id_proveedores != null) map.set(Number(p.id_proveedores), p.nombre || `Proveedor #${p.id_proveedores}`);
+    });
+    services.forEach((s) => {
+      const id = s.id_proveedores != null ? Number(s.id_proveedores) : NaN;
+      if (Number.isFinite(id) && id > 0 && !map.has(id)) {
+        map.set(id, s.proveedor_nombre || `Proveedor #${id}`);
+      }
+    });
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
+  }, [proveedores, services]);
+
+  const filteredServices = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return services.filter((service) => {
+      if (aplicaFilter !== "__all__") {
+        const amb = normalizarAplicaServicio(service.aplica_a);
+        if (amb !== aplicaFilter) return false;
+      }
+      if (estadoFilter !== "__all__") {
+        const activo = servicioEstaActivo(service);
+        if (estadoFilter === "activo" && !activo) return false;
+        if (estadoFilter === "inactivo" && activo) return false;
+      }
+      if (proveedorFilter !== "__all__") {
+        if (proveedorFilter === "__sin__") {
+          if (service.id_proveedores != null && Number(service.id_proveedores) > 0) return false;
+        } else if (String(service.id_proveedores ?? "") !== proveedorFilter) {
+          return false;
+        }
+      }
+      if (!term) return true;
+      const precioTxt =
+        service.precio != null && service.precio !== undefined
+          ? String(service.precio)
+          : "";
+      const haystack = [
+        service.nombre,
+        service.descripcion,
+        service.proveedor_nombre,
+        precioTxt,
+        normalizarAplicaServicio(service.aplica_a) === "finca" ? "finca" : "ruta",
+        servicioEstaActivo(service) ? "activo" : "inactivo",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [services, searchTerm, aplicaFilter, estadoFilter, proveedorFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, aplicaFilter, estadoFilter, proveedorFilter]);
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredServices.length / itemsPerPage));
@@ -228,98 +405,17 @@ export function ServiceManagement() {
       return;
     }
 
+    const activo = servicioEstaActivo(service);
     try {
       await serviciosAPI.update(service.id_servicio, {
-        estado: !service.estado,
+        estado: !activo,
       } as any);
-      toast.success(`Servicio ${!service.estado ? 'activado' : 'desactivado'}`);
+      toast.success(`Servicio ${!activo ? 'activado' : 'desactivado'}`);
       await cargarServicios();
     } catch (error: any) {
       toast.error(error?.message || "No se pudo cambiar el estado");
     }
   };
-
-  const FormFields = () => (
-  <div className="grid gap-3">
-  <div className="grid grid-cols-2 gap-3">
-    <div>
-      <Label>Nombre *</Label>
-      <Input
-        value={formData.nombre}
-        onChange={(e) => setFormData(f => ({ ...f, nombre: e.target.value }))}
-        placeholder="Nombre del servicio"
-      />
-    </div>
-    <div>
-      <Label>Precio</Label>
-      <Input
-        type="number"
-        value={formData.precio}
-        onChange={(e) => setFormData(f => ({ ...f, precio: e.target.value }))}
-        placeholder="0"
-      />
-    </div>
-  </div>
-  <div>
-    <Label>Descripción</Label>
-    <Textarea
-      value={formData.descripcion}
-      onChange={(e) => setFormData(f => ({ ...f, descripcion: e.target.value }))}
-      placeholder="Descripción del servicio"
-    />
-  </div>
-  <div className="grid grid-cols-2 gap-3">
-    <div>
-      <Label>Imagen URL</Label>
-      <Input
-        value={formData.imagen_url}
-        onChange={(e) => setFormData(f => ({ ...f, imagen_url: e.target.value }))}
-        placeholder="https://..."
-      />
-    </div>
-    <div>
-      <Label>Proveedor</Label>
-      <Select
-        value={formData.id_proveedores}
-        onValueChange={(v: string) => setFormData(f => ({ ...f, id_proveedores: v }))}
-      >
-        <SelectTrigger>
-          <SelectValue placeholder="Selecciona proveedor" />
-        </SelectTrigger>
-        <SelectContent>
-          {proveedores.map((p) => (
-            <SelectItem key={p.id_proveedores} value={String(p.id_proveedores)}>
-              {p.nombre}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  </div>
-  <div>
-    <Label>Ámbito del servicio *</Label>
-    <Select
-      value={formData.aplica_a}
-      onValueChange={(v: AplicaServicioForm) => setFormData((f) => ({ ...f, aplica_a: v }))}
-    >
-      <SelectTrigger>
-        <SelectValue placeholder="Selecciona ámbito" />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="finca">
-          Finca — oferta global (reservas de finca, mismo catálogo para todas)
-        </SelectItem>
-        <SelectItem value="ruta">
-          Ruta — solo para rutas (elegibles al configurar cada ruta)
-        </SelectItem>
-      </SelectContent>
-    </Select>
-    <p className="text-xs text-gray-500 mt-1.5">
-      Los de <strong>finca</strong> aparecen en la reserva pública de fincas; los de <strong>ruta</strong> se asocian por ruta en programación.
-    </p>
-  </div>
-</div>
-);
 
   if (!permisos.loadingRoles && !canViewServices) {
     return (
@@ -354,19 +450,105 @@ export function ServiceManagement() {
       </div>
 
       <Card>
-        <CardContent className="p-4">
-          <Input
-            placeholder="Buscar servicios..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-64 border-green-200"
-          />
+        <CardContent className="p-4 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="relative flex-1 min-w-0 max-w-xl">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-600" />
+              <Input
+                placeholder="Buscar por nombre, descripción, proveedor, precio, ámbito..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 border-green-200 w-full"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-green-200 hover:bg-green-50 shrink-0"
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              <Filter className="w-4 h-4 mr-2 text-green-600" />
+              Filtros
+              {hasActiveFilters ? (
+                <Badge variant="secondary" className="ml-2 bg-emerald-100 text-emerald-800">
+                  Activos
+                </Badge>
+              ) : null}
+            </Button>
+          </div>
+
+          {filtersOpen ? (
+            <div className="flex flex-col sm:flex-row flex-wrap gap-3 rounded-lg border border-green-100 bg-green-50/50 p-4">
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Ámbito</Label>
+                <Select value={aplicaFilter} onValueChange={setAplicaFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="ruta">Ruta</SelectItem>
+                    <SelectItem value="finca">Finca</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Estado</Label>
+                <Select value={estadoFilter} onValueChange={setEstadoFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="activo">Activo</SelectItem>
+                    <SelectItem value="inactivo">Inactivo</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[200px] flex-1">
+                <Label className="text-xs text-green-800">Proveedor</Label>
+                <Select value={proveedorFilter} onValueChange={setProveedorFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="__sin__">Sin proveedor</SelectItem>
+                    {proveedorOptions.map(([id, nombre]) => (
+                      <SelectItem key={id} value={String(id)}>
+                        {nombre}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-green-800 hover:bg-green-100"
+                  disabled={!hasActiveFilters && !searchTerm.trim()}
+                  onClick={() => {
+                    clearFilters();
+                    setSearchTerm("");
+                  }}
+                >
+                  Limpiar búsqueda y filtros
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
       <Card className="border-green-200">
         <CardHeader>
-          <CardTitle className="text-green-800">Servicios ({filteredServices.length})</CardTitle>
+          <CardTitle className="text-green-800">
+            Servicios ({filteredServices.length}
+            {services.length !== filteredServices.length ? ` de ${services.length}` : ""})
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -416,7 +598,7 @@ export function ServiceManagement() {
   </TableCell>
   <TableCell>
     <Switch
-      checked={service.estado === true}
+      checked={servicioEstaActivo(service)}
       onCheckedChange={() => handleToggleEstado(service)}
       disabled={!canEditService}
       className="data-[state=checked]:bg-green-600"
@@ -451,7 +633,11 @@ export function ServiceManagement() {
                   <TableRow>
                     <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                       <Settings className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                      <p>No hay servicios disponibles</p>
+                      <p>
+                        {services.length === 0
+                          ? "No hay servicios disponibles"
+                          : "Ningún servicio coincide con la búsqueda o los filtros"}
+                      </p>
                     </TableCell>
                   </TableRow>
                 )}
@@ -459,19 +645,25 @@ export function ServiceManagement() {
             </Table>
           )}
 
-          {Math.ceil(filteredServices.length / itemsPerPage) > 1 && (
-            <div className="flex items-center justify-between mt-4 pt-4 border-t border-green-100">
+          {filteredServices.length > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4 pt-4 border-t border-green-100">
               <p className="text-sm text-gray-600">
-                Mostrando {(currentPage - 1) * itemsPerPage + 1} a {Math.min(currentPage * itemsPerPage, filteredServices.length)} de {filteredServices.length}
+                Mostrando {(currentPage - 1) * itemsPerPage + 1} a{" "}
+                {Math.min(currentPage * itemsPerPage, filteredServices.length)} de {filteredServices.length} resultado
+                {filteredServices.length === 1 ? "" : "s"}
+                {services.length !== filteredServices.length ? (
+                  <span className="text-gray-500"> (catálogo: {services.length})</span>
+                ) : null}
               </p>
-              <div className="flex gap-2">
+              {Math.ceil(filteredServices.length / itemsPerPage) > 1 ? (
+              <div className="flex gap-2 items-center">
                 <Button size="sm" variant="outline"
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
                   disabled={currentPage === 1}
                   className="border-green-200 text-green-700">
                   <ChevronLeft className="w-4 h-4" />
                 </Button>
-                <span className="text-sm text-gray-600 self-center">
+                <span className="text-sm text-gray-600">
                   Página {currentPage} de {Math.ceil(filteredServices.length / itemsPerPage)}
                 </span>
                 <Button size="sm" variant="outline"
@@ -481,6 +673,7 @@ export function ServiceManagement() {
                   <ChevronRight className="w-4 h-4" />
                 </Button>
               </div>
+              ) : null}
             </div>
           )}
         </CardContent>
@@ -493,7 +686,7 @@ export function ServiceManagement() {
             <DialogTitle className="text-green-800">Crear Nuevo Servicio</DialogTitle>
             <DialogDescription>Completa los campos para registrar un nuevo servicio.</DialogDescription>
           </DialogHeader>
-          <FormFields />
+          <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleCreate}>
@@ -510,7 +703,7 @@ export function ServiceManagement() {
             <DialogTitle className="text-green-800">Editar Servicio</DialogTitle>
             <DialogDescription>Modifica la información del servicio.</DialogDescription>
           </DialogHeader>
-          <FormFields />
+          <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleUpdate}>
@@ -537,7 +730,7 @@ export function ServiceManagement() {
       },
       { label: "Precio", value: selectedService.precio ? `$${Number(selectedService.precio).toLocaleString("es-CO")}` : "—" },
       { label: "Proveedor", value: selectedService.proveedor_nombre || "Sin proveedor" },
-      { label: "Estado", value: selectedService.estado ? "Activo" : "Inactivo" },
+      { label: "Estado", value: servicioEstaActivo(selectedService) ? "Activo" : "Inactivo" },
       { label: "Fecha creación", value: selectedService.fecha_creacion ? new Date(selectedService.fecha_creacion).toLocaleDateString('es-CO') : "—" },
     ].map(({ label, value }) => (
       <div key={label} className="flex justify-between py-2 border-b border-green-100">

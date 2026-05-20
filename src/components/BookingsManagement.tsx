@@ -56,9 +56,12 @@ import { programacionAPI, reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '
 import {
   addDays,
   durationDaysFromRutaDetail,
+  formatRutaDuracionHoras,
   normalizeOccupiedYmd,
   toYMD,
 } from '../utils/routeDateCalendar';
+import { staffReservaPaymentStatusForUi } from '../utils/clientPaymentFlow';
+import { clienteProgramacionPrecioFila } from '../utils/programacionLinePricing';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 
@@ -146,6 +149,22 @@ const formatDate = (value?: string | null) => {
   if (!value) return '—';
   return String(value).split('T')[0] || '—';
 };
+
+const formatDateTime = (date?: string | null, time?: string | null) => {
+  const dateLabel = formatDate(date);
+  if (dateLabel === '—') return '—';
+  if (!time) return dateLabel;
+  return `${dateLabel} · ${String(time).slice(0, 5)}`;
+};
+
+const fincaDetalleLabel = (item: any) =>
+  item?.finca_nombre ||
+  item?.nombre_finca ||
+  item?.nombre ||
+  (item?.id_finca != null ? `Finca #${item.id_finca}` : 'Finca');
+
+const rutaProgramacionLabel = (item: any) =>
+  item?.ruta_nombre || item?.nombre_ruta || (item?.id_ruta ? `Ruta #${item.id_ruta}` : 'Ruta programada');
 
 const getStatusBadge = (status: string) => {
   const normalized = normalizeReservationStatus(status);
@@ -413,7 +432,7 @@ export function BookingsManagement() {
     return null;
   };
 
-  const loadReservas = async () => {
+  const loadReservas = async (): Promise<BookingRecord[]> => {
     try {
       setIsLoading(true);
       const data = await reservasAPI.getAll();
@@ -434,7 +453,14 @@ export function BookingsManagement() {
           adults: 1,
           children: Math.max(0, Number(r.numero_participantes ?? 1) - 1),
           status: normalizeReservationStatus(r.estado),
-          paymentStatus: normalizePaymentStatus(r.estado_pago),
+          paymentStatus: staffReservaPaymentStatusForUi({
+            tipoServicio: tipoServicio,
+            estadoPago: r.estado_pago,
+            estadoReserva: r.estado,
+            saldoPendiente: r.saldo_pendiente,
+            montoPagado: r.monto_pagado,
+            montoTotal: total,
+          }),
           paymentMethod: r.metodo_pago || 'Por definir',
           total,
           paidAmount: Number(r.monto_pagado ?? 0),
@@ -443,10 +469,12 @@ export function BookingsManagement() {
         };
       });
       setBookings(reservasMapeadas);
+      return reservasMapeadas;
     } catch (error) {
       console.error('Error al cargar reservas:', error);
       toast.error('No se pudieron cargar las reservas.');
       setBookings([]);
+      return [];
     } finally {
       setIsLoading(false);
     }
@@ -1025,6 +1053,9 @@ export function BookingsManagement() {
         if (!companion?.nombre.trim() || !companion?.apellido.trim()) {
           throw new Error(`Completa nombre y apellido del acompañante ${index + 1}.`);
         }
+        if (!companion?.numero_documento?.trim()) {
+          throw new Error(`El número de documento del acompañante ${index + 1} es obligatorio.`);
+        }
       }
 
       if (companionDetails.length > 0) {
@@ -1092,13 +1123,21 @@ export function BookingsManagement() {
 
     try {
       setIsLoading(true);
-      await reservasAPI.update(Number(selectedBooking.id), {
-        id_cliente: Number(formData.clientId),
-        fecha_reserva: formData.bookingDate,
-        estado: formData.status,
-        total: Number(formData.total) || 0,
-        notas: formData.specialRequests || '',
-      });
+      if (formData.status === 'Cancelada') {
+        const motivo =
+          formData.specialRequests?.trim() ||
+          'Cancelación solicitada desde edición de gestión de reservas';
+        await reservasAPI.cancelar(Number(selectedBooking.id), motivo, { liberar_programacion: true });
+        await reservasAPI.liberarProgramacionesVinculadas(Number(selectedBooking.id));
+      } else {
+        await reservasAPI.update(Number(selectedBooking.id), {
+          id_cliente: Number(formData.clientId),
+          fecha_reserva: formData.bookingDate,
+          estado: formData.status,
+          total: Number(formData.total) || 0,
+          notas: formData.specialRequests || '',
+        });
+      }
 
       toast.success('Reserva actualizada correctamente.');
       setSelectedBooking((prev) =>
@@ -1123,7 +1162,9 @@ export function BookingsManagement() {
             }
           : prev
       );
-      await loadReservas();
+      const fresh = await loadReservas();
+      const row = fresh.find((b) => b.id === String(selectedBooking.id));
+      if (row) setSelectedBooking(row);
       setActiveView('detail');
     } catch (error: any) {
       console.error('Error al editar reserva:', error);
@@ -1152,14 +1193,18 @@ export function BookingsManagement() {
 
     try {
       if (newStatus === 'Cancelada') {
-        await reservasAPI.cancelar(Number(bookingId), 'Cancelación solicitada desde gestión de reservas');
+        await reservasAPI.cancelar(Number(bookingId), 'Cancelación solicitada desde gestión de reservas', {
+          liberar_programacion: true,
+        });
+        await reservasAPI.liberarProgramacionesVinculadas(Number(bookingId));
       } else {
         await reservasAPI.update(Number(bookingId), { estado: newStatus });
       }
       toast.success(`Estado actualizado a ${newStatus}.`);
-      await loadReservas();
+      const fresh = await loadReservas();
       if (selectedBooking?.id === bookingId) {
-        setSelectedBooking((prev) => (prev ? { ...prev, status: newStatus } : prev));
+        const row = fresh.find((b) => b.id === bookingId);
+        if (row) setSelectedBooking(row);
       }
     } catch (error: any) {
       console.error('Error al cambiar estado:', error);
@@ -2053,8 +2098,25 @@ export function BookingsManagement() {
                                         </div>
                                         {taquillaDurationDays > 1 ? (
                                           <p className="mt-2 text-center text-xs text-gray-500">
-                                            La ruta dura {taquillaDurationDays} días: un día gris bloquea iniciar
-                                            la salida si el viaje cruzaría esa fecha ocupada.
+                                            {formRutaDetalle?.duracion_dias != null &&
+                                            Number(formRutaDetalle.duracion_dias) > 0 ? (
+                                              <>
+                                                La ruta está registrada con{' '}
+                                                {formatRutaDuracionHoras(formRutaDetalle.duracion_dias)}: en el
+                                                calendario eso equivale a {taquillaDurationDays} día
+                                                {taquillaDurationDays === 1 ? '' : 's'} natural
+                                                {taquillaDurationDays === 1 ? '' : 'es'}. Un día gris bloquea iniciar la
+                                                salida si el viaje cruzaría una fecha ocupada.
+                                              </>
+                                            ) : (
+                                              <>
+                                                En el calendario se bloquean hasta {taquillaDurationDays} día
+                                                {taquillaDurationDays === 1 ? '' : 's'} natural
+                                                {taquillaDurationDays === 1 ? '' : 'es'} según la duración de la ruta.
+                                                Un día gris bloquea iniciar la salida si el viaje cruzaría una fecha
+                                                ocupada.
+                                              </>
+                                            )}
                                           </p>
                                         ) : (
                                           <p className="mt-2 text-center text-xs text-gray-500">
@@ -2080,8 +2142,12 @@ export function BookingsManagement() {
                                     }
                                   />
                                   <p className="mt-1 text-xs text-gray-500">
-                                    Se rellena sola según la duración en la ficha de la ruta ({taquillaDurationDays}{' '}
-                                    día(s)); corrige si hace falta.
+                                    Se rellena sola según las horas de la ruta en la ficha
+                                    {formRutaDetalle?.duracion_dias != null &&
+                                    Number(formRutaDetalle.duracion_dias) > 0
+                                      ? ` (${formatRutaDuracionHoras(formRutaDetalle.duracion_dias)} ≈ ${taquillaDurationDays} día${taquillaDurationDays === 1 ? '' : 's'} en calendario)`
+                                      : ` (${taquillaDurationDays} día${taquillaDurationDays === 1 ? '' : 's'} en calendario)`}
+                                    ; corrige si hace falta.
                                   </p>
                                 </div>
                                 <div>
@@ -2235,7 +2301,8 @@ export function BookingsManagement() {
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <p className="text-sm text-gray-600">
-                        Registra aquí a las {companionDetails.length} personas adicionales de la reserva.
+                        Registra aquí a las {companionDetails.length} personas adicionales de la reserva. El número de
+                        documento de cada acompañante es obligatorio.
                       </p>
                       {companionDetails.map((companion, index) => (
                         <div key={`companion-${index}`} className="rounded-lg border bg-gray-50 p-4">
@@ -2275,11 +2342,12 @@ export function BookingsManagement() {
                               </Select>
                             </div>
                             <div>
-                              <Label>Número de documento</Label>
+                              <Label>Número de documento *</Label>
                               <Input
                                 value={companion.numero_documento}
                                 onChange={(e) => updateCompanionField(index, 'numero_documento', e.target.value)}
                                 className="bg-white"
+                                required
                               />
                             </div>
                             <div>
@@ -2499,7 +2567,17 @@ export function BookingsManagement() {
                 <div>
                   <p className="text-sm text-gray-600">Pago</p>
                   <div className="mt-2">
-                    {getPaymentStatusBadge(reservaDetalle?.estado_pago || selectedBooking.paymentStatus)}
+                    {getPaymentStatusBadge(
+                      staffReservaPaymentStatusForUi({
+                        tipoServicio: reservaDetalle?.tipo_servicio || selectedBooking.packageName,
+                        estadoPago: reservaDetalle?.estado_pago ?? selectedBooking.paymentStatus,
+                        estadoReserva: reservaDetalle?.estado ?? selectedBooking.status,
+                        saldoPendiente: reservaDetalle?.saldo_pendiente ?? selectedBooking.pendingAmount,
+                        montoPagado: reservaDetalle?.monto_pagado ?? selectedBooking.paidAmount,
+                        montoTotal:
+                          reservaDetalle?.monto_total ?? reservaDetalle?.total ?? selectedBooking.total,
+                      }),
+                    )}
                   </div>
                 </div>
                 <CheckCircle className="h-8 w-8 text-green-600" />
@@ -2663,23 +2741,41 @@ export function BookingsManagement() {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead>ID programación</TableHead>
+                          <TableHead>Ruta y salida</TableHead>
+                          <TableHead>Encuentro</TableHead>
                           <TableHead>Personas</TableHead>
                           <TableHead>Precio</TableHead>
                           <TableHead>Subtotal</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {reservaDetalle.programaciones.map((item: any) => (
+                        {reservaDetalle.programaciones.map((item: any) => {
+                          const p = clienteProgramacionPrecioFila(item, reservaDetalle, {
+                            listMontoTotal: selectedBooking?.total,
+                          });
+                          return (
                           <TableRow
                             key={item.id_detalle_reserva_programacion || `${item.id_programacion}-${item.subtotal}`}
                           >
-                            <TableCell>{item.id_programacion}</TableCell>
+                            <TableCell>
+                              <div className="font-medium text-gray-900">{rutaProgramacionLabel(item)}</div>
+                              <div className="text-sm text-gray-600">
+                                Salida: {formatDateTime(item.fecha_salida, item.hora_salida)}
+                                {item.fecha_regreso
+                                  ? ` · Regreso: ${formatDateTime(item.fecha_regreso, item.hora_regreso)}`
+                                  : ''}
+                              </div>
+                              <div className="text-xs text-gray-400">Ref. programación #{item.id_programacion}</div>
+                            </TableCell>
+                            <TableCell className="max-w-[200px] text-sm">
+                              {item.lugar_encuentro?.trim() || '—'}
+                            </TableCell>
                             <TableCell>{item.cantidad_personas}</TableCell>
-                            <TableCell>{formatCurrency(item.precio_programacion || item.precio_unitario)}</TableCell>
-                            <TableCell>{formatCurrency(item.subtotal)}</TableCell>
+                            <TableCell>{formatCurrency(p.precioUnitarioMostrado)}</TableCell>
+                            <TableCell>{formatCurrency(p.subtotalMostrado)}</TableCell>
                           </TableRow>
-                        ))}
+                          );
+                        })}
                       </TableBody>
                     </Table>
                   </CardContent>
@@ -2696,6 +2792,7 @@ export function BookingsManagement() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Finca</TableHead>
+                          <TableHead>Ubicación</TableHead>
                           <TableHead>Check-in</TableHead>
                           <TableHead>Check-out</TableHead>
                           <TableHead>Noches</TableHead>
@@ -2707,7 +2804,15 @@ export function BookingsManagement() {
                           <TableRow
                             key={item.id_detalle_reserva_finca || `${item.id_finca}-${item.subtotal}`}
                           >
-                            <TableCell>{item.nombre_finca || `Finca #${item.id_finca}`}</TableCell>
+                            <TableCell>
+                              <div className="font-medium">{fincaDetalleLabel(item)}</div>
+                              {item.id_finca != null && (
+                                <div className="text-xs text-gray-400">Ref. #{item.id_finca}</div>
+                              )}
+                            </TableCell>
+                            <TableCell className="max-w-[220px] text-sm text-gray-700">
+                              {item.ubicacion?.trim() || '—'}
+                            </TableCell>
                             <TableCell>{formatDate(item.fecha_checkin)}</TableCell>
                             <TableCell>{formatDate(item.fecha_checkout)}</TableCell>
                             <TableCell>{item.numero_noches || '—'}</TableCell>

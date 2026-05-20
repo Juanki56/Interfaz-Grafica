@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Calendar, Users, Clock, MapPin, DollarSign, CreditCard, User, Phone, Mail, UtensilsCrossed, Coffee, Soup, Pizza, Check, Bus, Home, Utensils, QrCode, CheckCircle2, Clock3 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -22,12 +22,8 @@ import {
   type Ruta,
   type SolicitudPersonalizada,
 } from '../services/api';
-
-function parseDurationDays(durationLabel: string): number {
-  const match = String(durationLabel || '').match(/(\d+)/);
-  const value = match ? Number.parseInt(match[1], 10) : NaN;
-  return Number.isFinite(value) && value > 0 ? value : 1;
-}
+import { clientDisplayEstadoPagoVenta, montoPagoUnicoSolicitudPersonalizada } from '../utils/clientPaymentFlow';
+import { durationCalendarDaysFromRutaHoras, formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 
 function toYMD(date: Date): string {
   const d = new Date(date);
@@ -52,6 +48,21 @@ function normalizeOccupiedYmd(value: string): string {
   const parsed = new Date(s);
   if (!Number.isNaN(parsed.getTime())) return toYMD(parsed);
   return '';
+}
+
+const SOLICITUD_PAGO_PROOF_MAX = 5 * 1024 * 1024;
+const SOLICITUD_PAGO_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+const SOLICITUD_PAGO_PROOF_NAME_MAX = 180;
+const SOLICITUD_PAGO_METODO_MAX = 40;
+const SOLICITUD_PAGO_TRANSACCION_MAX = 80;
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    reader.readAsDataURL(file);
+  });
 }
 
 interface Restaurant {
@@ -124,14 +135,29 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     metodo_pago: 'Transferencia',
     numero_transaccion: '',
     comprobante_url: '',
+    comprobante_nombre: '',
+    comprobante_tipo: '',
     observaciones: '',
   });
+  const solicitudPagoProofRef = useRef<HTMLInputElement>(null);
+
+  const montoPagoUnicoRutaPersonalizada = useMemo(
+    () => montoPagoUnicoSolicitudPersonalizada(createdSolicitud),
+    [createdSolicitud],
+  );
 
   const [occupiedDates, setOccupiedDates] = useState<Set<string>>(new Set());
   const [isLoadingAvailability, setIsLoadingAvailability] = useState(false);
   const [availabilityWarning, setAvailabilityWarning] = useState(false);
 
-  const durationDays = useMemo(() => parseDurationDays(tour.duration), [tour.duration]);
+  /** Días naturales en calendario bloqueados según horas de la ruta (mín. 1). */
+  const calendarSpanDays = useMemo(() => {
+    const h = routeDetail?.duracion_dias;
+    if (h != null && Number.isFinite(Number(h)) && Number(h) > 0) {
+      return durationCalendarDaysFromRutaHoras(h);
+    }
+    return 1;
+  }, [routeDetail?.duracion_dias]);
 
   const bookingCalendarModifiers = useMemo(() => {
     const startOfToday = new Date();
@@ -340,6 +366,16 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     setSelectedOptionalServices([]);
     setCompanionDetails([]);
     setPaymentAmount('50'); // Resetear el monto de pago
+    setPaymentData({
+      monto: '',
+      metodo_pago: 'Transferencia',
+      numero_transaccion: '',
+      comprobante_url: '',
+      comprobante_nombre: '',
+      comprobante_tipo: '',
+      observaciones: '',
+    });
+    if (solicitudPagoProofRef.current) solicitudPagoProofRef.current.value = '';
     setBookingData({
       date: '',
       time: '',
@@ -358,6 +394,46 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
     onClose();
   };
 
+  const handleSolicitudPagoProofChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > SOLICITUD_PAGO_PROOF_MAX) {
+      toast.error('El archivo no debe exceder 5 MB.');
+      event.target.value = '';
+      return;
+    }
+    if (!SOLICITUD_PAGO_PROOF_TYPES.includes(file.type)) {
+      toast.error('Solo se permiten archivos PDF, JPG, PNG o WEBP.');
+      event.target.value = '';
+      return;
+    }
+
+    if (String(file.name || '').trim().length > SOLICITUD_PAGO_PROOF_NAME_MAX) {
+      toast.error(`El nombre del comprobante no puede superar ${SOLICITUD_PAGO_PROOF_NAME_MAX} caracteres.`);
+      event.target.value = '';
+      return;
+    }
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      if (!String(dataUrl || '').trim()) throw new Error('No se pudo procesar el archivo.');
+      setPaymentData((p) => ({
+        ...p,
+        comprobante_url: dataUrl,
+        comprobante_nombre: file.name,
+        comprobante_tipo: file.type || 'application/octet-stream',
+      }));
+      toast.success('Comprobante cargado.');
+    } catch (e: any) {
+      toast.error(e?.message || 'No se pudo cargar el comprobante.');
+      event.target.value = '';
+    }
+  };
+
+  const clearSolicitudPagoProof = () => {
+    setPaymentData((p) => ({ ...p, comprobante_url: '', comprobante_nombre: '', comprobante_tipo: '' }));
+    if (solicitudPagoProofRef.current) solicitudPagoProofRef.current.value = '';
+  };
+
   const formatSolicitudEstado = (estado?: string | null) => {
     const value = String(estado ?? '').trim();
     if (!value) return '—';
@@ -371,8 +447,11 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
   };
 
   const solicitudHabilitadaParaPago = (estado?: string | null) => {
-    const lowered = String(estado ?? '').trim().toLowerCase();
-    return lowered === 'aprobadaparapago' || lowered === 'cotizada';
+    const normalized = String(estado ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '');
+    return normalized.includes('aprobadaparapago') || normalized === 'cotizada';
   };
 
   const formatCurrency = (value?: number | string | null) => {
@@ -419,6 +498,10 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       const companion = companionDetails[index];
       if (!companion?.nombre.trim() || !companion?.apellido.trim()) {
         toast.error(`Completa nombre y apellido del acompañante ${index + 1}`);
+        return;
+      }
+      if (!companion?.numero_documento?.trim()) {
+        toast.error(`El número de documento del acompañante ${index + 1} es obligatorio`);
         return;
       }
     }
@@ -525,8 +608,8 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       base.setHours(0, 0, 0, 0);
       if (base < today) return true;
 
-      // Bloqueo por rango: si la ruta dura N días, se deshabilita el inicio si algún día del rango está ocupado.
-      for (let i = 0; i < durationDays; i += 1) {
+      // Bloqueo por rango: según horas de la ruta puede abarcar varios días naturales; bloquear si el rango cruza ocupados.
+      for (let i = 0; i < calendarSpanDays; i += 1) {
         const d = addDays(base, i);
         if (occupiedDates.has(toYMD(d))) return true;
       }
@@ -567,7 +650,11 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   <div className="flex items-center space-x-4 text-sm text-muted-foreground mt-1">
                     <div className="flex items-center">
                       <Clock className="w-3 h-3 mr-1" />
-                      {tour.duration}
+                      {routeDetail?.duracion_dias != null &&
+                      Number.isFinite(Number(routeDetail.duracion_dias)) &&
+                      Number(routeDetail.duracion_dias) > 0
+                        ? formatRutaDuracionHoras(routeDetail.duracion_dias)
+                        : tour.duration}
                     </div>
                     <div className="flex items-center">
                       <MapPin className="w-3 h-3 mr-1" />
@@ -663,10 +750,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                           </>
                         )}
                       </div>
-                      {durationDays > 1 ? (
+                      {calendarSpanDays > 1 ? (
                         <p className="text-xs text-gray-500">
-                          La ruta dura {durationDays} días consecutivos: si cualquier día de ese rango ya está ocupado,
-                          no podrás iniciar la salida en una fecha que lo cruce.
+                          Según la duración en horas de la ruta, la salida puede ocupar {calendarSpanDays} día
+                          {calendarSpanDays === 1 ? '' : 's'} natural
+                          {calendarSpanDays === 1 ? '' : 'es'} en calendario: si cualquier fecha de ese rango ya está
+                          ocupada, no podrás iniciar la salida en una fecha que lo cruce.
                         </p>
                       ) : (
                         <p className="text-xs text-gray-500">
@@ -719,7 +808,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                     <div>
                       <h4 className="font-semibold">Datos de acompañantes</h4>
                       <p className="text-sm text-gray-600 mt-1">
-                        Estos datos se guardan en la reserva para que el equipo vea quiénes integran el grupo.
+                        Nombre, apellido y número de documento son obligatorios por cada acompañante.
                       </p>
                     </div>
 
@@ -728,7 +817,7 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                         <div key={`companion-${index}`} className="rounded-xl border border-gray-200 bg-white p-4 space-y-4">
                           <div className="flex items-center justify-between gap-3">
                             <h5 className="font-medium text-gray-900">Acompañante {index + 1}</h5>
-                            <Badge variant="outline">Opcional doc/teléfono</Badge>
+                            <Badge variant="outline">Teléfono opcional</Badge>
                           </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -769,11 +858,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                             </div>
 
                             <div className="space-y-2">
-                              <Label>Número de documento</Label>
+                              <Label>Número de documento *</Label>
                               <Input
                                 value={companion.numero_documento}
                                 onChange={(e) => updateCompanionField(index, 'numero_documento', e.target.value)}
                                 placeholder="Ej: 123456789"
+                                required
                               />
                             </div>
 
@@ -966,7 +1056,9 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                     {createdSolicitud.id_venta != null && createdSolicitud.venta_estado_pago && (
                       <div className="flex items-center justify-between">
                         <span className="text-gray-600">Estado pago</span>
-                        <span className="font-medium">{createdSolicitud.venta_estado_pago}</span>
+                        <span className="font-medium">
+                          {clientDisplayEstadoPagoVenta('Ruta', createdSolicitud.venta_estado_pago)}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -979,24 +1071,15 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   <div className="border border-green-200 rounded-lg p-4 bg-white">
                     <h4 className="font-semibold text-green-800 mb-3">Registrar pago (con comprobante)</h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Monto *</Label>
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          value={paymentData.monto}
-                          onChange={(e) => setPaymentData((p) => ({ ...p, monto: e.target.value }))}
-                          placeholder={
-                            createdSolicitud.venta_saldo_pendiente != null
-                              ? String(createdSolicitud.venta_saldo_pendiente)
-                              : 'Ej: 120000'
-                          }
-                        />
-                        {createdSolicitud.venta_saldo_pendiente != null ? (
-                          <p className="text-xs text-gray-500">
-                            Saldo pendiente: ${Number(createdSolicitud.venta_saldo_pendiente || 0).toLocaleString()}
-                          </p>
-                        ) : null}
+                      <div className="space-y-2 md:col-span-2">
+                        <Label>Monto a pagar (total de la venta)</Label>
+                        <p className="text-lg font-semibold text-green-900">
+                          ${Number(montoPagoUnicoRutaPersonalizada || 0).toLocaleString('es-CO')}
+                        </p>
+                        <p className="text-xs text-gray-600 leading-relaxed">
+                          El comprobante debe corresponder al <strong>pago único</strong> por el total pendiente. En rutas
+                          personalizadas <strong>no hay abonos parciales</strong> (solo en reservas de finca).
+                        </p>
                       </div>
 
                       <div className="space-y-2">
@@ -1027,16 +1110,29 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                         />
                       </div>
 
-                      <div className="space-y-2">
-                        <Label>URL del comprobante *</Label>
+                      <div className="space-y-2 md:col-span-2">
+                        <Label htmlFor="tour-solicitud-comprobante">Comprobante (imagen o PDF) *</Label>
                         <Input
-                          value={paymentData.comprobante_url}
-                          onChange={(e) => setPaymentData((p) => ({ ...p, comprobante_url: e.target.value }))}
-                          placeholder="Pega el link (Drive, Dropbox, etc.)"
+                          id="tour-solicitud-comprobante"
+                          ref={solicitudPagoProofRef}
+                          type="file"
+                          accept="application/pdf,image/jpeg,image/png,.pdf,.jpg,.jpeg,.png"
+                          className="cursor-pointer"
+                          onChange={handleSolicitudPagoProofChange}
                         />
                         <p className="text-xs text-gray-500">
-                          El asesor verificará el comprobante y, cuando quede aprobado, podrá convertir la solicitud en programación operativa.
+                          Máx. 5 MB. PDF, JPG o PNG. El asesor verificará el comprobante cuando lo envíes.
                         </p>
+                        {paymentData.comprobante_nombre ? (
+                          <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                            <span className="truncate font-medium" title={paymentData.comprobante_nombre}>
+                              {paymentData.comprobante_nombre}
+                            </span>
+                            <Button type="button" variant="outline" size="sm" onClick={clearSolicitudPagoProof}>
+                              Quitar archivo
+                            </Button>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="md:col-span-2 space-y-2">
@@ -1055,28 +1151,49 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                         disabled={isSubmitting}
                         onClick={async () => {
                           try {
-                            const monto = Number(paymentData.monto || createdSolicitud.venta_saldo_pendiente || createdSolicitud.reserva_monto_total || 0);
-                            if (!Number.isFinite(monto) || monto <= 0) {
-                              toast.error('Monto inválido');
+                            if (!String(paymentData.comprobante_url || '').trim()) {
+                              toast.error('Debes adjuntar el comprobante (PDF o imagen).');
                               return;
                             }
-                            if (!String(paymentData.comprobante_url || '').trim()) {
-                              toast.error('Debes pegar la URL del comprobante');
+
+                            if (String(paymentData.metodo_pago || '').trim().length > SOLICITUD_PAGO_METODO_MAX) {
+                              toast.error(`El método de pago no puede exceder ${SOLICITUD_PAGO_METODO_MAX} caracteres.`);
+                              return;
+                            }
+
+                            if (String(paymentData.numero_transaccion || '').trim().length > SOLICITUD_PAGO_TRANSACCION_MAX) {
+                              toast.error(`El número de transacción no puede exceder ${SOLICITUD_PAGO_TRANSACCION_MAX} caracteres.`);
+                              return;
+                            }
+
+                            if (String(paymentData.comprobante_nombre || '').trim().length > SOLICITUD_PAGO_PROOF_NAME_MAX) {
+                              toast.error(`El nombre del comprobante no puede superar ${SOLICITUD_PAGO_PROOF_NAME_MAX} caracteres.`);
                               return;
                             }
 
                             setIsSubmitting(true);
                             await solicitudesPersonalizadasAPI.crearPago(createdSolicitud.id_solicitud_personalizada, {
-                              monto,
                               metodo_pago: paymentData.metodo_pago || null,
                               numero_transaccion: paymentData.numero_transaccion?.trim() || null,
                               comprobante_url: paymentData.comprobante_url.trim(),
+                              comprobante_nombre: paymentData.comprobante_nombre?.trim() || null,
+                              comprobante_tipo: paymentData.comprobante_tipo?.trim() || null,
                               observaciones: paymentData.observaciones?.trim() || null,
                             });
 
                             toast.success('Pago registrado', {
-                              description: 'Quedó pendiente de verificación.'
+                              description: 'Quedó pendiente de verificación.',
                             });
+                            setPaymentData({
+                              monto: '',
+                              metodo_pago: 'Transferencia',
+                              numero_transaccion: '',
+                              comprobante_url: '',
+                              comprobante_nombre: '',
+                              comprobante_tipo: '',
+                              observaciones: '',
+                            });
+                            if (solicitudPagoProofRef.current) solicitudPagoProofRef.current.value = '';
                             await refreshRutaSolicitud();
                           } catch (e: any) {
                             toast.error('No se pudo registrar el pago', {
@@ -1164,7 +1281,11 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                   <div className="flex items-center space-x-4 text-sm text-muted-foreground mt-1">
                     <div className="flex items-center">
                       <Clock className="w-3 h-3 mr-1" />
-                      {tour.duration}
+                      {routeDetail?.duracion_dias != null &&
+                      Number.isFinite(Number(routeDetail.duracion_dias)) &&
+                      Number(routeDetail.duracion_dias) > 0
+                        ? formatRutaDuracionHoras(routeDetail.duracion_dias)
+                        : tour.duration}
                     </div>
                     <div className="flex items-center">
                       <MapPin className="w-3 h-3 mr-1" />

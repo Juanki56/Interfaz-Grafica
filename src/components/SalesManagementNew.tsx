@@ -50,6 +50,7 @@ import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import { clientesAPI, fincasAPI, pagosAPI, reservasAPI, rutasAPI, serviciosAPI, ventasAPI, type PagoCliente, type Reserva, type Venta } from '../services/api';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
 
 // ===========================
@@ -648,7 +649,7 @@ export function SalesManagement() {
           (routes || []).map((route) => ({
             id: String(route.id_ruta),
             name: String(route.nombre),
-            distance: `${route.duracion_dias || '—'} día(s)`,
+            distance: formatRutaDuracionHoras(route.duracion_dias),
             difficulty: String(route.dificultad || 'Por definir'),
             price: Number(route.precio_base || 0),
           }))
@@ -1449,7 +1450,7 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                             <p className="font-semibold text-green-700">{formatCurrency(route.price)}</p>
                           </div>
                           <div className="flex gap-4 text-sm text-gray-600 bg-white rounded-lg p-3">
-                            <span>📍 Distancia: {route.distance}</span>
+                            <span>⏱ Duración: {route.distance}</span>
                             <span>🏔️ Dificultad: {route.difficulty}</span>
                           </div>
                         </div>
@@ -1470,7 +1471,7 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                           <div className="flex-1">
                             <h3 className="font-medium text-gray-900">{route.name}</h3>
                             <div className="flex gap-4 mt-2 text-sm text-gray-600">
-                              <span>📍 Distancia: {route.distance}</span>
+                              <span>⏱ Duración: {route.distance}</span>
                               <span>🏔️ Dificultad: {route.difficulty}</span>
                             </div>
                           </div>
@@ -1946,7 +1947,7 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
                       <p className="font-medium text-gray-900 mt-1">{sale.mainService.name}</p>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-600">Distancia</p>
+                      <p className="text-sm text-gray-600">Duración</p>
                       <p className="font-medium text-gray-900 mt-1">{sale.mainService.distance}</p>
                     </div>
                     <div>

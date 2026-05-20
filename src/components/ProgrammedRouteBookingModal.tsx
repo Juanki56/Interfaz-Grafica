@@ -27,7 +27,9 @@ import {
   type VentaReserva,
 } from '../services/api';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import { montoPagoUnicoSalidaProgramada } from '../utils/clientPaymentFlow';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -72,20 +74,16 @@ interface CreatedCheckoutState {
 }
 
 const MAX_PROOF_FILE_SIZE = 5 * 1024 * 1024;
-const ALLOWED_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
+const ALLOWED_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
+const MAX_PROOF_FILE_NAME = 180;
+const MAX_METODO_PAGO = 40;
+const MAX_NUMERO_TRANSACCION = 80;
 const OCCITOURS_PAYMENT_INFO = {
   titular: 'Occitours S.A.S',
   nequiNumero: '3001234567',
   bancolombiaTipoCuenta: 'Ahorros',
   bancolombiaNumeroCuenta: '12345678901',
 };
-
-function formatDurationDays(duracionDias?: number | null): string {
-  if (duracionDias == null || Number.isNaN(Number(duracionDias))) return '—';
-  const days = Number(duracionDias);
-  if (days <= 0) return '—';
-  return days === 1 ? '1 día' : `${days} días`;
-}
 
 function normalizeMultilineText(value?: string | null): string {
   const t = String(value || '').trim();
@@ -95,7 +93,7 @@ function normalizeMultilineText(value?: string | null): string {
 const EMPTY_COMPANION: CompanionFormState = {
   nombre: '',
   apellido: '',
-  tipo_documento: '',
+  tipo_documento: 'CC',
   numero_documento: '',
   telefono: '',
   fecha_nacimiento: '',
@@ -142,7 +140,7 @@ function getReservationId(payload: any): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-/** Monto a cobrar al cliente: prioriza saldo de venta; si el backend manda 0, usa monto de venta o estimado de la pantalla. */
+/** Monto a cobrar: total del servicio (no “abono” / saldo a medias que a veces manda el API). */
 function resolveAmountDue(checkout: CreatedCheckoutState | null, estimate: number | null): number {
   if (!checkout) return 0;
   const v = checkout.venta;
@@ -151,19 +149,11 @@ function resolveAmountDue(checkout: CreatedCheckoutState | null, estimate: numbe
     if (estado === 'pagado' || estado === 'paid') return 0;
   }
 
-  const saldo = Number(v?.saldo_pendiente);
-  if (Number.isFinite(saldo) && saldo > 0) return saldo;
-
-  const montoVenta = Number(v?.monto_total);
-  if (Number.isFinite(montoVenta) && montoVenta > 0) return montoVenta;
-
-  const montoCheckout = Number(checkout.monto_total);
-  if (Number.isFinite(montoCheckout) && montoCheckout > 0) return montoCheckout;
-
-  const est = estimate != null ? Number(estimate) : NaN;
-  if (Number.isFinite(est) && est > 0) return est;
-
-  return 0;
+  return montoPagoUnicoSalidaProgramada({
+    checkoutMontoTotal: checkout.monto_total,
+    venta: v,
+    estimate,
+  });
 }
 
 export function ProgrammedRouteBookingModal({
@@ -394,13 +384,16 @@ export function ProgrammedRouteBookingModal({
       return;
     }
 
-    const companionMissingData = companions.some(
-      (companion) => !String(companion.nombre).trim() || !String(companion.apellido).trim()
-    );
-
-    if (companionMissingData) {
-      toast.error('Completa al menos nombre y apellido de cada acompanante.');
-      return;
+    for (let i = 0; i < companions.length; i += 1) {
+      const companion = companions[i];
+      if (!String(companion.nombre).trim() || !String(companion.apellido).trim()) {
+        toast.error(`Completa nombre y apellido del acompañante ${i + 1}.`);
+        return;
+      }
+      if (!String(companion.numero_documento).trim()) {
+        toast.error(`El número de documento del acompañante ${i + 1} es obligatorio.`);
+        return;
+      }
     }
 
     try {
@@ -420,6 +413,9 @@ export function ProgrammedRouteBookingModal({
         id_programacion: programacion.id_programacion,
         cantidad_personas: totalPeople,
         precio_unitario: unitPrice ?? 0,
+        ...(estimatedTotal != null && Number.isFinite(estimatedTotal) && estimatedTotal > 0
+          ? { monto_total: estimatedTotal }
+          : {}),
       });
 
       const rawProg: any = programacionResponse;
@@ -478,9 +474,25 @@ export function ProgrammedRouteBookingModal({
       return;
     }
 
+    if (String(paymentData.metodo_pago || '').trim().length > MAX_METODO_PAGO) {
+      toast.error(`El método de pago no puede exceder ${MAX_METODO_PAGO} caracteres.`);
+      return;
+    }
+
+    if (String(paymentData.numero_transaccion || '').trim().length > MAX_NUMERO_TRANSACCION) {
+      toast.error(`El número de transacción no puede exceder ${MAX_NUMERO_TRANSACCION} caracteres.`);
+      return;
+    }
+
+    if (String(paymentData.comprobante_nombre || '').trim().length > MAX_PROOF_FILE_NAME) {
+      toast.error(`El nombre del comprobante no puede superar ${MAX_PROOF_FILE_NAME} caracteres.`);
+      return;
+    }
+
     try {
       setIsPaying(true);
       const response = await reservasAPI.pagarCompleto(createdCheckout.id_reserva, {
+        monto: amountDue,
         metodo_pago: paymentData.metodo_pago || null,
         numero_transaccion: paymentData.numero_transaccion.trim() || null,
         comprobante_url: paymentData.comprobante_url.trim(),
@@ -523,7 +535,13 @@ export function ProgrammedRouteBookingModal({
     }
 
     if (!ALLOWED_PROOF_TYPES.includes(file.type)) {
-      toast.error('Solo se permiten archivos PDF, JPG o PNG.');
+      toast.error('Solo se permiten archivos PDF, JPG, PNG o WEBP.');
+      event.target.value = '';
+      return;
+    }
+
+    if (String(file.name || '').trim().length > MAX_PROOF_FILE_NAME) {
+      toast.error(`El nombre del comprobante no puede superar ${MAX_PROOF_FILE_NAME} caracteres.`);
       event.target.value = '';
       return;
     }
@@ -742,7 +760,7 @@ export function ProgrammedRouteBookingModal({
                 ) : null}
                 <span className="inline-flex items-center gap-1.5">
                   <Clock className="h-4 w-4 shrink-0 text-green-600" />
-                  {formatDurationDays(ruta?.duracion_dias)}
+                  {formatRutaDuracionHoras(ruta?.duracion_dias)}
                 </span>
               </div>
             </div>
@@ -948,18 +966,32 @@ export function ProgrammedRouteBookingModal({
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge className="bg-emerald-700 text-white">Tarifas</Badge>
                     <Badge variant="outline" className="border-green-300 text-green-800">
-                      Precio por persona
+                      Un solo pago — grupo completo
                     </Badge>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600 leading-relaxed">
-                      La salida usa la programación vigente de OCCITOUR. Revisa arriba fechas, horarios y servicios
-                      antes de confirmar tus cupos.
+                      El valor a pagar incluye a <strong>todas las personas</strong> de la reserva: tú como titular más
+                      cada acompañante registrado. No es un abono por persona aparte: es el total de la salida para tu
+                      grupo.
                     </p>
-                    <div className="mt-4 rounded-xl border border-green-100 bg-white px-4 py-3 font-semibold text-green-800 text-lg">
-                      {unitPrice == null
-                        ? 'Tarifa por confirmar con tu asesor'
-                        : `${unitPrice.toLocaleString('es-CO')} COP / persona`}
+                    <div className="mt-4 rounded-xl border border-green-100 bg-white px-4 py-3 space-y-1">
+                      <p className="text-xs font-medium uppercase tracking-wide text-green-800/80">
+                        Total del grupo (estimado)
+                      </p>
+                      <p className="font-semibold text-green-900 text-2xl tabular-nums">
+                        {unitPrice == null || estimatedTotal == null
+                          ? 'Por confirmar'
+                          : `${estimatedTotal.toLocaleString('es-CO')} COP`}
+                      </p>
+                      {unitPrice != null && estimatedTotal != null ? (
+                        <p className="text-sm text-gray-600 pt-1">
+                          <span className="tabular-nums">{unitPrice.toLocaleString('es-CO')} COP</span> por persona ×{' '}
+                          <span className="font-medium text-gray-800">{totalPeople}</span> persona
+                          {totalPeople === 1 ? '' : 's'} (1 titular
+                          {companions.length > 0 ? ` + ${companions.length} acomp.` : ''})
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -981,12 +1013,20 @@ export function ProgrammedRouteBookingModal({
                     <span className="text-gray-900">{totalPeople}</span>
                   </div>
                   <Separator />
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-600">{createdCheckout ? 'Valor total' : 'Valor estimado'}</span>
-                    <span className="text-lg text-green-700">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-gray-600 shrink-0">
+                      {createdCheckout ? 'Total a pagar' : 'Total grupo (estimado)'}
+                    </span>
+                    <span className="text-lg text-green-700 font-semibold tabular-nums text-right">
                       {createdCheckout ? formatCurrency(createdCheckout.monto_total) : formatCurrency(estimatedTotal)}
                     </span>
                   </div>
+                  {createdCheckout ? null : (
+                    <p className="text-xs text-green-800/90 bg-green-50 border border-green-100 rounded-lg px-2 py-1.5">
+                      Al confirmar, enviamos al sistema <strong>{totalPeople}</strong> persona
+                      {totalPeople === 1 ? '' : 's'} y el total calculado para que el cobro sea por el grupo completo.
+                    </p>
+                  )}
                   {createdCheckout?.venta?.id_venta ? (
                     <>
                       <div className="flex items-center justify-between">
@@ -1015,7 +1055,9 @@ export function ProgrammedRouteBookingModal({
                   <h4 className="text-base text-gray-900">Personas que viajan</h4>
                   <p className="text-sm text-gray-600">
                     El cliente titular ya ocupa 1 cupo. Puedes agregar hasta {maxCompanions} acompanante
-                    {maxCompanions === 1 ? '' : 's'} segun la disponibilidad actual.
+                    {maxCompanions === 1 ? '' : 's'} segun la disponibilidad actual. El{' '}
+                    <strong>total a pagar</strong> se actualiza automáticamente e incluye a todas las personas del grupo
+                    (un solo valor por la salida).
                   </p>
                 </div>
 
@@ -1059,7 +1101,8 @@ export function ProgrammedRouteBookingModal({
                     <div>
                       <h4 className="text-base text-gray-900">Datos de acompanantes</h4>
                       <p className="text-sm text-gray-600">
-                        Nombre y apellido son obligatorios. Documento, telefono y fecha de nacimiento son opcionales.
+                        Nombre, apellido y número de documento son obligatorios. Teléfono y fecha de nacimiento son
+                        opcionales.
                       </p>
                     </div>
                   </div>
@@ -1092,7 +1135,7 @@ export function ProgrammedRouteBookingModal({
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor={`companion-doc-type-${index}`}>Tipo de documento (opcional)</Label>
+                            <Label htmlFor={`companion-doc-type-${index}`}>Tipo de documento</Label>
                             <Input
                               id={`companion-doc-type-${index}`}
                               value={companion.tipo_documento}
@@ -1101,12 +1144,13 @@ export function ProgrammedRouteBookingModal({
                             />
                           </div>
                           <div className="space-y-2">
-                            <Label htmlFor={`companion-doc-number-${index}`}>Numero de documento (opcional)</Label>
+                            <Label htmlFor={`companion-doc-number-${index}`}>Número de documento *</Label>
                             <Input
                               id={`companion-doc-number-${index}`}
                               value={companion.numero_documento}
                               onChange={(event) => updateCompanion(index, 'numero_documento', event.target.value)}
                               placeholder="Documento"
+                              required
                             />
                           </div>
                           <div className="space-y-2">
