@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { motion } from 'motion/react';
 import { 
   Users, 
@@ -3829,7 +3829,7 @@ rol_nombre: payload.rol,
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2 }}
-          className="bg-white rounded-lg shadow-sm p-6 border border-green-100"
+          className="bg-white rounded-lg shadow-sm p-6 border border-green-100 min-w-0 overflow-hidden"
         >
           {renderDataView()}
         </motion.div>

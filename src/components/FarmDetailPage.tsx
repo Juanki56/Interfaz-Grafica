@@ -5,11 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { FarmBookingModal } from './FarmBookingModal';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { fincasAPI, serviciosAPI, type Finca as BackendFinca, type Servicio } from '../services/api';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { inferirServicioAplicacion, servicioVisibleEnContexto } from '../utils/servicioAplicacion';
 import type { LucideIcon } from 'lucide-react';
+import { formatCurrencyCOP as formatCurrency } from '../utils/currencyDisplay';
 
 interface FarmDetailPageProps {
   farmId: string;
@@ -386,7 +387,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                   <div>
                     <span className="text-3xl font-semibold text-emerald-700">
                       {farm.pricePerNight > 0
-                        ? `$${farm.pricePerNight.toLocaleString('es-CO')}`
+                        ? formatCurrency(farm.pricePerNight)
                         : 'Consultar'}
                     </span>
                     {farm.pricePerNight > 0 && <span className="ml-2 text-gray-600">por noche</span>}
@@ -546,7 +547,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                             <div>
                               <p className="font-medium text-gray-800">{service.name}</p>
                               <p className="text-sm text-gray-500">
-                                ${service.price.toLocaleString('es-CO')}
+                                {formatCurrency(service.price)}
                               </p>
                             </div>
                           </div>
@@ -577,7 +578,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                       <span className="text-gray-600">Precio de la finca</span>
                       <span className="font-medium text-gray-800">
                         {farm.pricePerNight > 0
-                          ? `$${farm.pricePerNight.toLocaleString('es-CO')}`
+                          ? formatCurrency(farm.pricePerNight)
                           : 'Por cotizar'}
                       </span>
                     </div>
@@ -594,7 +595,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                               <div key={serviceId} className="flex justify-between items-center text-sm">
                                 <span className="text-gray-600">{service.name}</span>
                                 <span className="text-gray-700">
-                                  ${service.price.toLocaleString()}
+                                  {formatCurrency(service.price)}
                                 </span>
                               </div>
                             ) : null;
@@ -607,14 +608,13 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
                     <div className="flex justify-between items-center pt-2">
                       <span className="text-lg text-gray-800">Total</span>
                       <span className="text-2xl text-green-600">
-                        $
-                        {(
+                        {formatCurrency(
                           (farm.pricePerNight > 0 ? farm.pricePerNight : 0) +
                           selectedServices.reduce((total, serviceId) => {
                             const service = fincaExtraServices.find((s) => s.id === serviceId);
                             return total + (service?.price || 0);
-                          }, 0)
-                        ).toLocaleString('es-CO')}
+                          }, 0),
+                        )}
                       </span>
                     </div>
                   </div>

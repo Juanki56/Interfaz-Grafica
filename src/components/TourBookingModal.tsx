@@ -8,9 +8,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
+import { OccitoursPaymentBankDetails } from './OccitoursPaymentBankDetails';
 import { Checkbox } from './ui/checkbox';
 import { Calendar as BookingCalendar } from './ui/calendar';
 import { toast } from 'sonner';
+import { useAuth } from '../context/AuthContext';
 import {
   programacionAPI,
   reservasAPI,
@@ -24,6 +26,12 @@ import {
 } from '../services/api';
 import { clientDisplayEstadoPagoVenta, montoPagoUnicoSolicitudPersonalizada } from '../utils/clientPaymentFlow';
 import { durationCalendarDaysFromRutaHoras, formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import {
+  documentoTitularCompletoValidoParaReserva,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+} from '../utils/documentIdentityValidation';
+import { titularDocumentoValidoParaReservar } from '../utils/titularDocumentoReserva';
+import { OCCITOURS_PAYMENT_INFO } from '../utils/occitoursPaymentBankInfo';
 
 function toYMD(date: Date): string {
   const d = new Date(date);
@@ -51,10 +59,7 @@ function normalizeOccupiedYmd(value: string): string {
 }
 
 const SOLICITUD_PAGO_PROOF_MAX = 5 * 1024 * 1024;
-const SOLICITUD_PAGO_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg', 'image/webp'];
-const SOLICITUD_PAGO_PROOF_NAME_MAX = 180;
-const SOLICITUD_PAGO_METODO_MAX = 40;
-const SOLICITUD_PAGO_TRANSACCION_MAX = 80;
+const SOLICITUD_PAGO_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/jpg'];
 
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -64,6 +69,9 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+/** Normaliza 'YYYY-MM-DD' del API (puede venir con hora o ISO). */
+
 
 interface Restaurant {
   id: number;
@@ -104,6 +112,7 @@ interface CompanionDraft {
 }
 
 export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availableRestaurants = [] }: TourBookingModalProps) {
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [bookingData, setBookingData] = useState({
     date: '',
@@ -483,6 +492,14 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       return;
     }
 
+    if (user?.role === 'client') {
+      const documentoOk = await titularDocumentoValidoParaReservar(user);
+      if (!documentoOk) {
+        toast.error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+        return;
+      }
+    }
+
     if (!bookingData.date || !bookingData.time) {
       toast.error('Completa la fecha y la hora');
       return;
@@ -500,8 +517,15 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
         toast.error(`Completa nombre y apellido del acompañante ${index + 1}`);
         return;
       }
-      if (!companion?.numero_documento?.trim()) {
-        toast.error(`El número de documento del acompañante ${index + 1} es obligatorio`);
+      if (
+        !documentoTitularCompletoValidoParaReserva(
+          companion?.tipo_documento,
+          companion?.numero_documento,
+        )
+      ) {
+        toast.error(
+          `El documento del acompañante ${index + 1} no es válido (tipo y número reales, sin solo “-”).`,
+        );
         return;
       }
     }
@@ -525,9 +549,17 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
       if (createdId != null) {
         const full = await solicitudesPersonalizadasAPI.getById(Number(createdId));
         if (full?.id_reserva && companionDetails.length > 0) {
+          const idReserva = Number(full.id_reserva);
+          const documentoAntesAcompanantes = await titularDocumentoValidoParaReservar(user, {
+            idReserva,
+          });
+          if (!documentoAntesAcompanantes) {
+            toast.error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+            return;
+          }
           await Promise.all(
             companionDetails.map((companion) =>
-              reservasAPI.agregarAcompanante(full.id_reserva as number, {
+              reservasAPI.agregarAcompanante(idReserva, {
                 nombre: companion.nombre.trim(),
                 apellido: companion.apellido.trim(),
                 tipo_documento: companion.tipo_documento || null,
@@ -1081,6 +1113,8 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                           personalizadas <strong>no hay abonos parciales</strong> (solo en reservas de finca).
                         </p>
                       </div>
+
+                      <OccitoursPaymentBankDetails className="md:col-span-2" />
 
                       <div className="space-y-2">
                         <Label>Método de pago</Label>
@@ -1715,8 +1749,10 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                 <Separator className="my-6" />
 
                 <div className="space-y-4">
-                  <h5 className="font-medium">Información de Pago</h5>
-                  
+                  <h5 className="font-medium">Información de pago</h5>
+
+                  <OccitoursPaymentBankDetails />
+
                   <div className="bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-200 p-6 rounded-lg">
                     <div className="text-center space-y-4">
                       <div className="inline-flex items-center justify-center w-16 h-16 bg-purple-600 rounded-full mb-2">
@@ -1724,11 +1760,13 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                       </div>
                       
                       <div>
-                        <h6 className="font-semibold text-purple-900 mb-2">Paga con Nequi</h6>
-                        <p className="text-sm text-purple-700 mb-4">Escanea el código QR con tu app Nequi</p>
+                        <h6 className="font-semibold text-purple-900 mb-2">Nequi / QR</h6>
+                        <p className="text-sm text-purple-700 mb-4">
+                          Si pagas por Nequi puedes usar el código QR cuando esté disponible, o transfieres al mismo titular/Cuenta
+                          Bancolombia indicados arriba.
+                        </p>
                       </div>
                       
-                      {/* QR Code Placeholder */}
                       <div className="bg-white p-4 rounded-lg inline-block">
                         <div className="w-48 h-48 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
                           <div className="text-center">
@@ -1741,16 +1779,16 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                       <Separator className="bg-purple-200" />
                       
                       <div className="space-y-2">
-                        <p className="text-sm text-purple-800 font-medium">Número de consignación:</p>
+                        <p className="text-sm text-purple-800 font-medium">Número de referencia Nequi:</p>
                         <div className="bg-white p-3 rounded-lg border-2 border-purple-300">
-                          <p className="text-lg font-mono font-bold text-purple-900">3001234567</p>
+                          <p className="text-lg font-mono font-bold text-purple-900">{OCCITOURS_PAYMENT_INFO.nequiNumero}</p>
                         </div>
-                        <p className="text-xs text-purple-600">A nombre de: Occitours S.A.S</p>
+                        <p className="text-xs text-purple-600">Beneficiario: {OCCITOURS_PAYMENT_INFO.titular}</p>
                       </div>
                       
                       <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                         <p className="text-xs text-yellow-800">
-                          <strong>Importante:</strong> Después de realizar el pago, tu reserva quedará en estado "Pendiente" hasta que confirmemos la transacción. Recibirás un correo de confirmación.
+                          <strong>Importante:</strong> Después de realizar el pago, tu reserva quedará en estado &quot;Pendiente&quot; hasta que confirmemos la transacción. Recibirás un correo de confirmación.
                         </p>
                       </div>
                     </div>

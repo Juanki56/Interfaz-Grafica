@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
-import { Mountain, Mail, Lock, User, UserCheck } from 'lucide-react';
+import { Mountain, Mail, Lock, User, UserCheck, Phone } from 'lucide-react';
+import { isValidClientPhone, sanitizePhoneInput } from '../utils/clientFormValidation';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 
 interface RegisterFormProps {
   onBackToLogin: () => void;
-  onShowVerifyEmail?: (emailDraft: string) => void;
+  onShowVerifyEmail?: (emailDraft: string, password: string) => void;
 }
 
 const isStrongPassword = (password: string) => {
@@ -27,6 +28,7 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
     nombre: '',
     apellido: '',
     email: '',
+    telefono: '',
     password: '',
     confirmPassword: ''
   });
@@ -71,32 +73,44 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
       return;
     }
 
+    const telefono = sanitizePhoneInput(formData.telefono).trim();
+    if (telefono && !isValidClientPhone(telefono)) {
+      setError('Si ingresas teléfono, debe tener entre 7 y 15 dígitos');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       if (requiresVerification) {
         const response = await registerPending({
           nombre: formData.nombre,
           apellido: formData.apellido,
           email: formData.email,
-          password: formData.password
+          password: formData.password,
+          telefono: telefono || undefined,
         });
 
         if (response.success) {
           setSuccess('Te enviamos un código de verificación. Revisa tu correo.');
           if (onShowVerifyEmail) {
-            setTimeout(() => onShowVerifyEmail(formData.email), 700);
+            setTimeout(() => onShowVerifyEmail(formData.email, formData.password), 700);
           }
         } else {
           setError(response.error || 'Error al enviar código de verificación');
         }
       } else {
         // Siempre crear usuarios con rol 'client'
-        const response = await register(`${formData.nombre} ${formData.apellido}`.trim(), formData.email, formData.password, 'client');
+        const response = await register(
+          formData.nombre,
+          formData.apellido,
+          formData.email,
+          formData.password,
+          'client',
+          telefono || undefined,
+        );
 
         if (response.success) {
-          setSuccess('¡Cuenta de cliente creada exitosamente! Ya puedes iniciar sesión.');
-          setTimeout(() => {
-            onBackToLogin();
-          }, 2000);
+          setSuccess('¡Cuenta creada! Entrando a tu perfil...');
         } else {
           setError(response.error || 'Error al crear la cuenta');
         }
@@ -217,6 +231,25 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                     onChange={(e) => handleInputChange('email', e.target.value)}
                     className="pl-10 bg-white border-green-200 focus:border-green-500"
                     required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm text-green-800">
+                  Teléfono <span className="font-normal text-gray-500">(opcional)</span>
+                </label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <Input
+                    type="tel"
+                    placeholder="+57 300 000 0000"
+                    autoComplete="tel"
+                    value={formData.telefono}
+                    onChange={(e) =>
+                      handleInputChange('telefono', sanitizePhoneInput(e.target.value))
+                    }
+                    className="pl-10 bg-white border-green-200 focus:border-green-500"
                   />
                 </div>
               </div>

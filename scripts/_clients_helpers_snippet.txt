@@ -1,0 +1,89 @@
+const MAX_BIRTH_DATE = new Date().toISOString().slice(0, 10);
+
+type ClientSortField =
+  | 'id'
+  | 'name'
+  | 'email'
+  | 'phone'
+  | 'documentNumber'
+  | 'address'
+  | 'fechaRegistro'
+  | 'lastVisit'
+  | 'estado';
+
+type SortDirection = 'asc' | 'desc';
+
+function parseSortableTimestamp(value?: string | null): number {
+  const raw = String(value || '').trim();
+  if (!raw) return 0;
+  const normalized = raw.includes('T') ? raw : `${raw.slice(0, 10)}T12:00:00`;
+  const time = Date.parse(normalized);
+  return Number.isFinite(time) ? time : 0;
+}
+
+function compareClients(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  field: ClientSortField,
+  direction: SortDirection,
+): number {
+  let cmp = 0;
+
+  switch (field) {
+    case 'id':
+      cmp = Number(a.id) - Number(b.id);
+      break;
+    case 'name':
+      cmp = String(a.name || '').localeCompare(String(b.name || ''), 'es', {
+        sensitivity: 'base',
+      });
+      break;
+    case 'email':
+      cmp = String(a.email || '').localeCompare(String(b.email || ''), 'es', {
+        sensitivity: 'base',
+      });
+      break;
+    case 'phone': {
+      const digits = (v: unknown) => String(v || '').replace(/\D/g, '');
+      cmp = digits(a.phone).localeCompare(digits(b.phone), 'es', { numeric: true });
+      break;
+    }
+    case 'documentNumber':
+      cmp = String(a.documentNumber || '').localeCompare(String(b.documentNumber || ''), 'es', {
+        numeric: true,
+        sensitivity: 'base',
+      });
+      break;
+    case 'address':
+      cmp = String(a.address || a.location || '').localeCompare(
+        String(b.address || b.location || ''),
+        'es',
+        { sensitivity: 'base' },
+      );
+      break;
+    case 'fechaRegistro':
+      cmp =
+        parseSortableTimestamp(a.fechaRegistro as string) -
+        parseSortableTimestamp(b.fechaRegistro as string);
+      break;
+    case 'lastVisit':
+      cmp =
+        parseSortableTimestamp(a.lastVisit as string) - parseSortableTimestamp(b.lastVisit as string);
+      break;
+    case 'estado':
+      cmp = Number(Boolean(a.isActive)) - Number(Boolean(b.isActive));
+      break;
+    default:
+      cmp = 0;
+  }
+
+  if (cmp === 0) {
+    cmp = String(a.name || '').localeCompare(String(b.name || ''), 'es', {
+      sensitivity: 'base',
+    });
+  }
+
+  return direction === 'asc' ? cmp : -cmp;
+}
+
+export function ClientsManagement() {

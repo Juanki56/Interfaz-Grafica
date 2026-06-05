@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { 
   Users, 
   Package, 
@@ -778,7 +778,18 @@ export function AdminDashboard() {
 
     try {
       // Here you would integrate with your actual user creation system
-      const response = await register(newUser.name, newUser.email, newUser.password, newUser.role);
+      const nameParts = newUser.name.trim().split(/\s+/);
+      const nombre = nameParts[0] || newUser.name.trim();
+      const apellido = nameParts.slice(1).join(' ') || '-';
+      const response = await register(
+        nombre,
+        apellido,
+        newUser.email,
+        newUser.password,
+        newUser.role,
+        undefined,
+        { autoLogin: false },
+      );
       
       if (!response.success) {
         toast.error(response.error || 'Error al crear el usuario');

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { X, Users, MapPin, QrCode, Clock3, Upload, FileCheck, Minus, Plus } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -7,10 +8,12 @@ import { Textarea } from './ui/textarea';
 import { Badge } from './ui/badge';
 import { Label } from './ui/label';
 import { Separator } from './ui/separator';
+import { OccitoursPaymentBankDetails } from './OccitoursPaymentBankDetails';
+import { OCCITOURS_PAYMENT_INFO } from '../utils/occitoursPaymentBankInfo';
 import { Checkbox } from './ui/checkbox';
 import { RadioGroup, RadioGroupItem } from './ui/radio-group';
 import { toast } from 'sonner';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { pagosAPI, reservasAPI, fincasAPI } from '../services/api';
 import { Calendar as BookingCalendar } from './ui/calendar';
 import { addDays, normalizeOccupiedYmd, toYMD } from '../utils/routeDateCalendar';
@@ -47,12 +50,6 @@ const PAYMENT_METHOD_MAP = {
   bancolombia: 'Transferencia',
 } as const;
 
-const OCCITOURS_PAYMENT_INFO = {
-  titular: 'Occitours S.A.S',
-  nequiNumero: '3001234567',
-  bancolombiaTipoCuenta: 'Ahorros',
-  bancolombiaNumeroCuenta: '12345678901',
-};
 
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -968,6 +965,8 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                     </div>
                   </RadioGroup>
 
+                  <OccitoursPaymentBankDetails />
+
                   {/* Payment Info */}
                   <div className={`bg-gradient-to-br ${
                     bookingData.paymentMethod === 'nequi' 
@@ -1008,8 +1007,12 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                         ) : (
                           <div className="w-64 space-y-2 text-left">
                             <div>
+                              <p className="text-xs text-gray-600">Banco</p>
+                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaBankName}</p>
+                            </div>
+                            <div>
                               <p className="text-xs text-gray-600">Tipo de cuenta:</p>
-                              <p className="font-medium">Ahorros</p>
+                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaTipoCuenta}</p>
                             </div>
                             <div>
                               <p className="text-xs text-gray-600">Número de cuenta:</p>
@@ -1018,6 +1021,13 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
                             <div>
                               <p className="text-xs text-gray-600">Titular:</p>
                               <p className="font-medium">{OCCITOURS_PAYMENT_INFO.titular}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-600">Documento:</p>
+                              <p className="font-medium font-mono text-sm">
+                                {OCCITOURS_PAYMENT_INFO.beneficiarioTipoDocumento}{' '}
+                                {OCCITOURS_PAYMENT_INFO.beneficiarioNumeroDocumento}
+                              </p>
                             </div>
                           </div>
                         )}

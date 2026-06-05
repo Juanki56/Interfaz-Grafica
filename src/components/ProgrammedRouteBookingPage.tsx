@@ -1,8 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAuth } from '../App';
-import { programacionAPI, rutasAPI, extractRutaServiciosPredefinidos, type Programacion, type Ruta } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import {
+  programacionAPI,
+  rutasAPI,
+  extractRutaServiciosPredefinidos,
+  type Programacion,
+  type Ruta,
+} from '../services/api';
 import { ProgrammedRouteBookingModal } from './ProgrammedRouteBookingModal';
 import { Button } from './ui/button';
 
@@ -12,7 +18,7 @@ interface ProgrammedRouteBookingPageProps {
 }
 
 export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: ProgrammedRouteBookingPageProps) {
-  const { user } = useAuth();
+  const { user, refreshProfile } = useAuth();
   const onViewChangeRef = useRef(onViewChange);
   onViewChangeRef.current = onViewChange;
   const [programacion, setProgramacion] = useState<Programacion | null>(null);
@@ -119,7 +125,24 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
       return;
     }
 
-    void load();
+    let cancelled = false;
+    (async () => {
+      try {
+        await refreshProfile();
+      } catch {
+        /* perfil opcional; load sigue */
+      }
+      if (!cancelled) {
+        await load();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // `refreshProfile` se omite a propósito: en App no está memoizado y al incluirlo este efecto se dispara en bucle
+    // (loading infinito / pantalla en blanco en reserva programada).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, load]);
 
   const handleSuccess = async () => {
@@ -161,6 +184,7 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
       layout="page"
       isOpen
       onClose={() => onViewChange('home')}
+      onGoToProfile={() => onViewChange('profile')}
       programacion={programacion}
       ruta={ruta}
       onSuccess={handleSuccess}

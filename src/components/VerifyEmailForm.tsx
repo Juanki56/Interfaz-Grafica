@@ -5,7 +5,7 @@ import { Input } from './ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 
 interface VerifyEmailFormProps {
   initialEmail?: string;
@@ -39,8 +39,7 @@ export function VerifyEmailForm({ initialEmail = '', onBackToLogin }: VerifyEmai
 
     const result = await verifyEmail({ email: trimmedEmail, code: trimmedCode });
     if (result.success) {
-      setSuccess('Correo verificado exitosamente. Ya puedes iniciar sesión.');
-      setTimeout(() => onBackToLogin(), 1500);
+      setSuccess('¡Correo verificado! Entrando a tu perfil...');
     } else {
       setError(result.error || 'No se pudo verificar el correo.');
     }

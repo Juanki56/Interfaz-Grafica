@@ -1,3 +1,8 @@
+/** Archivos para Storage: una foto de tarjeta (principal) y/o galería. */
+export type SubirImagenesOpciones = {
+  principal?: File | null;
+  galeria?: File[];
+};
 /**
  * =====================================================
  * API SERVICE - OCCITOURS FRONTEND
@@ -6,6 +11,13 @@
  */
 
 import { buildApiUrl } from '../config/api.config';
+import {
+  documentoTitularCompletoValidoParaReserva,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+  titularTieneDocumentoValidoParaReserva,
+} from '../utils/documentIdentityValidation';
+import { decodeJWT } from '../utils/jwtDecoder';
+import { filterFincasActivas } from '../utils/fincaActiva';
 
 // =====================================================
 // TIPOS
@@ -94,6 +106,10 @@ export interface Reserva {
   fecha_creacion?: string | null;
   created_at?: string | null;
   fecha_registro?: string | null;
+  /** Cuándo se creó la reserva (si el backend lo envía). Sirve para ordenar “última reserva” en cliente. */
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+  fecha_registro?: string | null;
 
   // Totales (según implementación backend puede venir como total o monto_total)
   total?: number | string | null;
@@ -101,6 +117,10 @@ export interface Reserva {
 
   numero_participantes?: number | null;
   tipo_servicio?: string | null;
+  /** Nombre de ruta en listados (subconsulta backend). */
+  ruta_nombre_resumen?: string | null;
+  /** Nombre de finca en listados (subconsulta backend). */
+  finca_nombre_resumen?: string | null;
   notas?: string | null;
   estado_pago?: string | null;
   monto_pagado?: number | string | null;
@@ -451,6 +471,12 @@ export interface Programacion {
   ruta_imagen_url?: string | null;
   empleado_nombre?: string | null;
   empleado_apellido?: string | null;
+  empleado_telefono?: string | null;
+  empleado_correo?: string | null;
+  empleado_cargo?: string | null;
+  empleado_rol_nombre?: string | null;
+  fecha_creacion?: string | null;
+  created_at?: string | null;
 }
 
 export interface Propietario {
@@ -469,6 +495,8 @@ export interface Propietario {
 export interface Finca {
   id_finca: number;
   id_propietario?: number;
+  /** Uso interno en BD; no se muestra en la interfaz */
+  codigo_unico?: string;
   nombre: string;
   descripcion?: string;
   direccion?: string;
@@ -485,6 +513,19 @@ export interface Finca {
   propietario_email?: string;
 }
 
+export type ReservaBloqueoCatalogo = {
+  id_reserva: number;
+  estado?: string | null;
+  cliente?: string | null;
+  fecha_checkin?: string | null;
+  fecha_checkout?: string | null;
+  fecha_salida?: string | null;
+  fecha_regreso?: string | null;
+};
+
+/** @deprecated Usar ReservaBloqueoCatalogo */
+export type FincaReservaAsociada = ReservaBloqueoCatalogo;
+
 export interface Rol {
   id_roles: number;
   nombre: string;
@@ -498,6 +539,8 @@ export interface Permiso {
   nombre: string;
   descripcion?: string | null;
   fecha_creacion?: string | null;
+  /** Si el backend lo envía: 'ruta' | 'finca' | 'ambos' (ver `inferirServicioAplicacion`). */
+  aplica_a?: string | null;
 }
 
 export interface PagoProveedor {
@@ -588,6 +631,9 @@ export interface PagoSolicitud {
   comprobante_tipo?: string | null;
   estado?: string | null;
   fecha_pago?: string | null;
+  fecha_verificacion?: string | null;
+  fecha_creacion?: string | null;
+  created_at?: string | null;
   observaciones?: string | null;
 }
 
@@ -616,6 +662,14 @@ export interface PagoCliente {
   cliente_apellido?: string | null;
   cliente_telefono?: string | null;
   numero_documento?: string | null;
+  tipo_documento?: string | null;
+  id_cliente?: number | null;
+  email?: string | null;
+  fecha_venta?: string | null;
+  fecha_reserva?: string | null;
+  ruta_nombre_resumen?: string | null;
+  finca_nombre_resumen?: string | null;
+  reserva_tipo_servicio?: string | null;
 }
 
 export interface Venta {
@@ -635,8 +689,12 @@ export interface Venta {
   cliente_nombre?: string | null;
   cliente_apellido?: string | null;
   cliente_telefono?: string | null;
+  tipo_documento?: string | null;
   numero_documento?: string | null;
   email?: string | null;
+  ruta_nombre_resumen?: string | null;
+  finca_nombre_resumen?: string | null;
+  reserva_tipo_servicio?: string | null;
 }
 
 // =====================================================
@@ -781,7 +839,25 @@ function unwrapApiArray<T>(payload: any): T[] {
   const urls = payload?.urls;
   if (Array.isArray(urls)) return urls as T[];
 
+  const reservas = payload?.reservas;
+  if (Array.isArray(reservas)) return reservas as T[];
+
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const dataReservas = (data as Record<string, unknown>).reservas;
+    if (Array.isArray(dataReservas)) return dataReservas as T[];
+  }
+
   return [];
+}
+
+function unwrapApiEntity<T>(payload: any): T {
+  if (payload == null) {
+    throw new Error('Respuesta vacía del servidor');
+  }
+  if (typeof payload === 'object' && payload.data != null && !Array.isArray(payload.data)) {
+    return payload.data as T;
+  }
+  return payload as T;
 }
 
 /** Normaliza entradas de GET .../imagenes (strings u objetos con url). */
@@ -1008,6 +1084,23 @@ export const authAPI = {
     });
   },
 
+  validarTokenRecuperacion: async (correo: string, token: string) => {
+    const response = await fetch(buildApiUrl('/api/auth/validar-token-recuperacion'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ correo, token }),
+    });
+    const data = await response.json().catch(() => null);
+    if (response.ok && data?.valid) {
+      return { valid: true as const };
+    }
+    return {
+      valid: false as const,
+      code: (data?.code as string) || 'TOKEN_INVALIDO',
+      message: (data?.message as string) || 'El enlace de recuperación no es válido.',
+    };
+  },
+
   resetearContrasena: async (payload: { correo: string; token: string; nuevaContrasena: string }) => {
     return fetchAPI('/api/auth/resetear-contrasena', {
       method: 'POST',
@@ -1047,6 +1140,19 @@ export const authAPI = {
       body: JSON.stringify({ contrasenaActual, contrasenaNueva }),
     });
   },
+
+  solicitarEliminacionCuenta: async (payload: { confirmacion: string; motivo?: string }) => {
+    return fetchAPI<{
+      success?: boolean;
+      message?: string;
+      referencia?: string;
+      diasHabilesEstimados?: number;
+      correoEnviado?: boolean;
+    }>('/api/auth/solicitar-eliminacion-cuenta', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
 };
 
 // =====================================================
@@ -1055,8 +1161,8 @@ export const authAPI = {
 
 export const usersAPI = {
   getAll: async (): Promise<UsuarioBackend[]> => {
-    const response = await fetchAPI<{ data: UsuarioBackend[] }>('/api/usuarios');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/usuarios');
+    return unwrapApiArray<UsuarioBackend>(response);
   },
 
   create: async (userData: Record<string, any>) => {
@@ -1092,13 +1198,13 @@ export const usersAPI = {
 
 export const clientesAPI = {
   getAll: async (): Promise<Cliente[]> => {
-    const response = await fetchAPI<{ data: Cliente[] }>('/api/clientes');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/clientes');
+    return unwrapApiArray<Cliente>(response);
   },
 
   getById: async (id: number): Promise<Cliente> => {
-    const response = await fetchAPI<{ data: Cliente }>(`/api/clientes/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/clientes/${id}`);
+    return unwrapApiEntity<Cliente>(response);
   },
 
   create: async (clienteData: Partial<Cliente>) => {
@@ -1122,8 +1228,8 @@ export const clientesAPI = {
   },
 
   buscar: async (termino: string): Promise<Cliente[]> => {
-    const response = await fetchAPI<{ data: Cliente[] }>(`/api/clientes/buscar?q=${termino}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/clientes/buscar?q=${encodeURIComponent(termino)}`);
+    return unwrapApiArray<Cliente>(response);
   },
 };
 
@@ -1161,11 +1267,58 @@ export const empleadosAPI = {
       method: 'DELETE',
     });
   },
+
+  getProgramaciones: async (id: number): Promise<Programacion[]> => {
+    const response = await fetchAPI<any>(`/api/empleados/${id}/programaciones`);
+    return unwrapApiArray<Programacion>(response);
+  },
 };
 
 // =====================================================
 // RESERVAS
 // =====================================================
+
+function usuarioAutenticadoEsClienteTitular(): boolean {
+  const token = localStorage.getItem('token');
+  if (!token) return false;
+  try {
+    const payload = decodeJWT(token);
+    const role = String(
+      payload?.rol_nombre ?? payload?.rol ?? payload?.role ?? payload?.tipo_usuario ?? '',
+    )
+      .toLowerCase()
+      .trim();
+    if (!role) return true;
+    if (
+      role.includes('admin') ||
+      role.includes('administrador') ||
+      role.includes('asesor') ||
+      role.includes('advisor') ||
+      role.includes('guia') ||
+      role.includes('guía') ||
+      role.includes('guide') ||
+      role.includes('empleado')
+    ) {
+      return false;
+    }
+    return role.includes('cliente') || role === 'client';
+  } catch {
+    return true;
+  }
+}
+
+/** Valida documento del cliente titular antes de mutar una reserva (solo rol cliente). */
+async function requireDocumentoSiClienteTitularReserva(idReserva: number): Promise<void> {
+  if (!usuarioAutenticadoEsClienteTitular()) {
+    return;
+  }
+
+  const { titularDocumentoValidoParaReservar } = await import('../utils/titularDocumentoReserva');
+  const valido = await titularDocumentoValidoParaReservar(null, { idReserva });
+  if (!valido) {
+    throw new Error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+  }
+}
 
 export const reservasAPI = {
   getAll: async (): Promise<Reserva[]> => {
@@ -1174,12 +1327,18 @@ export const reservasAPI = {
   },
 
   getById: async (id: number): Promise<Reserva> => {
-    const response = await fetchAPI<{ data: Reserva }>(`/api/reservas/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/reservas/${id}`);
+    return unwrapApiEntity<Reserva>(response);
   },
 
   getByCliente: async (idCliente: number): Promise<Reserva[]> => {
     const response = await fetchAPI<any>(`/api/reservas/cliente/${idCliente}`);
+    return unwrapApiArray<Reserva>(response);
+  },
+
+  /** Reservas del cliente autenticado (el backend resuelve id_cliente desde el token). */
+  getMine: async (): Promise<Reserva[]> => {
+    const response = await fetchAPI<any>('/api/reservas/mias');
     return unwrapApiArray<Reserva>(response);
   },
 
@@ -1289,6 +1448,7 @@ export const reservasAPI = {
           monto_total?: number | string | null;
         }
   ) => {
+    await requireDocumentoSiClienteTitularReserva(idReserva);
     const payload =
       typeof payloadOrIdProgramacion === 'number'
         ? { id_programacion: payloadOrIdProgramacion }
@@ -1310,6 +1470,7 @@ export const reservasAPI = {
       precio_por_noche: number | string;
     }
   ) => {
+    await requireDocumentoSiClienteTitularReserva(idReserva);
     return fetchAPI(`/api/reservas/${idReserva}/finca`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1325,6 +1486,7 @@ export const reservasAPI = {
       precio_unitario?: number | string | null;
     }
   ) => {
+    await requireDocumentoSiClienteTitularReserva(idReserva);
     return fetchAPI(`/api/reservas/${idReserva}/servicio`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1332,6 +1494,7 @@ export const reservasAPI = {
   },
 
   agregarAcompanante: async (idReserva: number, payload: AcompananteReservaPayload) => {
+    await requireDocumentoSiClienteTitularReserva(idReserva);
     return fetchAPI(`/api/reservas/${idReserva}/acompanante`, {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1351,6 +1514,7 @@ export const reservasAPI = {
       observaciones?: string | null;
     }
   ) => {
+    await requireDocumentoSiClienteTitularReserva(idReserva);
     return fetchAPI<{
       success: boolean;
       message: string;
@@ -1380,8 +1544,8 @@ export const ventasAPI = {
   },
 
   getById: async (id: number): Promise<Venta> => {
-    const response = await fetchAPI<{ data: Venta }>(`/api/ventas/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/ventas/${id}`);
+    return unwrapApiEntity<Venta>(response);
   },
 
   cancelar: async (id: number) => {
@@ -1458,13 +1622,13 @@ export const pagosAPI = {
   },
 
   getByReserva: async (idReserva: number): Promise<PagoCliente[]> => {
-    const response = await fetchAPI<{ data: PagoCliente[] }>(`/api/pagos/reserva/${idReserva}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/pagos/reserva/${idReserva}`);
+    return unwrapApiArray<PagoCliente>(response);
   },
 
   getByVenta: async (idVenta: number): Promise<PagoCliente[]> => {
-    const response = await fetchAPI<{ data: PagoCliente[] }>(`/api/pagos/venta/${idVenta}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/pagos/venta/${idVenta}`);
+    return unwrapApiArray<PagoCliente>(response);
   },
 
   create: async (payload: {
@@ -1508,6 +1672,9 @@ export const pagosAPI = {
 // =====================================================
 // RUTAS
 // =====================================================
+
+/** Subida a Supabase: `principal` = foto de tarjeta; `galeria` = resto. También se puede pasar solo `File[]` (solo galería). */
+export type SubirImagenesPayload = File[] | { principal?: File | null; galeria?: File[] };
 
 export const rutasAPI = {
   getAll: async (): Promise<Ruta[]> => {
@@ -1567,21 +1734,65 @@ export const rutasAPI = {
     });
   },
 
+  canDelete: async (
+    id: number,
+  ): Promise<{
+    puedeEliminar: boolean;
+    totalReservas: number;
+    reservas: ReservaBloqueoCatalogo[];
+  }> => {
+    const response = await fetchAPI<any>(`/api/rutas/${id}/puede-eliminar`);
+    const data = response?.data ?? response;
+    const rawReservas = Array.isArray(data?.reservas) ? data.reservas : [];
+    const reservas: ReservaBloqueoCatalogo[] = rawReservas.map((r: any) => ({
+      id_reserva: Number(r.id_reserva),
+      estado: r.estado ?? r.reserva_estado ?? null,
+      fecha_salida: r.fecha_salida ?? r.fecha_referencia ?? null,
+      fecha_regreso: r.fecha_regreso ?? null,
+      cliente: r.cliente ?? null,
+    }));
+
+    return {
+      puedeEliminar: Boolean(data?.puede_eliminar ?? data?.puedeEliminar),
+      totalReservas: Number(data?.total_reservas ?? data?.totalReservas ?? reservas.length),
+      reservas,
+    };
+  },
+
   getImagenes: async (id: number): Promise<string[]> => {
     const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`);
     return coerceImagenesApiResponseToUrls(response);
   },
 
-  uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
+  uploadImagenes: async (
+    id: number,
+    payload: { portada?: File | null; galeria?: File[] },
+  ): Promise<{ portada: string | null; galeria: string[]; imagen_url: string | null }> => {
     const form = new FormData();
-    for (const file of files) form.append('imagenes', file);
+    if (payload.portada) {
+      form.append('imagen_principal', payload.portada);
+    }
+    for (const file of payload.galeria || []) {
+      form.append('imagenes', file);
+    }
 
     const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`, {
       method: 'POST',
       body: form,
     });
 
-    return unwrapApiArray<string>(response);
+    const data = response?.data ?? response;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      const portada = data.portada ?? data.imagen_url ?? null;
+      return {
+        portada,
+        galeria: Array.isArray(data.galeria) ? data.galeria : [],
+        imagen_url: data.imagen_url ?? portada ?? null,
+      };
+    }
+
+    const urls = unwrapApiArray<string>(response);
+    return { portada: urls[0] ?? null, galeria: urls, imagen_url: urls[0] ?? null };
   },
 };
 
@@ -1602,7 +1813,7 @@ export const fincasAPI = {
         const response = await fetchAPI<any>(endpoint, { skipAuth: true });
         const raw = (response?.data ?? response) as Finca[];
         const list = Array.isArray(raw) ? raw : [];
-        return enrichFincasImagenFromStorageIfMissing(list, true);
+        return enrichFincasImagenFromStorageIfMissing(filterFincasActivas(list), true);
       },
     );
   },
@@ -1621,9 +1832,17 @@ export const fincasAPI = {
     return unwrapApiArray<string>(response);
   },
 
+  /** Solo fincas activas (reservas, ventas, catálogo operativo). */
+  getActivas: async (): Promise<Finca[]> => {
+    const response = await fetchAPI<any>('/api/fincas/disponibles');
+    const raw = (response?.data ?? response) as Finca[];
+    const list = Array.isArray(raw) ? raw : [];
+    return enrichFincasImagenFromStorageIfMissing(filterFincasActivas(list), false);
+  },
+
   getAll: async (): Promise<Finca[]> => {
-    const response = await fetchAPI<{ data: Finca[] }>('/api/fincas');
-    const list = response.data || [];
+    const response = await fetchAPI<any>('/api/fincas');
+    const list = unwrapApiArray<Finca>(response);
     return enrichFincasImagenFromStorageIfMissing(list, false);
   },
 
@@ -1655,21 +1874,64 @@ export const fincasAPI = {
     });
   },
 
+  canDelete: async (
+    id: number,
+  ): Promise<{
+    puedeEliminar: boolean;
+    totalReservas: number;
+    reservas: ReservaBloqueoCatalogo[];
+  }> => {
+    const response = await fetchAPI<any>(`/api/fincas/${id}/puede-eliminar`);
+    const data = response?.data ?? response;
+    const rawReservas = Array.isArray(data?.reservas) ? data.reservas : [];
+    const reservas: ReservaBloqueoCatalogo[] = rawReservas.map((r: any) => ({
+      id_reserva: Number(r.id_reserva),
+      estado: r.estado ?? r.reserva_estado ?? null,
+      fecha_checkin: r.fecha_checkin ?? null,
+      fecha_checkout: r.fecha_checkout ?? null,
+      cliente: r.cliente ?? null,
+    }));
+
+    return {
+      puedeEliminar: Boolean(data?.puede_eliminar ?? data?.puedeEliminar),
+      totalReservas: Number(data?.total_reservas ?? data?.totalReservas ?? reservas.length),
+      reservas,
+    };
+  },
+
   getImagenes: async (id: number): Promise<string[]> => {
     const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`);
     return coerceImagenesApiResponseToUrls(response);
   },
 
-  uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
+  uploadImagenes: async (
+    id: number,
+    payload: { portada?: File | null; galeria?: File[] },
+  ): Promise<{ portada: string | null; galeria: string[]; imagen_principal: string | null }> => {
     const form = new FormData();
-    for (const file of files) form.append('imagenes', file);
+    if (payload.portada) {
+      form.append('imagen_principal', payload.portada);
+    }
+    for (const file of payload.galeria || []) {
+      form.append('imagenes', file);
+    }
 
     const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`, {
       method: 'POST',
       body: form,
     });
 
-    return unwrapApiArray<string>(response);
+    const data = response?.data ?? response;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      return {
+        portada: data.portada ?? data.imagen_principal ?? null,
+        galeria: Array.isArray(data.galeria) ? data.galeria : [],
+        imagen_principal: data.imagen_principal ?? data.portada ?? null,
+      };
+    }
+
+    const urls = unwrapApiArray<string>(response);
+    return { portada: urls[0] ?? null, galeria: urls, imagen_principal: urls[0] ?? null };
   },
 };
 
@@ -1923,8 +2185,8 @@ export const dashboardAPI = {
 
 export const rolesAPI = {
   getAll: async (): Promise<Rol[]> => {
-    const response = await fetchAPI<{ data: Rol[] }>('/api/roles');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/roles');
+    return unwrapApiArray<Rol>(response);
   },
 
   getById: async (id: number): Promise<Rol> => {
@@ -2364,18 +2626,18 @@ export const solicitudesPersonalizadasAPI = {
   },
 
   getMine: async (): Promise<SolicitudPersonalizada[]> => {
-    const response = await fetchAPI<{ data: SolicitudPersonalizada[] }>('/api/solicitudes-personalizadas/mias');
-    return response.data || [];
+    const response = await fetchAPI<any>('/api/solicitudes-personalizadas/mias');
+    return unwrapApiArray<SolicitudPersonalizada>(response);
   },
 
   getById: async (id: number): Promise<SolicitudPersonalizada> => {
-    const response = await fetchAPI<{ data: SolicitudPersonalizada }>(`/api/solicitudes-personalizadas/${id}`);
-    return response.data;
+    const response = await fetchAPI<any>(`/api/solicitudes-personalizadas/${id}`);
+    return unwrapApiEntity<SolicitudPersonalizada>(response);
   },
 
   listPagos: async (id: number): Promise<PagoSolicitud[]> => {
-    const response = await fetchAPI<{ data: PagoSolicitud[] }>(`/api/solicitudes-personalizadas/${id}/pagos`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/solicitudes-personalizadas/${id}/pagos`);
+    return unwrapApiArray<PagoSolicitud>(response);
   },
 
   crearPago: async (
@@ -2402,8 +2664,8 @@ export const solicitudesPersonalizadasAPI = {
   listAll: async (params?: { estado?: string | null }): Promise<SolicitudPersonalizada[]> => {
     const estado = params?.estado ? String(params.estado) : '';
     const qs = estado ? `?estado=${encodeURIComponent(estado)}` : '';
-    const response = await fetchAPI<{ data: SolicitudPersonalizada[] }>(`/api/solicitudes-personalizadas${qs}`);
-    return response.data || [];
+    const response = await fetchAPI<any>(`/api/solicitudes-personalizadas${qs}`);
+    return unwrapApiArray<SolicitudPersonalizada>(response);
   },
 
   // STAFF: cotizar/actualizar estado
@@ -2419,6 +2681,8 @@ export const solicitudesPersonalizadasAPI = {
       lugar_encuentro?: string | null;
       id_empleado?: number | null;
       guias_apoyo?: number[] | null;
+      /** Al rechazar: motivo que se guarda en la cancelación de la reserva vinculada. */
+      motivo_rechazo?: string | null;
     }
   ) => {
     return fetchAPI(`/api/solicitudes-personalizadas/${id}/cotizar`, {

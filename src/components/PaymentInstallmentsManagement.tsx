@@ -60,7 +60,14 @@ import {
   type Venta,
 } from '../services/api';
 import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
-import { downloadReceiptFile } from '../utils/receiptProof';
+import { downloadReceiptFile, normalizeReceiptUrl } from '../utils/receiptProof';
+import { formatDateDisplay, toCalendarYmd } from '../utils/dateTimeDisplay';
+import { formatDocumentoClienteDisplay } from '../utils/documentIdentityValidation';
+import {
+  buildReservaSummaryFromVenta,
+  resolveReservaProductoNombre,
+  resolveReservaServicioEtiqueta,
+} from '../utils/reservaProductoDisplay';
 
 interface Client {
   id: string;
@@ -131,25 +138,25 @@ function formatCurrency(amount: number) {
 }
 
 function formatDate(value?: string | null, fallback = '—') {
-  if (!value) return fallback;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10) || fallback;
-  return parsed.toLocaleDateString('es-CO', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
+  return formatDateDisplay(value, { fallback, style: 'long' });
 }
 
 function formatInputDate(value?: string | null) {
-  if (!value) return '';
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
-  return parsed.toISOString().split('T')[0];
+  return toCalendarYmd(value);
 }
 
 function buildFullName(nombre?: string | null, apellido?: string | null, fallback = 'Cliente') {
   return `${String(nombre || '').trim()} ${String(apellido || '').trim()}`.trim() || fallback;
+}
+
+function resolveClienteId(
+  pago?: PagoCliente,
+  venta?: Venta,
+  reserva?: Reserva | null,
+): string {
+  const raw = venta?.id_cliente ?? reserva?.id_cliente ?? (pago as { id_cliente?: number })?.id_cliente;
+  const id = Number(raw);
+  return Number.isFinite(id) && id > 0 ? String(id) : '';
 }
 
 function normalizeStatus(status?: string | null): InstallmentStatus {
@@ -175,31 +182,116 @@ function mapCliente(cliente: ClienteBackend): Client {
     id: String(cliente.id_cliente),
     backendId: Number(cliente.id_cliente),
     name: buildFullName(cliente.nombre, cliente.apellido, 'Cliente'),
-    document: String(cliente.numero_documento || 'Documento no disponible'),
+    document: formatDocumentoClienteDisplay({ cliente }),
     phone: String(cliente.telefono || '—'),
     email: String(cliente.correo || '—'),
   };
 }
 
-function resolveReservationServiceType(reserva?: Reserva | null): ReservationSummary['serviceType'] {
-  const tipo = String(reserva?.tipo_servicio || '').trim().toLowerCase();
-  if ((reserva as any)?.fincas?.length || tipo.includes('finca')) return 'Finca';
-  if ((reserva as any)?.programaciones?.length || tipo.includes('ruta')) return 'Ruta';
+function mergeClientWithCatalog(base: Client, catalog?: Client): Client {
+  if (!catalog) return base;
+  const document =
+    catalog.document !== 'Documento no disponible'
+      ? catalog.document
+      : base.document;
+  return {
+    ...base,
+    backendId: catalog.backendId ?? base.backendId,
+    name: catalog.name || base.name,
+    document,
+    phone: catalog.phone !== '—' ? catalog.phone : base.phone,
+    email: catalog.email !== '—' ? catalog.email : base.email,
+  };
+}
+
+function buildReservaSummaryFromPago(pago: PagoCliente): Reserva | null {
+  const idReserva = Number(pago.id_reserva);
+  if (!Number.isFinite(idReserva) || idReserva <= 0) return null;
+
+  const ruta = String(pago.ruta_nombre_resumen ?? '').trim();
+  const finca = String(pago.finca_nombre_resumen ?? '').trim();
+  const tipo = String(pago.reserva_tipo_servicio ?? '').trim();
+
+  const pseudo: Reserva = {
+    id_reserva: idReserva,
+    id_cliente: Number(pago.id_cliente) || 0,
+    fecha_reserva: String(pago.fecha_reserva ?? ''),
+    estado: '',
+    tipo_servicio: tipo || undefined,
+    ruta_nombre_resumen: ruta || undefined,
+    finca_nombre_resumen: finca || undefined,
+  };
+
+  if (finca) (pseudo as any).fincas = [{ finca_nombre: finca }];
+  if (ruta) (pseudo as any).programaciones = [{ ruta_nombre: ruta }];
+
+  return pseudo;
+}
+
+function buildClientFromPagoVenta(
+  pago: PagoCliente,
+  venta?: Venta,
+  clientFromCatalog?: Client,
+): Client {
+  const clienteId = resolveClienteId(pago, venta);
+  return mergeClientWithCatalog(
+    {
+      id: clienteId || String(pago.id_reserva || pago.id_pago),
+      backendId: Number(pago.id_cliente ?? venta?.id_cliente) || undefined,
+      name: buildFullName(pago.cliente_nombre, pago.cliente_apellido, 'Cliente'),
+      document: formatDocumentoClienteDisplay({
+        tipo: pago.tipo_documento ?? venta?.tipo_documento,
+        numero: pago.numero_documento ?? venta?.numero_documento,
+        cliente:
+          (pago as { cliente?: Record<string, unknown> }).cliente ??
+          (venta as { cliente?: Record<string, unknown> }).cliente,
+      }),
+      phone: String(pago.cliente_telefono || venta?.cliente_telefono || '—'),
+      email: String(pago.email || venta?.email || '—'),
+    },
+    clientFromCatalog,
+  );
+}
+
+function buildClientFromVenta(venta: Venta, clientFromCatalog?: Client): Client {
+  const clienteId = String(venta.id_cliente ?? '');
+  return mergeClientWithCatalog(
+    {
+      id: clienteId || String(venta.id_reserva),
+      backendId: Number(venta.id_cliente) || undefined,
+      name: buildFullName(venta.cliente_nombre, venta.cliente_apellido, 'Cliente'),
+      document: formatDocumentoClienteDisplay({
+        tipo: venta.tipo_documento,
+        numero: venta.numero_documento,
+        cliente: (venta as { cliente?: Record<string, unknown> }).cliente,
+      }),
+      phone: String(venta.cliente_telefono || '—'),
+      email: String(venta.email || '—'),
+    },
+    clientFromCatalog,
+  );
+}
+
+function resolveReservationServiceType(
+  reserva?: Reserva | null,
+  venta?: Venta | null,
+): ReservationSummary['serviceType'] {
+  const tipo = String(reserva?.tipo_servicio ?? venta?.reserva_tipo_servicio ?? '').toLowerCase();
+  if ((reserva as any)?.fincas?.length || venta?.finca_nombre_resumen || tipo.includes('finca')) {
+    return 'Finca';
+  }
+  if ((reserva as any)?.programaciones?.length || venta?.ruta_nombre_resumen || tipo.includes('ruta')) {
+    return 'Ruta';
+  }
   return 'Servicio';
 }
 
-function resolveReservationServiceName(reserva?: Reserva | null): string {
-  const finca = (reserva as any)?.fincas?.[0];
-  const programacion = (reserva as any)?.programaciones?.[0];
-  const servicio = reserva?.servicios?.[0] as any;
-
+function resolveReservationServiceName(reserva?: Reserva | null, venta?: Venta | null): string {
+  const payload = reserva ?? venta;
   return (
-    finca?.finca_nombre ||
-    finca?.nombre ||
-    programacion?.ruta_nombre ||
-    programacion?.nombre_ruta ||
-    servicio?.servicio_nombre ||
-    `Reserva #${reserva?.id_reserva || reserva?.id || ''}`
+    resolveReservaProductoNombre(payload) ||
+    resolveReservaServicioEtiqueta(payload) ||
+    `Reserva #${reserva?.id_reserva || reserva?.id || venta?.id_reserva || ''}`
   );
 }
 
@@ -226,20 +318,24 @@ function resolveReservationDetails(reserva?: Reserva | null) {
   return undefined;
 }
 
-function isReservationFinca(reserva?: Reserva | null): boolean {
-  return resolveReservationServiceType(reserva) === 'Finca';
+function isReservationFinca(reserva?: Reserva | null, venta?: Venta | null): boolean {
+  return resolveReservationServiceType(reserva, venta) === 'Finca';
 }
 
 function mapReservationSummary(
   venta: Venta,
   reserva: Reserva | undefined,
-  clientFallback?: Client
+  clientFallback?: Client,
 ): ReservationSummary {
-  const backendReservationId = Number(reserva?.id_reserva || reserva?.id || venta.id_reserva || 0);
-  const totalAmount = toNumber(venta.monto_total || reserva?.monto_total || reserva?.total);
+  const effectiveReserva =
+    reserva ?? buildReservaSummaryFromVenta(venta) ?? undefined;
+  const backendReservationId = Number(
+    effectiveReserva?.id_reserva || effectiveReserva?.id || venta.id_reserva || 0,
+  );
+  const totalAmount = toNumber(venta.monto_total || effectiveReserva?.monto_total || effectiveReserva?.total);
   const paidAmount = toNumber(venta.monto_pagado);
   const pendingBalance = toNumber(venta.saldo_pendiente);
-  const serviceType = resolveReservationServiceType(reserva);
+  const serviceType = resolveReservationServiceType(effectiveReserva, venta);
 
   return {
     id: `R-${String(backendReservationId).padStart(3, '0')}`,
@@ -247,62 +343,67 @@ function mapReservationSummary(
     ventaId: Number(venta.id_venta),
     client:
       clientFallback ||
-      ({
-        id: String(venta.id_cliente || reserva?.id_cliente || backendReservationId),
-        name: buildFullName(venta.cliente_nombre, venta.cliente_apellido, 'Cliente'),
-        document: String(venta.numero_documento || 'Documento no disponible'),
-        phone: String(venta.cliente_telefono || '—'),
-        email: String(venta.email || '—'),
-      } as Client),
+      buildClientFromVenta(venta),
     serviceType,
-    serviceName: resolveReservationServiceName(reserva),
+    serviceName: resolveReservationServiceName(effectiveReserva, venta),
     totalAmount,
     paidAmount,
     pendingBalance,
-    date: formatInputDate(venta.fecha_venta || reserva?.fecha_reserva) || new Date().toISOString().split('T')[0],
-    serviceDetails: resolveReservationDetails(reserva),
+    date: formatInputDate(venta.fecha_venta || effectiveReserva?.fecha_reserva) || new Date().toISOString().split('T')[0],
+    serviceDetails: resolveReservationDetails(effectiveReserva),
   };
 }
 
 function mapPagoToInstallment(
   pago: PagoCliente,
   venta: Venta | undefined,
-  reserva: Reserva | undefined
+  reserva: Reserva | undefined,
+  clientFromCatalog?: Client,
 ): PaymentInstallment {
-  const fallbackClient: Client = {
-    id: String(venta?.id_cliente || reserva?.id_cliente || pago.id_reserva || pago.id_pago),
-    name: buildFullName(pago.cliente_nombre, pago.cliente_apellido, 'Cliente'),
-    document: String(pago.numero_documento || venta?.numero_documento || 'Documento no disponible'),
-    phone: String(pago.cliente_telefono || venta?.cliente_telefono || '—'),
-    email: String(venta?.email || '—'),
-  };
+  const ventaEffective: Venta =
+    venta ||
+    ({
+      id_venta: Number(pago.id_venta),
+      id_reserva: Number(pago.id_reserva),
+      monto_total: pago.monto_total || 0,
+      monto_pagado: pago.monto_pagado || 0,
+      saldo_pendiente: pago.saldo_pendiente || 0,
+      estado_pago: pago.estado_pago || 'Pendiente',
+      id_cliente: pago.id_cliente ?? undefined,
+      cliente_nombre: pago.cliente_nombre,
+      cliente_apellido: pago.cliente_apellido,
+      cliente_telefono: pago.cliente_telefono,
+      tipo_documento: pago.tipo_documento,
+      numero_documento: pago.numero_documento,
+      email: pago.email,
+      fecha_venta: pago.fecha_venta,
+      fecha_reserva: pago.fecha_reserva,
+      ruta_nombre_resumen: pago.ruta_nombre_resumen,
+      finca_nombre_resumen: pago.finca_nombre_resumen,
+      reserva_tipo_servicio: pago.reserva_tipo_servicio,
+    } as Venta);
+
+  const effectiveReserva =
+    reserva ?? buildReservaSummaryFromPago(pago) ?? buildReservaSummaryFromVenta(ventaEffective) ?? undefined;
+  const fallbackClient = buildClientFromPagoVenta(pago, ventaEffective, clientFromCatalog);
 
   return {
     id: `A-${String(pago.id_pago).padStart(3, '0')}`,
     backendId: Number(pago.id_pago),
     ventaId: Number(pago.id_venta),
     client: fallbackClient,
-    reservation: mapReservationSummary(
-      venta || {
-        id_venta: Number(pago.id_venta),
-        id_reserva: Number(pago.id_reserva),
-        monto_total: pago.monto_total || 0,
-        monto_pagado: pago.monto_pagado || 0,
-        saldo_pendiente: pago.saldo_pendiente || 0,
-        estado_pago: pago.estado_pago || 'Pendiente',
-      },
-      reserva,
-      fallbackClient
-    ),
+    reservation: mapReservationSummary(ventaEffective, effectiveReserva, fallbackClient),
     amount: toNumber(pago.monto),
     date: formatInputDate(pago.fecha_pago) || new Date().toISOString().split('T')[0],
     status: normalizeStatus(pago.estado),
     paymentMethod: String(pago.metodo_pago || 'Por definir'),
     receiptUrl:
-      pago.comprobante_url ||
-      (pago as { url_comprobante?: string | null }).url_comprobante ||
-      (pago as { comprobante?: string | null }).comprobante ||
-      undefined,
+      normalizeReceiptUrl(
+        pago.comprobante_url ||
+          (pago as { url_comprobante?: string | null }).url_comprobante ||
+          (pago as { comprobante?: string | null }).comprobante ||
+          undefined
+      ) || undefined,
     receiptName: pago.comprobante_nombre || undefined,
     receiptType: pago.comprobante_tipo || undefined,
     transactionNumber: pago.numero_transaccion || undefined,
@@ -340,6 +441,11 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
   const [submitting, setSubmitting] = useState(false);
   const [processing, setProcessing] = useState(false);
 
+  // Cache en-memoria para ventas y reservas: evita refetches cuando ya los tenemos del listado
+  const ventasCacheRef = React.useRef<Map<number, Venta>>(new Map());
+  const reservasCacheRef = React.useRef<Map<number, Reserva>>(new Map());
+  const clientesCacheRef = React.useRef<Map<number, Client>>(new Map());
+
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -353,70 +459,34 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [pagos, clientes, ventas] = await Promise.all([
-        pagosAPI.getAll(),
-        clientesAPI.getAll(),
-        ventasAPI.getAll(),
-      ]);
+      const [pagos, ventas] = await Promise.all([pagosAPI.getAll(), ventasAPI.getAll()]);
 
-      const uniqueReservationIds = Array.from(
-        new Set(
-          [...pagos.map((pago) => Number(pago.id_reserva)), ...ventas.map((venta) => Number(venta.id_reserva))]
-            .filter((id) => Number.isFinite(id) && id > 0)
-        )
-      );
-
-      const reservationResults = await Promise.allSettled(
-        uniqueReservationIds.map(async (idReserva) => {
-          const reserva = await reservasAPI.getById(idReserva);
-          return [idReserva, reserva] as const;
-        })
-      );
-
-      const reservationMap = new Map<number, Reserva>();
-      reservationResults.forEach((result) => {
-        if (result.status === 'fulfilled') {
-          reservationMap.set(result.value[0], result.value[1]);
-        }
-      });
-
+      // Poblar cache con las ventas del listado para acelerar el detalle
       const ventasMap = new Map<number, Venta>();
       ventas.forEach((venta) => {
-        ventasMap.set(Number(venta.id_venta), venta);
+        const vid = Number(venta.id_venta);
+        ventasMap.set(vid, venta);
+        ventasCacheRef.current.set(vid, venta);
       });
 
-      const mappedInstallments = pagos.map((pago) =>
-        mapPagoToInstallment(
-          pago,
-          ventasMap.get(Number(pago.id_venta)),
-          reservationMap.get(Number(pago.id_reserva))
-        )
-      );
-
-      const clientMap = new Map<string, Client>();
-      clientes.forEach((cliente) => {
-        const mappedClient = mapCliente(cliente);
-        clientMap.set(mappedClient.id, mappedClient);
-      });
-      mappedInstallments.forEach((installment) => {
-        clientMap.set(installment.client.id, installment.client);
+      const mappedInstallments = pagos.map((pago) => {
+        const venta = ventasMap.get(Number(pago.id_venta));
+        return mapPagoToInstallment(pago, venta, undefined);
       });
 
       const fincaReservations = ventas
+        .filter((venta) => isReservationFinca(undefined, venta) && toNumber(venta.saldo_pendiente) > 0)
         .map((venta) => {
-          const reserva = reservationMap.get(Number(venta.id_reserva));
-          if (!reserva || !isReservationFinca(reserva) || toNumber(venta.saldo_pendiente) <= 0) {
-            return null;
-          }
-          const backendClientId = String(venta.id_cliente || reserva.id_cliente || '');
-          const knownClient = clientMap.get(backendClientId);
-          return mapReservationSummary(venta, reserva, knownClient);
+          const backendClientId = String(venta.id_cliente || '');
+          return mapReservationSummary(
+            venta,
+            buildReservaSummaryFromVenta(venta) ?? undefined,
+            backendClientId ? buildClientFromVenta(venta) : undefined,
+          );
         })
-        .filter((item): item is ReservationSummary => Boolean(item))
         .sort((a, b) => b.backendId - a.backendId);
 
       setInstallments(mappedInstallments);
-      setAvailableClients(Array.from(clientMap.values()).sort((a, b) => a.name.localeCompare(b.name)));
       setAvailableReservations(fincaReservations);
 
       setSelectedInstallment((previous) => {
@@ -434,6 +504,32 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
     if (!canViewAbonos) return;
     void loadData();
   }, [canViewAbonos, loadData]);
+
+  useEffect(() => {
+    if (viewMode !== 'create' || !canCreateAbono) return;
+
+    let cancelled = false;
+    const loadCreateClients = async () => {
+      try {
+        const clientes = await clientesAPI.getAll();
+        if (cancelled) return;
+        setAvailableClients(
+          clientes
+            .map(mapCliente)
+            .sort((a, b) => a.name.localeCompare(b.name, 'es')),
+        );
+      } catch (error: any) {
+        if (!cancelled) {
+          toast.error(error?.message || 'No se pudieron cargar los clientes');
+        }
+      }
+    };
+
+    void loadCreateClients();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode, canCreateAbono]);
 
   const filteredInstallments = useMemo(() => {
     return installments.filter((installment) => {
@@ -459,14 +555,43 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
   const paginatedInstallments = filteredInstallments.slice(startIndex, startIndex + itemsPerPage);
 
   const handleViewDetail = async (installment: PaymentInstallment) => {
-    setLoadingDetail(true);
+    // Mostrar la vista inmediatamente con los datos del listado
     setSelectedInstallment(installment);
     setViewMode('detail');
+    setLoadingDetail(true);
     try {
+      // Pago siempre se recarga para tener el estado más reciente
       const pago = await pagosAPI.getById(installment.backendId);
-      const venta = await ventasAPI.getById(Number(pago.id_venta));
-      const reserva = await reservasAPI.getById(Number(pago.id_reserva));
-      setSelectedInstallment(mapPagoToInstallment(pago, venta, reserva));
+
+      const ventaId = Number(pago.id_venta);
+      const reservaId = Number(pago.id_reserva);
+
+      // Venta y reserva en paralelo; usar cache si ya las tenemos
+      const [venta, reserva] = await Promise.all([
+        ventasCacheRef.current.has(ventaId)
+          ? Promise.resolve(ventasCacheRef.current.get(ventaId)!)
+          : ventasAPI.getById(ventaId).then((v) => { ventasCacheRef.current.set(ventaId, v); return v; }),
+        reservasCacheRef.current.has(reservaId)
+          ? Promise.resolve(reservasCacheRef.current.get(reservaId)!)
+          : reservasAPI.getById(reservaId).then((r) => { reservasCacheRef.current.set(reservaId, r); return r; }),
+      ]);
+
+      const clienteId = resolveClienteId(pago, venta, reserva);
+      const clienteIdNum = Number(clienteId);
+      let knownClient: Client | undefined;
+      if (clienteId) {
+        if (clientesCacheRef.current.has(clienteIdNum)) {
+          knownClient = clientesCacheRef.current.get(clienteIdNum);
+        } else {
+          try {
+            knownClient = mapCliente(await clientesAPI.getById(clienteIdNum));
+            clientesCacheRef.current.set(clienteIdNum, knownClient);
+          } catch {
+            knownClient = availableClients.find((c) => c.id === clienteId);
+          }
+        }
+      }
+      setSelectedInstallment(mapPagoToInstallment(pago, venta, reserva, knownClient));
     } catch (error: any) {
       toast.error(error?.message || 'No se pudo cargar el detalle del abono');
     } finally {
@@ -529,33 +654,40 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
 
     setProcessing(true);
     try {
-      await pagosAPI.verificar(installment.backendId, {
-        estado: decision,
-        observaciones: notes || null,
-        motivo_rechazo: decision === 'Rechazado' ? reason || null : null,
-      });
+      const rid = installment.reservation.backendId;
+
+      // Verificar el pago y actualizar motivo en la reserva en paralelo
+      await Promise.all([
+        pagosAPI.verificar(installment.backendId, {
+          estado: decision,
+          observaciones: notes || null,
+          motivo_rechazo: decision === 'Rechazado' ? reason || null : null,
+        }),
+        Number.isFinite(rid) && rid > 0
+          ? reservasAPI.update(rid, {
+              motivo_desaprobacion_pago: decision === 'Rechazado' && reason?.trim() ? reason.trim() : null,
+            }).catch((e) => console.warn('No se pudo guardar motivo_desaprobacion_pago:', e))
+          : Promise.resolve(),
+      ]);
 
       toast.success(decision === 'Aprobado' ? 'Comprobante aprobado correctamente' : 'Comprobante rechazado correctamente');
-      await loadData();
-      const updated = await pagosAPI.getById(installment.backendId);
 
-      const rid = Number(updated.id_reserva);
-      if (Number.isFinite(rid) && rid > 0) {
-        try {
-          if (decision === 'Rechazado') {
-            await reservasAPI.update(rid, {
-              motivo_desaprobacion_pago: reason?.trim() ? reason.trim() : null,
-            });
-          } else if (decision === 'Aprobado') {
-            await reservasAPI.update(rid, { motivo_desaprobacion_pago: null });
-          }
-        } catch (e) {
-          console.warn('No se pudo guardar motivo_desaprobacion_pago en la reserva:', e);
-        }
-      }
+      // Refrescar lista y detalle en paralelo — invalidar cache de esta venta/reserva
+      const [updated] = await Promise.all([
+        pagosAPI.getById(installment.backendId),
+        loadData(),
+      ]);
 
-      const venta = await ventasAPI.getById(Number(updated.id_venta));
-      const reserva = await reservasAPI.getById(Number(updated.id_reserva));
+      const ventaId = Number(updated.id_venta);
+      const reservaId = Number(updated.id_reserva);
+      // Invalidar entradas del cache para forzar datos frescos
+      ventasCacheRef.current.delete(ventaId);
+      reservasCacheRef.current.delete(reservaId);
+
+      const [venta, reserva] = await Promise.all([
+        ventasAPI.getById(ventaId).then((v) => { ventasCacheRef.current.set(ventaId, v); return v; }),
+        reservasAPI.getById(reservaId).then((r) => { reservasCacheRef.current.set(reservaId, r); return r; }),
+      ]);
       setSelectedInstallment(mapPagoToInstallment(updated, venta, reserva));
     } catch (error: any) {
       toast.error(error?.message || 'No se pudo actualizar el estado del comprobante');
@@ -1424,13 +1556,15 @@ function InstallmentDetailView({
     alert(`Generando PDF del abono ${installment.id}...`);
   };
 
+  const receiptUrl = normalizeReceiptUrl(installment.receiptUrl);
+
   const handleDownloadReceipt = () => {
-    if (!installment.receiptUrl) {
+    if (!receiptUrl) {
       toast.error('Este pago no tiene comprobante adjunto');
       return;
     }
     try {
-      downloadReceiptFile(installment.receiptUrl, installment.receiptName);
+      downloadReceiptFile(receiptUrl, installment.receiptName);
     } catch {
       toast.error('No se pudo descargar el comprobante');
     }
@@ -1441,7 +1575,7 @@ function InstallmentDetailView({
       <ReceiptProofViewerDialog
         open={receiptViewerOpen}
         onOpenChange={setReceiptViewerOpen}
-        url={installment.receiptUrl}
+        url={receiptUrl}
         fileName={installment.receiptName}
         mimeType={installment.receiptType}
       />

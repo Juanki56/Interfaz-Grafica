@@ -14,7 +14,7 @@ import {
   DropdownMenuTrigger 
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { NotificationPanel } from './NotificationPanel';
 
 export function Navigation() {

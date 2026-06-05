@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
-import { User, Calendar, Clock, CreditCard, Package, ChevronRight, AlertCircle, Settings, Lock, Bell, Trash2, Shield, Mail, Phone, Eye, EyeOff, Save } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { User, Settings, Lock, Bell, Trash2, Shield, Mail, Phone, Eye, EyeOff, Save } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
@@ -10,36 +9,65 @@ import { Switch } from './ui/switch';
 import { Label } from './ui/label';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from './ui/alert-dialog';
 import { Separator } from './ui/separator';
-import { useAuth } from '../App';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { useAuth } from '../context/AuthContext';
 import { toast } from 'sonner';
-import { ClientPaymentsTab, ClientProgrammingsTab, ClientSalesTab } from './ClientSalesAndPayments';
 import { clientesAPI, empleadosAPI, usersAPI, authAPI } from '../services/api';
 import { decodeJWT } from '../utils/jwtDecoder';
-
-interface Booking {
-  id: string;
-  tourId: string;
-  tourName: string;
-  date: string;
-  participants: number;
-  specialRequests: string;
-  total: number;
-  status: 'pending' | 'confirmed' | 'cancelled';
-  createdAt: string;
-}
+import {
+  documentoTitularCompletoValidoParaReserva,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+  PROFILE_DOCUMENT_REMINDER_KEY,
+} from '../utils/documentIdentityValidation';
+import { Alert, AlertDescription } from './ui/alert';
+import {
+  getClientPasswordRequirementChecks,
+  isStrongClientPassword,
+  sanitizeDocumentInput,
+  validateClientPasswordChange,
+} from '../utils/clientFormValidation';
 
 interface UserProfileProps {
   onClose?: () => void;
 }
 
+/** Valores alineados con UsersManagement / AdminDashboard (misma API). */
+const TIPO_DOCUMENTO_PERFIL_VALUES = ['C.C.', 'C.E.', 'Pasaporte', 'T.I.', 'NIT'] as const;
+
+/** Normaliza texto viejo (CC, c.c, etc.) al valor del Select. */
+function tipoDocumentoPerfilToSelectValue(raw: unknown): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  const direct = TIPO_DOCUMENTO_PERFIL_VALUES.find((v) => v === s);
+  if (direct) return direct;
+  const n = s.toLowerCase().replace(/\s+/g, '');
+  if (n === 'cc' || n === 'c.c' || n === 'c.c.' || n.includes('ciudadania') || n.includes('ceduladeciudadania')) {
+    return 'C.C.';
+  }
+  if (n === 'ce' || n === 'c.e' || n === 'c.e.' || n.includes('extranjeria')) {
+    return 'C.E.';
+  }
+  if (n.includes('pasaporte') || n === 'pa' || n === 'pas' || n === 'passport') {
+    return 'Pasaporte';
+  }
+  if (n === 'ti' || n === 't.i' || n === 't.i.' || n.includes('identidad') || n.includes('tarjetadeidentidad')) {
+    return 'T.I.';
+  }
+  if (n === 'nit' || n.includes('nit')) {
+    return 'NIT';
+  }
+  return '';
+}
+
 export function UserProfile({ onClose }: UserProfileProps) {
   const { user, logout, setCurrentView, refreshProfile, updateCurrentUser } = useAuth();
-  const [bookings, setBookings] = useState<Booking[]>([]);
   const [backendProfile, setBackendProfile] = useState<any>(null);
   const [profileData, setProfileData] = useState({
     name: user?.name || '',
     email: user?.email || '',
     phone: user?.phone || '',
+    tipo_documento: tipoDocumentoPerfilToSelectValue(user?.tipo_documento) || '',
+    numero_documento: user?.numero_documento || '',
     preferences: ''
   });
   
@@ -72,6 +100,11 @@ export function UserProfile({ onClose }: UserProfileProps) {
   
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteMotivo, setDeleteMotivo] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [showDocumentReminder, setShowDocumentReminder] = useState(false);
+
+  const ACCOUNT_DELETION_ESTIMATED_DAYS = 15;
 
   const splitFullName = (fullName: string) => {
     const cleaned = String(fullName || '').trim().replace(/\s+/g, ' ');
@@ -168,11 +201,19 @@ export function UserProfile({ onClose }: UserProfileProps) {
       setBackendProfile(perfil);
 
       const nombreCompleto = perfil.apellido ? `${perfil.nombre} ${perfil.apellido}` : (perfil.nombre || '');
+      const tipoDoc = tipoDocumentoPerfilToSelectValue(
+        perfil.tipo_documento ?? perfil.tipoDocumento ?? user?.tipo_documento,
+      );
+      const numeroDoc = String(
+        perfil.numero_documento ?? perfil.numeroDocumento ?? user?.numero_documento ?? '',
+      ).trim();
       setProfileData(prev => ({
         ...prev,
         name: nombreCompleto || user?.name || prev.name,
         email: perfil.correo || user?.email || prev.email,
         phone: perfil.telefono || user?.phone || prev.phone,
+        tipo_documento: tipoDoc || prev.tipo_documento,
+        numero_documento: numeroDoc || prev.numero_documento,
       }));
     } catch (error: any) {
       console.error('Error cargando perfil:', error);
@@ -180,10 +221,17 @@ export function UserProfile({ onClose }: UserProfileProps) {
   };
 
   useEffect(() => {
-    // Load bookings from localStorage
-    const savedBookings = JSON.parse(localStorage.getItem('userBookings') || '[]');
-    setBookings(savedBookings);
+    try {
+      if (sessionStorage.getItem(PROFILE_DOCUMENT_REMINDER_KEY) === '1') {
+        sessionStorage.removeItem(PROFILE_DOCUMENT_REMINDER_KEY);
+        setShowDocumentReminder(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
+  useEffect(() => {
     // Load ONLY preferences from localStorage (backend owns name/email/phone)
     const savedProfile = localStorage.getItem('userProfile');
     if (savedProfile) {
@@ -213,32 +261,6 @@ export function UserProfile({ onClose }: UserProfileProps) {
     }
   }, [user]);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return 'bg-green-100 text-green-800';
-      case 'pending':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'cancelled':
-        return 'bg-red-100 text-red-800';
-      default:
-        return 'bg-gray-100 text-gray-800';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return 'Confirmado';
-      case 'pending':
-        return 'Pendiente';
-      case 'cancelled':
-        return 'Cancelado';
-      default:
-        return status;
-    }
-  };
-
   const handleProfileUpdate = async () => {
     // Validate required fields
     if (!profileData.name.trim()) {
@@ -250,11 +272,13 @@ export function UserProfile({ onClose }: UserProfileProps) {
       toast.error('El email es requerido');
       return;
     }
-    
-    if (!profileData.email.trim()) {
-      toast.error('El email es requerido');
+
+    if (!documentoTitularCompletoValidoParaReserva(profileData.tipo_documento, profileData.numero_documento)) {
+      toast.error('Seleccione un tipo de documento válido e ingrese el número de documento');
       return;
     }
+
+    const numeroDocumento = sanitizeDocumentInput(profileData.numero_documento);
 
     // Persistir preferencias localmente (no hay campo claro en backend actualmente)
     localStorage.setItem('userProfile', JSON.stringify({ preferences: profileData.preferences }));
@@ -268,16 +292,21 @@ export function UserProfile({ onClose }: UserProfileProps) {
         apellido: apellido || undefined,
         correo: profileData.email,
         telefono: profileData.phone,
+        tipo_documento: profileData.tipo_documento,
+        numero_documento: numeroDocumento,
         preferencias: profileData.preferences
       });
 
       updateCurrentUser({
         name: profileData.name,
         phone: profileData.phone,
+        tipo_documento: profileData.tipo_documento,
+        numero_documento: numeroDocumento,
       });
 
       await refreshProfile();
       await loadBackendProfile();
+      setShowDocumentReminder(false);
       toast.success('Perfil actualizado exitosamente');
       return;
     } catch (error: any) {
@@ -294,7 +323,9 @@ export function UserProfile({ onClose }: UserProfileProps) {
           nombre,
           apellido: apellido || undefined,
           correo: profileData.email,
-          telefono: profileData.phone
+          telefono: profileData.phone,
+          tipo_documento: profileData.tipo_documento,
+          numero_documento: numeroDocumento,
         };
 
         const ids = await resolveSelfBackendIds();
@@ -316,7 +347,9 @@ export function UserProfile({ onClose }: UserProfileProps) {
           await empleadosAPI.update(ids.idEmpleado, {
             nombre,
             apellido: apellido || undefined,
-            telefono: profileData.phone
+            telefono: profileData.phone,
+            tipo_documento: profileData.tipo_documento,
+            numero_documento: numeroDocumento,
           });
           updatedAtLeastOne = true;
         }
@@ -328,10 +361,13 @@ export function UserProfile({ onClose }: UserProfileProps) {
         updateCurrentUser({
           name: profileData.name,
           phone: profileData.phone,
+          tipo_documento: profileData.tipo_documento,
+          numero_documento: numeroDocumento,
         });
 
         await refreshProfile();
         await loadBackendProfile();
+        setShowDocumentReminder(false);
         toast.success('Perfil actualizado exitosamente');
       } catch (fallbackError: any) {
         console.error('Error al actualizar perfil:', fallbackError);
@@ -340,22 +376,29 @@ export function UserProfile({ onClose }: UserProfileProps) {
     }
   };
 
+  const passwordRequirementChecks = useMemo(
+    () => getClientPasswordRequirementChecks(passwordData.newPassword),
+    [passwordData.newPassword],
+  );
+
+  const passwordsMatch =
+    passwordData.newPassword.length > 0 &&
+    passwordData.confirmPassword.length > 0 &&
+    passwordData.newPassword === passwordData.confirmPassword;
+
+  const canSubmitPasswordChange =
+    Boolean(passwordData.currentPassword.trim()) &&
+    isStrongClientPassword(passwordData.newPassword) &&
+    passwordsMatch &&
+    passwordData.currentPassword !== passwordData.newPassword;
+
   const handlePasswordChange = async () => {
-    if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
-      toast.error('Por favor completa todos los campos');
+    const validationError = validateClientPasswordChange(passwordData);
+    if (validationError) {
+      toast.error(validationError);
       return;
     }
-    
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
-      toast.error('Las contraseñas nuevas no coinciden');
-      return;
-    }
-    
-    if (passwordData.newPassword.length < 8) {
-      toast.error('La contraseña debe tener al menos 8 caracteres');
-      return;
-    }
-    
+
     try {
       await authAPI.cambiarContrasena(
         passwordData.currentPassword,
@@ -388,17 +431,41 @@ export function UserProfile({ onClose }: UserProfileProps) {
     toast.success('Configuración de privacidad actualizada');
   };
 
-  const handleDeleteAccount = () => {
+  const handleDeleteAccount = async () => {
+    if (user?.role !== 'client') {
+      toast.error('Solo los clientes pueden solicitar la eliminación de cuenta desde aquí.');
+      return;
+    }
     if (deleteConfirmText !== 'ELIMINAR') {
       toast.error('Por favor escribe "ELIMINAR" para confirmar');
       return;
     }
-    
-    // Mock account deletion
-    console.log('Account deleted');
-    toast.success('Cuenta eliminada exitosamente');
-    logout();
-    setShowDeleteDialog(false);
+
+    setIsDeletingAccount(true);
+    try {
+      const resp = await authAPI.solicitarEliminacionCuenta({
+        confirmacion: 'ELIMINAR',
+        motivo: deleteMotivo.trim() || undefined,
+      });
+      const ref = resp?.referencia ? ` Referencia: ${resp.referencia}.` : '';
+      toast.success(
+        (resp?.message ||
+          'Recibimos tu solicitud. Revisa tu correo con los pasos y el plazo estimado.') + ref,
+        { duration: 8000 },
+      );
+      setShowDeleteDialog(false);
+      setDeleteConfirmText('');
+      setDeleteMotivo('');
+      logout();
+      setCurrentView('home');
+    } catch (error: any) {
+      const msg =
+        error?.message ||
+        'No se pudo registrar la solicitud. Si tienes reservas activas, resuélvelas antes de solicitar la baja.';
+      toast.error(msg, { duration: 9000 });
+    } finally {
+      setIsDeletingAccount(false);
+    }
   };
 
   const togglePasswordVisibility = (field: 'current' | 'new' | 'confirm') => {
@@ -419,13 +486,9 @@ export function UserProfile({ onClose }: UserProfileProps) {
 
     if (user?.role === 'client') {
       return [
-        { id: 'profile', label: 'Perfil', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'bookings', label: 'Reservas', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'programming', label: 'Programaciones', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'sales', label: 'Ventas', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'payments', label: 'Abonos', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'security', label: 'Seguridad', cols: 'grid-cols-4 md:grid-cols-7' },
-        { id: 'notifications', label: 'Notificaciones', cols: 'grid-cols-4 md:grid-cols-7' },
+        { id: 'profile', label: 'Perfil', cols: 'grid-cols-3' },
+        { id: 'security', label: 'Seguridad', cols: 'grid-cols-3' },
+        { id: 'notifications', label: 'Notificaciones', cols: 'grid-cols-3' },
       ];
     }
 
@@ -470,6 +533,13 @@ export function UserProfile({ onClose }: UserProfileProps) {
                 <CardTitle className="text-2xl text-gray-800">Información Personal</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
+                {showDocumentReminder ? (
+                  <Alert className="border-amber-200 bg-amber-50">
+                    <AlertDescription className="text-amber-900">
+                      {MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-gray-700">Nombre Completo</label>
@@ -498,6 +568,41 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
                       placeholder="+57 300 123 4567"
                       type="tel"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Tipo de documento</label>
+                    <Select
+                      value={profileData.tipo_documento || undefined}
+                      onValueChange={(value) =>
+                        setProfileData((prev) => ({ ...prev, tipo_documento: value }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleccione tipo" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TIPO_DOCUMENTO_PERFIL_VALUES.map((tipo) => (
+                          <SelectItem key={tipo} value={tipo}>
+                            {tipo}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-gray-700">Número de documento</label>
+                    <Input
+                      value={profileData.numero_documento}
+                      onChange={(e) =>
+                        setProfileData((prev) => ({
+                          ...prev,
+                          numero_documento: sanitizeDocumentInput(e.target.value),
+                        }))
+                      }
+                      placeholder="Ej. 1234567890"
                     />
                   </div>
                   
@@ -538,120 +643,6 @@ export function UserProfile({ onClose }: UserProfileProps) {
             </Card>
           </TabsContent>
 
-          {/* Bookings Tab - Only for clients */}
-          {user?.role === 'client' && (
-            <TabsContent value="bookings">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-2xl text-gray-800 flex items-center space-x-2">
-                    <Package className="w-6 h-6" />
-                    <span>Mis Reservas</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {bookings.length === 0 ? (
-                    <div className="text-center py-12">
-                      <AlertCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-                      <h3 className="text-xl text-gray-600 mb-2">No tienes reservas aún</h3>
-                      <p className="text-gray-500 mb-4">
-                        Explora nuestros tours y fincas para hacer tu primera reserva
-                      </p>
-                      <Button 
-                        onClick={() => {
-                          setCurrentView('packages');
-                          if (onClose) onClose();
-                        }}
-                        className="bg-green-600 hover:bg-green-700"
-                      >
-                        Explorar Tours
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {bookings.map((booking) => (
-                        <Card key={booking.id} className="border-l-4 border-l-green-500">
-                          <CardContent className="p-6">
-                            <div className="flex flex-col md:flex-row md:items-center justify-between space-y-4 md:space-y-0">
-                              <div className="flex-1">
-                                <div className="flex items-center justify-between mb-2">
-                                  <h3 className="text-lg text-gray-800">{booking.tourName}</h3>
-                                  <Badge className={getStatusColor(booking.status)}>
-                                    {getStatusText(booking.status)}
-                                  </Badge>
-                                </div>
-                                
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-600">
-                                  <div className="flex items-center space-x-2">
-                                    <Calendar className="w-4 h-4" />
-                                    <span>{new Date(booking.date).toLocaleDateString('es-ES')}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    <User className="w-4 h-4" />
-                                    <span>{booking.participants} persona{booking.participants > 1 ? 's' : ''}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    <CreditCard className="w-4 h-4" />
-                                    <span>${booking.total.toLocaleString()}</span>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    <Clock className="w-4 h-4" />
-                                    <span>
-                                      {new Date(booking.createdAt).toLocaleDateString('es-ES')}
-                                    </span>
-                                  </div>
-                                </div>
-                                
-                                {booking.specialRequests && (
-                                  <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-                                    <p className="text-sm text-gray-600">
-                                      <strong>Solicitudes especiales:</strong> {booking.specialRequests}
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-                              
-                              <div className="flex space-x-2">
-                                {booking.status === 'pending' && (
-                                  <Button size="sm" variant="outline" className="text-red-600 border-red-200">
-                                    Cancelar
-                                  </Button>
-                                )}
-                                <Button size="sm" variant="outline">
-                                  Ver Detalles
-                                  <ChevronRight className="w-4 h-4 ml-1" />
-                                </Button>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          )}
-
-          {/* Sales Tab - Only for clients */}
-          {user?.role === 'client' && (
-            <TabsContent value="programming">
-              <ClientProgrammingsTab />
-            </TabsContent>
-          )}
-
-          {user?.role === 'client' && (
-            <TabsContent value="sales">
-              <ClientSalesTab />
-            </TabsContent>
-          )}
-
-          {/* Payments/Abonos Tab - Only for clients */}
-          {user?.role === 'client' && (
-            <TabsContent value="payments">
-              <ClientPaymentsTab />
-            </TabsContent>
-          )}
-
           {/* Security Tab */}
           <TabsContent value="security">
             <div className="space-y-6">
@@ -665,6 +656,9 @@ export function UserProfile({ onClose }: UserProfileProps) {
                 <CardContent className="space-y-6">
                   <div>
                     <h3 className="font-medium text-gray-800 mb-4">Cambiar Contraseña</h3>
+                    <p className="mb-4 text-sm text-gray-600">
+                      La nueva contraseña debe cumplir los requisitos de seguridad indicados abajo.
+                    </p>
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <Label htmlFor="current-password">Contraseña Actual</Label>
@@ -697,7 +691,12 @@ export function UserProfile({ onClose }: UserProfileProps) {
                               type={showPasswords.new ? "text" : "password"}
                               value={passwordData.newPassword}
                               onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
-                              placeholder="Mínimo 8 caracteres"
+                              placeholder="8+ caracteres, mayúscula, número y símbolo"
+                              maxLength={64}
+                              aria-invalid={
+                                passwordData.newPassword.length > 0 &&
+                                !isStrongClientPassword(passwordData.newPassword)
+                              }
                             />
                             <Button
                               type="button"
@@ -720,6 +719,10 @@ export function UserProfile({ onClose }: UserProfileProps) {
                               value={passwordData.confirmPassword}
                               onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
                               placeholder="Confirma tu nueva contraseña"
+                              maxLength={64}
+                              aria-invalid={
+                                passwordData.confirmPassword.length > 0 && !passwordsMatch
+                              }
                             />
                             <Button
                               type="button"
@@ -733,8 +736,52 @@ export function UserProfile({ onClose }: UserProfileProps) {
                           </div>
                         </div>
                       </div>
+
+                      {passwordData.newPassword.length > 0 && (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <p className="mb-2 text-xs font-medium text-gray-700">
+                            Requisitos de la nueva contraseña
+                          </p>
+                          <ul className="space-y-1">
+                            {passwordRequirementChecks.map((req) => (
+                              <li
+                                key={req.id}
+                                className={`text-xs ${
+                                  req.met ? 'text-green-700' : 'text-gray-600'
+                                }`}
+                              >
+                                {req.met ? '✓' : '○'} {req.label}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {passwordData.confirmPassword.length > 0 && (
+                        <p
+                          className={`text-xs ${
+                            passwordsMatch ? 'text-green-700' : 'text-red-600'
+                          }`}
+                        >
+                          {passwordsMatch
+                            ? '✓ Las contraseñas coinciden'
+                            : '○ La confirmación no coincide con la nueva contraseña'}
+                        </p>
+                      )}
+
+                      {passwordData.currentPassword &&
+                        passwordData.newPassword &&
+                        passwordData.currentPassword === passwordData.newPassword && (
+                          <p className="text-xs text-red-600">
+                            La nueva contraseña debe ser diferente a la actual.
+                          </p>
+                        )}
                       
-                      <Button onClick={handlePasswordChange} className="bg-blue-600 hover:bg-blue-700">
+                      <Button
+                        onClick={handlePasswordChange}
+                        className="bg-blue-600 hover:bg-blue-700"
+                        disabled={!canSubmitPasswordChange}
+                      >
                         <Save className="w-4 h-4 mr-2" />
                         Cambiar Contraseña
                       </Button>
@@ -792,6 +839,114 @@ export function UserProfile({ onClose }: UserProfileProps) {
                   </div>
                 </CardContent>
               </Card>
+
+              {user?.role === 'client' ? (
+                <Card className="border-red-200">
+                  <CardHeader>
+                    <CardTitle className="text-red-600 flex items-center space-x-2">
+                      <Trash2 className="w-6 h-6" />
+                      <span>Eliminar mi cuenta</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-gray-700">
+                      Puedes solicitar la <strong>baja de tu cuenta</strong>. No es inmediata: OCCITOUR
+                      confirmará por correo los pasos, el plazo estimado (hasta{' '}
+                      <strong>{ACCOUNT_DELETION_ESTIMATED_DAYS} días hábiles</strong>) y las consecuencias.
+                    </p>
+                    <ul className="text-sm text-gray-600 list-disc pl-5 space-y-1">
+                      <li>Recibirás un correo de confirmación de recepción con tu número de referencia.</li>
+                      <li>Perderás el acceso a reservas, abonos y perfil al confirmar la solicitud.</li>
+                      <li>No podrás crear nuevas reservas con esta cuenta.</li>
+                      <li>Debes cancelar o completar reservas activas antes de solicitar la baja.</li>
+                    </ul>
+
+                    <AlertDialog
+                      open={showDeleteDialog}
+                      onOpenChange={(open) => {
+                        setShowDeleteDialog(open);
+                        if (!open) {
+                          setDeleteConfirmText('');
+                          setDeleteMotivo('');
+                        }
+                      }}
+                    >
+                      <AlertDialogTrigger asChild>
+                        <Button variant="destructive" className="w-full sm:w-auto">
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Solicitar eliminación de cuenta
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>¿Solicitar eliminación de tu cuenta?</AlertDialogTitle>
+                          <AlertDialogDescription asChild>
+                            <div className="space-y-3 text-sm text-gray-700">
+                              <p>
+                                Al confirmar, registramos tu solicitud y te enviamos un{' '}
+                                <strong>correo con el detalle del proceso</strong> (pasos, plazo y
+                                consecuencias).
+                              </p>
+                              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                <p className="font-medium text-amber-950">Tiempo estimado</p>
+                                <p className="text-amber-900/90">
+                                  Hasta {ACCOUNT_DELETION_ESTIMATED_DAYS} días hábiles para completar la
+                                  eliminación.
+                                </p>
+                              </div>
+                              <div>
+                                <p className="font-medium text-gray-900">Consecuencias</p>
+                                <ul className="list-disc pl-5 mt-1 space-y-1">
+                                  <li>Cierre de acceso a la plataforma (no podrás iniciar sesión).</li>
+                                  <li>Pérdida de acceso a historial, comprobantes y perfil en línea.</li>
+                                  <li>Imposibilidad de nuevas reservas con esta cuenta.</li>
+                                </ul>
+                              </div>
+                            </div>
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <div className="space-y-3">
+                          <div>
+                            <Label className="text-sm">Motivo (opcional)</Label>
+                            <Textarea
+                              className="mt-1 min-h-[72px]"
+                              placeholder="Ej. ya no usaré el servicio"
+                              value={deleteMotivo}
+                              onChange={(e) => setDeleteMotivo(e.target.value)}
+                              maxLength={2000}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-sm font-medium">
+                              Escribe <strong>ELIMINAR</strong> para confirmar:
+                            </Label>
+                            <Input
+                              className="mt-2"
+                              placeholder="ELIMINAR"
+                              value={deleteConfirmText}
+                              onChange={(e) => setDeleteConfirmText(e.target.value)}
+                              autoComplete="off"
+                            />
+                          </div>
+                        </div>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel disabled={isDeletingAccount}>Cancelar</AlertDialogCancel>
+                          <AlertDialogAction
+                            className="bg-red-600 hover:bg-red-700"
+                            disabled={deleteConfirmText !== 'ELIMINAR' || isDeletingAccount}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              void handleDeleteAccount();
+                            }}
+                          >
+                            {isDeletingAccount ? 'Enviando solicitud…' : 'Confirmar solicitud'}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </CardContent>
+                </Card>
+              ) : null}
             </div>
           </TabsContent>
 
@@ -955,10 +1110,9 @@ export function UserProfile({ onClose }: UserProfileProps) {
                            'Operaciones realizadas'}
                         </Label>
                         <p className="font-medium">
-                          {user?.role === 'client' ? bookings.filter(b => b.status === 'confirmed').length :
-                           user?.role === 'guide' ? '47' :
+                          {user?.role === 'guide' ? '47' :
                            user?.role === 'advisor' ? '126' :
-                           '89'}
+                           '—'}
                         </p>
                       </div>
                       <div>

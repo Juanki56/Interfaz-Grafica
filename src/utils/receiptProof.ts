@@ -1,8 +1,25 @@
 /** Utilidades para comprobantes guardados como URL http(s) o data URL (base64). */
 
+import { buildApiUrl } from '../config/api.config';
+
 export function normalizeReceiptUrl(url: string | null | undefined): string | null {
   const u = String(url || '').trim();
-  return u || null;
+  if (!u) return null;
+  if (
+    u.startsWith('data:') ||
+    u.startsWith('http://') ||
+    u.startsWith('https://') ||
+    u.startsWith('blob:')
+  ) {
+    return u;
+  }
+  if (u.startsWith('/')) {
+    return buildApiUrl(u);
+  }
+  if (!u.includes('://')) {
+    return buildApiUrl(`/${u.replace(/^\/+/, '')}`);
+  }
+  return u;
 }
 
 export function receiptMimeFromDataUrl(url: string): string | null {
@@ -39,21 +56,22 @@ export function isPdfMime(mime: string): boolean {
 }
 
 export function downloadReceiptFile(url: string, filename?: string | null) {
+  const resolved = normalizeReceiptUrl(url) || url;
   const base = filename?.trim() || 'comprobante';
   let downloadName = base;
 
-  if (url.startsWith('data:application/pdf')) {
+  if (resolved.startsWith('data:application/pdf')) {
     if (!downloadName.toLowerCase().endsWith('.pdf')) downloadName = `${downloadName}.pdf`;
-  } else if (url.startsWith('data:image/png')) {
+  } else if (resolved.startsWith('data:image/png')) {
     if (!/\.(png|jpg|jpeg|webp)$/i.test(downloadName)) downloadName = `${downloadName}.png`;
-  } else if (url.startsWith('data:image/jpeg') || url.startsWith('data:image/jpg')) {
+  } else if (resolved.startsWith('data:image/jpeg') || resolved.startsWith('data:image/jpg')) {
     if (!/\.(png|jpg|jpeg|webp)$/i.test(downloadName)) downloadName = `${downloadName}.jpg`;
-  } else if (url.startsWith('data:image/webp')) {
+  } else if (resolved.startsWith('data:image/webp')) {
     if (!/\.(png|jpg|jpeg|webp)$/i.test(downloadName)) downloadName = `${downloadName}.webp`;
   }
 
   const a = document.createElement('a');
-  a.href = url;
+  a.href = resolved;
   a.download = downloadName;
   a.rel = 'noopener';
   document.body.appendChild(a);

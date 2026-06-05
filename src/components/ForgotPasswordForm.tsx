@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { motion } from 'motion/react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 
 interface ForgotPasswordFormProps {
   onBackToLogin: () => void;
@@ -26,12 +26,20 @@ export function ForgotPasswordForm({ onBackToLogin }: ForgotPasswordFormProps) {
 
     const trimmedEmail = email.trim().toLowerCase();
 
-    // Lógica segura: el backend responde success aunque el correo no exista.
+    if (!trimmedEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError('Ingresa un correo electrónico válido.');
+      setIsLoading(false);
+      return;
+    }
+
     const result = await requestPasswordRecovery(trimmedEmail);
     if (result.success) {
       setIsSuccess(true);
     } else {
-      setError(result.error || 'No se pudo enviar el correo de recuperación. Intenta nuevamente.');
+      setError(
+        result.error ||
+          'No encontramos una cuenta con ese correo. Verifica que esté bien escrito o regístrate en Occitours.',
+      );
     }
 
     setIsLoading(false);
@@ -169,8 +177,20 @@ export function ForgotPasswordForm({ onBackToLogin }: ForgotPasswordFormProps) {
               </div>
 
               {error && (
-                <Alert className="border-red-200 bg-red-50">
-                  <AlertDescription className="text-red-600">{error}</AlertDescription>
+                <Alert
+                  className={
+                    error.toLowerCase().includes('verific')
+                      ? 'border-amber-200 bg-amber-50'
+                      : 'border-red-200 bg-red-50'
+                  }
+                >
+                  <AlertDescription
+                    className={
+                      error.toLowerCase().includes('verific') ? 'text-amber-900' : 'text-red-700'
+                    }
+                  >
+                    {error}
+                  </AlertDescription>
                 </Alert>
               )}
 

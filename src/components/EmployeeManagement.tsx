@@ -3,6 +3,7 @@ import {
   Search,
   Plus,
   Eye,
+  EyeOff,
   Edit,
   Trash2,
   UserPlus,
@@ -14,7 +15,6 @@ import {
   Calendar,
   Mail,
   Phone,
-  MapPin,
   Briefcase,
   Clock,
   ToggleLeft,
@@ -22,7 +22,8 @@ import {
   AlertCircle,
   User,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  MapPin,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
@@ -69,18 +70,58 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
+import { GuideAvailabilityCalendar } from './GuideAvailabilityCalendar';
 import { Switch } from './ui/switch';
+import { cn } from './ui/utils';
 
-import { empleadosAPI } from '../services/api';
+import { empleadosAPI, type Programacion } from '../services/api';
+import { formatDateDisplay } from '../utils/dateTimeDisplay';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
+import {
+  validateEmployeeFormFields,
+  validateEmployeeFormForSubmit,
+  validateEmployeeSingleField,
+  sanitizeDocumentInput,
+  sanitizeEmployeeNameInput,
+  sanitizeEmployeePhoneInput,
+  normalizeClientEmail,
+  cargoToRol,
+  getEmployeePasswordRequirementChecks,
+  normalizeEmployeeDocType,
+  EMPLOYEE_DOC_TYPES,
+  type EmployeeFormInput,
+} from '../utils/employeeFormValidation';
+import {
+  getEmployeeDeactivationBlockReason,
+  willDeactivateEmployeeEstado,
+  type EmployeeAccountSnapshot,
+} from '../utils/criticalAccountGuard';
+import { rolesAPI } from '../services/api';
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p className="text-xs text-red-600 flex items-start gap-1 mt-1">
+      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+      <span>{message}</span>
+    </p>
+  );
+}
+
+function inputClass(hasError?: boolean) {
+  return cn('border-green-200 focus:border-green-500', hasError && 'border-red-400 focus:border-red-500');
+}
 
 
 // 1. Actualiza la interfaz local Employee para reflejar el backend
 interface Employee {
   id: string;              // viene de id_empleado (convertido a string)
+  id_usuarios?: number;
+  id_roles?: number;
+  rol_nombre?: string;
   nombre: string;
   apellido: string;
   email: string;           // viene de correo
@@ -90,11 +131,7 @@ interface Employee {
   rol: 'advisor' | 'guide'; // se mapea desde rol_nombre o cargo
   telefono: string;
   estado: 'Activo' | 'Inactivo' | 'Suspendido';
-  disponibilidad: string;
   fecha_registro: string;
-  direccion?: string;
-  especialidad?: string;
-  experiencia?: string;
   asignaciones_activas?: number;
   ultima_asignacion?: string;
 }
@@ -103,11 +140,14 @@ interface Employee {
 function mapEmpleado(e: any): Employee {
   return {
     id: String(e.id_empleado),
+    id_usuarios: e.id_usuarios != null ? Number(e.id_usuarios) : undefined,
+    id_roles: e.id_roles != null ? Number(e.id_roles) : undefined,
+    rol_nombre: e.rol_nombre || '',
     nombre: e.nombre || '',
     apellido: e.apellido || '',
     email: e.correo || '',
     documento: e.numero_documento || '',
-    tipo_documento: e.tipo_documento || '',
+    tipo_documento: normalizeEmployeeDocType(e.tipo_documento),
     cargo: e.cargo || '',
     rol: e.cargo?.toLowerCase().includes('guía') || e.cargo?.toLowerCase().includes('guia')
       ? 'guide'
@@ -118,9 +158,38 @@ function mapEmpleado(e: any): Employee {
       : e.estado === false || e.estado === 'inactivo'
       ? 'Inactivo'
       : 'Suspendido',
-    disponibilidad: '',   // el backend no tiene este campo aún
     fecha_registro: e.fecha_registro || new Date().toISOString(),
   };
+}
+
+function isGuideEmployee(employee: Pick<Employee, 'rol' | 'cargo'>): boolean {
+  if (employee.rol === 'guide') return true;
+  const cargo = String(employee.cargo || '').toLowerCase();
+  return cargo.includes('guía') || cargo.includes('guia');
+}
+
+function programacionEstadoLabel(estado?: string | null): string {
+  const raw = String(estado || 'Programado').trim();
+  if (!raw) return 'Programado';
+  return raw;
+}
+
+function programacionEstadoBadgeClass(estado?: string | null): string {
+  const st = String(estado || '').toLowerCase();
+  if (st.includes('cancel')) return 'bg-red-100 text-red-800';
+  if (st.includes('complet')) return 'bg-green-100 text-green-800';
+  if (st.includes('progreso') || st.includes('activ')) return 'bg-yellow-100 text-yellow-800';
+  return 'bg-blue-100 text-blue-800';
+}
+
+function isProgramacionActiva(p: Programacion): boolean {
+  const st = String(p.estado || '').toLowerCase();
+  if (st.includes('cancel')) return false;
+  if (st.includes('complet')) return false;
+  const regreso = new Date(`${String(p.fecha_regreso || '').slice(0, 10)}T12:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return !Number.isNaN(regreso.getTime()) && regreso >= today;
 }
 
 export function EmployeeManagement() {
@@ -132,6 +201,7 @@ export function EmployeeManagement() {
   const canDeleteEmployee = employeePerms.canDelete();
 
   const [employees, setEmployees] = useState<Employee[]>([]);
+  const [rolePermissionMap, setRolePermissionMap] = useState<Map<number, string[]>>(new Map());
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'advisor' | 'guide'>('all');
@@ -144,25 +214,123 @@ export function EmployeeManagement() {
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [showEditConfirmPassword, setShowEditConfirmPassword] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
+  const [guideProgramaciones, setGuideProgramaciones] = useState<Programacion[]>([]);
+  const [loadingGuideProgramaciones, setLoadingGuideProgramaciones] = useState(false);
+  const [guideAssignmentsPage, setGuideAssignmentsPage] = useState(1);
+  const guideAssignmentsPerPage = 5;
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showStatusConfirmDialog, setShowStatusConfirmDialog] = useState(false);
+  const [pendingStatusChange, setPendingStatusChange] = useState<{
+    employeeName: string;
+    estadoAnterior: string;
+    estadoNuevo: string;
+    applyChange: () => Promise<void>;
+  } | null>(null);
+  const [applyingStatusChange, setApplyingStatusChange] = useState(false);
   
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
- const [formData, setFormData] = useState<Partial<Employee> & { apellido?: string; contrasena?: string; cargo?: string }>({
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [formData, setFormData] = useState<
+    Partial<Employee> & {
+      apellido?: string;
+      contrasena?: string;
+      confirmarContrasena?: string;
+      cargo?: string;
+      tipo_documento?: string;
+    }
+  >({
     nombre: '',
     apellido: '',
     email: '',
     documento: '',
+    tipo_documento: 'CC',
     cargo: '',
     rol: 'advisor',
     telefono: '',
     estado: 'Activo',
-    disponibilidad: '',
-    direccion: '',
-    especialidad: '',
-    experiencia: '',
-    contrasena: ''
+    contrasena: '',
+    confirmarContrasena: '',
   });
+
+  const validationContext = useMemo(
+    () => ({
+      existingEmails: employees.map((e) => e.email),
+      existingDocuments: employees.map((e) => e.documento),
+    }),
+    [employees],
+  );
+
+  const buildFormInput = (fd: typeof formData): EmployeeFormInput => ({
+    nombre: fd.nombre || '',
+    apellido: fd.apellido || '',
+    email: fd.email || '',
+    documento: fd.documento || '',
+    tipo_documento: fd.tipo_documento || 'CC',
+    telefono: fd.telefono || '',
+    cargo: fd.cargo || '',
+    estado: fd.estado || 'Activo',
+    contrasena: fd.contrasena,
+    confirmarContrasena: fd.confirmarContrasena,
+  });
+
+  const toEmployeeAccountSnapshot = (employee: Employee): EmployeeAccountSnapshot => ({
+    id: employee.id,
+    id_roles: employee.id_roles,
+    rol_nombre: employee.rol_nombre,
+    estado: employee.estado,
+  });
+
+  const employeeAccountSnapshots = useMemo(
+    () => employees.map(toEmployeeAccountSnapshot),
+    [employees],
+  );
+
+  const getDeactivationBlockReason = (employee: Employee | null | undefined): string | null => {
+    if (!employee) return null;
+    return getEmployeeDeactivationBlockReason(
+      toEmployeeAccountSnapshot(employee),
+      employeeAccountSnapshots,
+      rolePermissionMap,
+    );
+  };
+
+  const clearFieldError = (field: string) => {
+    setFormErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const touchField = (field: string, mode: 'create' | 'edit' = showEditModal ? 'edit' : 'create') => {
+    const ctx =
+      mode === 'edit'
+        ? {
+            ...validationContext,
+            currentEmployeeId: selectedEmployee?.id,
+            currentEmployeeDocument: selectedEmployee?.documento,
+            currentEmployeeEmail: selectedEmployee?.email,
+          }
+        : validationContext;
+    const msg = validateEmployeeSingleField(field, buildFormInput(formData), mode, ctx);
+    if (!msg && field === 'estado' && mode === 'edit' && willDeactivateEmployeeEstado(formData.estado)) {
+      const blockReason = getDeactivationBlockReason(selectedEmployee);
+      if (blockReason) {
+        setFormErrors((prev) => ({ ...prev, estado: blockReason }));
+        return;
+      }
+    }
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      if (msg) next[field] = msg;
+      else delete next[field];
+      return next;
+    });
+  };
 
   // Filtrar empleados
   const filteredEmployees = employees.filter(employee => {
@@ -199,7 +367,33 @@ export function EmployeeManagement() {
     setLoading(true);
     try {
       const data = await empleadosAPI.getAll();
-      setEmployees((data as any[]).map(mapEmpleado));
+      const mapped = (data as any[]).map(mapEmpleado);
+      setEmployees(mapped);
+
+      const roleIds = [
+        ...new Set(
+          mapped
+            .map((employee) => employee.id_roles)
+            .filter((roleId): roleId is number => roleId != null && Number(roleId) > 0),
+        ),
+      ];
+
+      if (roleIds.length === 0) {
+        setRolePermissionMap(new Map());
+        return;
+      }
+
+      const permissionEntries = await Promise.all(
+        roleIds.map(async (roleId) => {
+          try {
+            const permisos = await rolesAPI.getPermisosDeRol(roleId);
+            return [roleId, permisos.map((permiso) => String(permiso.nombre || ''))] as const;
+          } catch {
+            return [roleId, []] as const;
+          }
+        }),
+      );
+      setRolePermissionMap(new Map(permissionEntries));
     } catch (error: any) {
       toast.error(error.message || 'Error al cargar empleados');
     } finally {
@@ -219,20 +413,19 @@ export function EmployeeManagement() {
       return;
     }
 
+    setFormErrors({});
     setFormData({
       nombre: '',
       apellido: '',
       email: '',
       documento: '',
+      tipo_documento: 'CC',
       cargo: '',
       rol: 'advisor',
       telefono: '',
       estado: 'Activo',
-      disponibilidad: '',
-      direccion: '',
-      especialidad: '',
-      experiencia: '',
-      contrasena: ''
+      contrasena: '',
+      confirmarContrasena: '',
     });
     setShowCreateModal(true);
   };
@@ -243,15 +436,82 @@ export function EmployeeManagement() {
       return;
     }
 
+    setFormErrors({});
     setSelectedEmployee(employee);
-    setFormData(employee);
+    setShowEditPassword(false);
+    setShowEditConfirmPassword(false);
+    setFormData({
+      ...employee,
+      tipo_documento: normalizeEmployeeDocType(employee.tipo_documento),
+      contrasena: '',
+      confirmarContrasena: '',
+    });
     setShowEditModal(true);
   };
 
-  const handleView = (employee: Employee) => {
+  const editValidationContext = useMemo(
+    () => ({
+      ...validationContext,
+      currentEmployeeId: selectedEmployee?.id,
+      currentEmployeeDocument: selectedEmployee?.documento,
+      currentEmployeeEmail: selectedEmployee?.email,
+    }),
+    [validationContext, selectedEmployee],
+  );
+
+  const handleView = async (employee: Employee) => {
     setSelectedEmployee(employee);
+    setGuideProgramaciones([]);
+    setGuideAssignmentsPage(1);
     setShowViewModal(true);
+
+    if (!isGuideEmployee(employee)) return;
+
+    setLoadingGuideProgramaciones(true);
+    try {
+      const rows = await empleadosAPI.getProgramaciones(Number(employee.id));
+      setGuideProgramaciones(rows);
+    } catch (error: any) {
+      toast.error(error.message || 'No se pudieron cargar las rutas asignadas');
+    } finally {
+      setLoadingGuideProgramaciones(false);
+    }
   };
+
+  const guideAsignacionesActivas = useMemo(
+    () => guideProgramaciones.filter(isProgramacionActiva).length,
+    [guideProgramaciones],
+  );
+
+  const guideUltimaAsignacion = useMemo(() => {
+    if (guideProgramaciones.length === 0) return null;
+    const sorted = [...guideProgramaciones].sort(
+      (a, b) =>
+        new Date(String(b.fecha_salida || '')).getTime() -
+        new Date(String(a.fecha_salida || '')).getTime(),
+    );
+    return sorted[0]?.fecha_salida || null;
+  }, [guideProgramaciones]);
+
+  const paginatedGuideProgramaciones = useMemo(
+    () =>
+      guideProgramaciones.slice(
+        (guideAssignmentsPage - 1) * guideAssignmentsPerPage,
+        guideAssignmentsPage * guideAssignmentsPerPage,
+      ),
+    [guideProgramaciones, guideAssignmentsPage],
+  );
+
+  const totalGuideAssignmentPages = Math.ceil(
+    guideProgramaciones.length / guideAssignmentsPerPage,
+  );
+  const guideAssignmentsStartIndex = (guideAssignmentsPage - 1) * guideAssignmentsPerPage;
+
+  useEffect(() => {
+    if (guideAssignmentsPage > totalGuideAssignmentPages && totalGuideAssignmentPages > 0) {
+      setGuideAssignmentsPage(totalGuideAssignmentPages);
+    }
+  }, [guideAssignmentsPage, totalGuideAssignmentPages]);
 
   const handleDelete = (employee: Employee) => {
     if (!canDeleteEmployee) {
@@ -263,19 +523,50 @@ export function EmployeeManagement() {
     setShowDeleteDialog(true);
   };
 
- const handleToggleStatus = async (employee: Employee) => {
+ const handleToggleStatusRequest = (employee: Employee) => {
     if (!canEditEmployee) {
       toast.error('No tienes permiso para editar empleados');
       return;
     }
 
-    const nuevoEstado = employee.estado === 'Activo' ? false : true;
+    const activando = employee.estado !== 'Activo';
+    const nuevoEstadoBackend = activando;
+    if (!nuevoEstadoBackend) {
+      const blockReason = getDeactivationBlockReason(employee);
+      if (blockReason) {
+        toast.error(blockReason);
+        return;
+      }
+    }
+
+    const estadoNuevo = activando ? 'Activo' : 'Inactivo';
+    const employeeName = `${employee.nombre} ${employee.apellido}`.trim();
+
+    setPendingStatusChange({
+      employeeName,
+      estadoAnterior: employee.estado,
+      estadoNuevo,
+      applyChange: async () => {
+        await empleadosAPI.update(Number(employee.id), { estado: nuevoEstadoBackend } as any);
+        toast.success(`Estado actualizado a ${estadoNuevo}`);
+        await cargarEmpleados();
+      },
+    });
+    setShowStatusConfirmDialog(true);
+  };
+
+  const confirmStatusChange = async () => {
+    if (!pendingStatusChange || applyingStatusChange) return;
+
+    setApplyingStatusChange(true);
     try {
-      await empleadosAPI.update(Number(employee.id), { estado: nuevoEstado } as any);
-      toast.success(`Estado actualizado a ${nuevoEstado ? 'Activo' : 'Inactivo'}`);
-      await cargarEmpleados();
+      await pendingStatusChange.applyChange();
+      setShowStatusConfirmDialog(false);
+      setPendingStatusChange(null);
     } catch (error: any) {
       toast.error(error.message || 'Error al cambiar estado');
+    } finally {
+      setApplyingStatusChange(false);
     }
   };
 
@@ -285,21 +576,26 @@ export function EmployeeManagement() {
       return;
     }
 
-    const fd = formData as any;
-    if (!fd.nombre || !fd.apellido || !fd.email || !fd.documento || !fd.telefono || !fd.cargo || !fd.contrasena) {
-      toast.error('Por favor completa todos los campos obligatorios');
+    const input = buildFormInput(formData);
+    const errors = validateEmployeeFormFields(input, 'create', validationContext);
+    setFormErrors(errors);
+    const summary = validateEmployeeFormForSubmit(input, 'create', validationContext);
+    if (summary) {
+      toast.error(summary);
       return;
     }
+
+    const fd = formData as any;
     try {
       await empleadosAPI.create({
-        nombre: fd.nombre,
-        apellido: fd.apellido,
-        correo: fd.email,
+        nombre: sanitizeEmployeeNameInput(fd.nombre).trim(),
+        apellido: sanitizeEmployeeNameInput(fd.apellido).trim(),
+        correo: normalizeClientEmail(fd.email),
         contrasena: fd.contrasena,
-        telefono: fd.telefono,
+        telefono: sanitizeEmployeePhoneInput(fd.telefono),
         cargo: fd.cargo,
-        tipo_documento: fd.tipo_documento || 'CC',
-        numero_documento: fd.documento,
+        tipo_documento: (fd.tipo_documento || 'CC').toUpperCase(),
+        numero_documento: sanitizeDocumentInput(fd.documento),
         estado: fd.estado === 'Activo',
       } as any);
       toast.success('Empleado registrado exitosamente');
@@ -316,22 +612,69 @@ export function EmployeeManagement() {
       return;
     }
 
-    const fd = formData as any;
-    if (!fd.nombre || !fd.email || !fd.telefono) {
-      toast.error('Por favor completa todos los campos obligatorios');
+    const input = buildFormInput(formData);
+    const errors = validateEmployeeFormFields(input, 'edit', editValidationContext);
+    setFormErrors(errors);
+    const summary = validateEmployeeFormForSubmit(input, 'edit', editValidationContext);
+    if (summary) {
+      toast.error(summary);
       return;
     }
-    try {
-      await empleadosAPI.update(Number(selectedEmployee?.id), {
-        nombre: fd.nombre,
-        apellido: fd.apellido,
-        telefono: fd.telefono,
-        cargo: fd.cargo,
-        estado: fd.estado === 'Activo',
-      } as any);
-      toast.success('Empleado actualizado exitosamente');
+
+    const fd = formData as any;
+
+    if (willDeactivateEmployeeEstado(fd.estado) && selectedEmployee) {
+      const blockReason = getDeactivationBlockReason(selectedEmployee);
+      if (blockReason) {
+        toast.error(blockReason);
+        setFormErrors((prev) => ({ ...prev, estado: blockReason }));
+        return;
+      }
+    }
+
+    const updatePayload: Record<string, unknown> = {
+      nombre: sanitizeEmployeeNameInput(fd.nombre).trim(),
+      apellido: sanitizeEmployeeNameInput(fd.apellido).trim(),
+      correo: normalizeClientEmail(fd.email),
+      telefono: sanitizeEmployeePhoneInput(fd.telefono),
+      cargo: fd.cargo,
+      estado: fd.estado === 'Activo',
+      tipo_documento: fd.tipo_documento || 'CC',
+      numero_documento: sanitizeDocumentInput(fd.documento),
+    };
+    const nuevaContrasena = String(fd.contrasena || '').trim();
+    if (nuevaContrasena) {
+      updatePayload.contrasena = nuevaContrasena;
+    }
+
+    const estadoCambio =
+      selectedEmployee != null && String(fd.estado || '') !== String(selectedEmployee.estado || '');
+
+    const ejecutarActualizacion = async () => {
+      await empleadosAPI.update(Number(selectedEmployee?.id), updatePayload as any);
+      toast.success(
+        nuevaContrasena
+          ? 'Empleado actualizado. La contraseña de acceso fue cambiada.'
+          : 'Empleado actualizado exitosamente',
+      );
       setShowEditModal(false);
       await cargarEmpleados();
+    };
+
+    if (estadoCambio && selectedEmployee) {
+      const employeeName = `${selectedEmployee.nombre} ${selectedEmployee.apellido}`.trim();
+      setPendingStatusChange({
+        employeeName,
+        estadoAnterior: selectedEmployee.estado,
+        estadoNuevo: String(fd.estado || ''),
+        applyChange: ejecutarActualizacion,
+      });
+      setShowStatusConfirmDialog(true);
+      return;
+    }
+
+    try {
+      await ejecutarActualizacion();
     } catch (error: any) {
       toast.error(error.message || 'Error al actualizar empleado');
     }
@@ -522,7 +865,7 @@ export function EmployeeManagement() {
                     <TableCell>
                       <Switch
                         checked={employee.estado === 'Activo'}
-                        onCheckedChange={() => handleToggleStatus(employee)}
+                        onCheckedChange={() => handleToggleStatusRequest(employee)}
                         disabled={!canEditEmployee}
                         className="data-[state=checked]:bg-green-600"
                       />
@@ -610,7 +953,13 @@ export function EmployeeManagement() {
       </motion.div>
 
       {/* Modal: Crear empleado */}
-      <Dialog open={showCreateModal} onOpenChange={setShowCreateModal}>
+      <Dialog
+        open={showCreateModal}
+        onOpenChange={(open) => {
+          setShowCreateModal(open);
+          if (!open) setFormErrors({});
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-green-800">Registrar nuevo empleado</DialogTitle>
@@ -622,13 +971,19 @@ export function EmployeeManagement() {
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Nombre completo *</Label>
+                <Label>Nombre *</Label>
                 <Input
-                  placeholder="Ej: Juan Pérez"
+                  placeholder="Ej: Juan"
                   value={formData.nombre}
-                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('nombre');
+                    setFormData({ ...formData, nombre: sanitizeEmployeeNameInput(e.target.value) });
+                  }}
+                  onBlur={() => touchField('nombre', 'create')}
+                  className={inputClass(!!formErrors.nombre)}
+                  maxLength={80}
                 />
+                <FieldError message={formErrors.nombre} />
               </div>
 
               <div className="space-y-2">
@@ -636,19 +991,59 @@ export function EmployeeManagement() {
                 <Input
                   placeholder="Ej: Pérez"
                   value={(formData as any).apellido || ''}
-                  onChange={(e) => setFormData({ ...formData, apellido: e.target.value } as any)}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('apellido');
+                    setFormData({ ...formData, apellido: sanitizeEmployeeNameInput(e.target.value) } as any);
+                  }}
+                  onBlur={() => touchField('apellido', 'create')}
+                  className={inputClass(!!formErrors.apellido)}
+                  maxLength={80}
                 />
+                <FieldError message={formErrors.apellido} />
               </div>
 
               <div className="space-y-2">
-                <Label>Documento de identidad *</Label>
+                <Label>Tipo de documento *</Label>
+                <Select
+                  value={formData.tipo_documento || 'CC'}
+                  onValueChange={(value) => {
+                    clearFieldError('tipo_documento');
+                    clearFieldError('documento');
+                    setFormData({ ...formData, tipo_documento: value });
+                    setTimeout(() => touchField('tipo_documento', 'create'), 0);
+                  }}
+                >
+                  <SelectTrigger className={inputClass(!!formErrors.tipo_documento || !!formErrors.documento)}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EMPLOYEE_DOC_TYPES.map((tipo) => (
+                      <SelectItem key={tipo} value={tipo}>
+                        {tipo}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldError message={formErrors.tipo_documento} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Número de documento *</Label>
                 <Input
                   placeholder="Ej: 1023456789"
                   value={formData.documento}
-                  onChange={(e) => setFormData({ ...formData, documento: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('documento');
+                    setFormData({
+                      ...formData,
+                      documento: sanitizeDocumentInput(e.target.value),
+                    });
+                  }}
+                  onBlur={() => touchField('documento', 'create')}
+                  className={inputClass(!!formErrors.documento)}
+                  maxLength={20}
                 />
+                <FieldError message={formErrors.documento} />
               </div>
 
               <div className="space-y-2">
@@ -657,9 +1052,21 @@ export function EmployeeManagement() {
                   type="email"
                   placeholder="empleado@occitours.com"
                   value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('email');
+                    setFormData({ ...formData, email: e.target.value });
+                  }}
+                  onBlur={() => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      email: normalizeClientEmail(prev.email || ''),
+                    }));
+                    touchField('email', 'create');
+                  }}
+                  className={inputClass(!!formErrors.email)}
+                  maxLength={254}
                 />
+                <FieldError message={formErrors.email} />
               </div>
 
               <div className="space-y-2">
@@ -667,18 +1074,35 @@ export function EmployeeManagement() {
                 <Input
                   placeholder="+57 300 123 4567"
                   value={formData.telefono}
-                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('telefono');
+                    setFormData({
+                      ...formData,
+                      telefono: sanitizeEmployeePhoneInput(e.target.value),
+                    });
+                  }}
+                  onBlur={() => touchField('telefono', 'create')}
+                  className={inputClass(!!formErrors.telefono)}
+                  maxLength={20}
                 />
+                <FieldError message={formErrors.telefono} />
               </div>
 
               <div className="space-y-2">
                 <Label>Cargo *</Label>
                 <Select
                   value={(formData as any).cargo || ''}
-                  onValueChange={(value: any) => setFormData({ ...formData, cargo: value } as any)}
+                  onValueChange={(value: string) => {
+                    clearFieldError('cargo');
+                    setFormData({
+                      ...formData,
+                      cargo: value,
+                      rol: cargoToRol(value),
+                    } as any);
+                    setTimeout(() => touchField('cargo', 'create'), 0);
+                  }}
                 >
-                  <SelectTrigger className="border-green-200">
+                  <SelectTrigger className={inputClass(!!formErrors.cargo)}>
                     <SelectValue placeholder="Selecciona un cargo" />
                   </SelectTrigger>
                   <SelectContent>
@@ -686,17 +1110,50 @@ export function EmployeeManagement() {
                     <SelectItem value="Guía Turístico">Guía Turístico</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError message={formErrors.cargo} />
               </div>
 
               <div className="space-y-2">
                 <Label>Contraseña inicial *</Label>
                 <Input
                   type="password"
-                  placeholder="Contraseña de acceso"
+                  placeholder="Mín. 8 caracteres"
                   value={(formData as any).contrasena || ''}
-                  onChange={(e) => setFormData({ ...formData, contrasena: e.target.value } as any)}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('contrasena');
+                    setFormData({ ...formData, contrasena: e.target.value } as any);
+                  }}
+                  onBlur={() => touchField('contrasena', 'create')}
+                  className={inputClass(!!formErrors.contrasena)}
+                  maxLength={128}
+                  autoComplete="new-password"
                 />
+                <FieldError message={formErrors.contrasena} />
+                <ul className="text-xs text-gray-500 space-y-0.5 mt-1">
+                  {getEmployeePasswordRequirementChecks((formData as any).contrasena || '').map((req) => (
+                    <li key={req.id} className={req.met ? 'text-green-700' : ''}>
+                      {req.met ? '✓' : '○'} {req.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Confirmar contraseña *</Label>
+                <Input
+                  type="password"
+                  placeholder="Repite la contraseña"
+                  value={(formData as any).confirmarContrasena || ''}
+                  onChange={(e) => {
+                    clearFieldError('confirmarContrasena');
+                    setFormData({ ...formData, confirmarContrasena: e.target.value } as any);
+                  }}
+                  onBlur={() => touchField('confirmarContrasena', 'create')}
+                  className={inputClass(!!formErrors.confirmarContrasena)}
+                  maxLength={128}
+                  autoComplete="new-password"
+                />
+                <FieldError message={formErrors.confirmarContrasena} />
               </div>
 
 
@@ -704,9 +1161,13 @@ export function EmployeeManagement() {
                 <Label>Estado inicial *</Label>
                 <Select 
                   value={formData.estado} 
-                  onValueChange={(value: any) => setFormData({ ...formData, estado: value })}
+                  onValueChange={(value: any) => {
+                    clearFieldError('estado');
+                    setFormData({ ...formData, estado: value });
+                    setTimeout(() => touchField('estado', 'create'), 0);
+                  }}
                 >
-                  <SelectTrigger className="border-green-200">
+                  <SelectTrigger className={inputClass(!!formErrors.estado)}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -714,42 +1175,8 @@ export function EmployeeManagement() {
                     <SelectItem value="Inactivo">Inactivo</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError message={formErrors.estado} />
               </div>
-
-
-              <div className="space-y-2 md:col-span-2">
-                <Label>Dirección</Label>
-                <Input
-                  placeholder="Dirección completa"
-                  value={formData.direccion}
-                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
-                  className="border-green-200"
-                />
-              </div>
-
-              {formData.rol === 'guide' && (
-                <>
-                  <div className="space-y-2">
-                    <Label>Especialidad</Label>
-                    <Input
-                      placeholder="Ej: Senderismo, Observación de aves"
-                      value={formData.especialidad}
-                      onChange={(e) => setFormData({ ...formData, especialidad: e.target.value })}
-                      className="border-green-200"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Experiencia</Label>
-                    <Input
-                      placeholder="Ej: 5 años"
-                      value={formData.experiencia}
-                      onChange={(e) => setFormData({ ...formData, experiencia: e.target.value })}
-                      className="border-green-200"
-                    />
-                  </div>
-                </>
-              )}
             </div>
           </div>
 
@@ -769,61 +1196,228 @@ export function EmployeeManagement() {
       </Dialog>
 
       {/* Modal: Editar empleado */}
-      <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
+      <Dialog
+        open={showEditModal}
+        onOpenChange={(open) => {
+          setShowEditModal(open);
+          if (!open) setFormErrors({});
+        }}
+      >
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-green-800">Editar empleado</DialogTitle>
             <DialogDescription>
-              Modifica la información del empleado seleccionado.
+              Modifica la información del empleado. Puedes actualizar documento y contraseña de acceso.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Nombre completo *</Label>
+                <Label>Nombre *</Label>
                 <Input
                   value={formData.nombre}
-                  onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('nombre');
+                    setFormData({ ...formData, nombre: sanitizeEmployeeNameInput(e.target.value) });
+                  }}
+                  onBlur={() => touchField('nombre', 'edit')}
+                  className={inputClass(!!formErrors.nombre)}
+                  maxLength={80}
                 />
+                <FieldError message={formErrors.nombre} />
               </div>
 
               <div className="space-y-2">
-                <Label>Documento de identidad</Label>
+                <Label>Apellido *</Label>
                 <Input
+                  value={(formData as any).apellido || ''}
+                  onChange={(e) => {
+                    clearFieldError('apellido');
+                    setFormData({ ...formData, apellido: sanitizeEmployeeNameInput(e.target.value) } as any);
+                  }}
+                  onBlur={() => touchField('apellido', 'edit')}
+                  className={inputClass(!!formErrors.apellido)}
+                  maxLength={80}
+                />
+                <FieldError message={formErrors.apellido} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Tipo de documento *</Label>
+                <Select
+                  value={normalizeEmployeeDocType(formData.tipo_documento)}
+                  onValueChange={(value) => {
+                    clearFieldError('tipo_documento');
+                    clearFieldError('documento');
+                    setFormData({ ...formData, tipo_documento: value });
+                    setTimeout(() => touchField('tipo_documento', 'edit'), 0);
+                  }}
+                >
+                  <SelectTrigger className={inputClass(!!formErrors.tipo_documento || !!formErrors.documento)}>
+                    <SelectValue placeholder="Selecciona tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {EMPLOYEE_DOC_TYPES.map((tipo) => (
+                      <SelectItem key={tipo} value={tipo}>
+                        {tipo}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldError message={formErrors.tipo_documento} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Número de documento *</Label>
+                <Input
+                  placeholder="Ej: 1023456789"
                   value={formData.documento}
-                  disabled
-                  className="border-green-200 bg-gray-50"
+                  onChange={(e) => {
+                    clearFieldError('documento');
+                    setFormData({
+                      ...formData,
+                      documento: sanitizeDocumentInput(e.target.value),
+                    });
+                  }}
+                  onBlur={() => touchField('documento', 'edit')}
+                  className={inputClass(!!formErrors.documento)}
+                  maxLength={20}
                 />
+                <FieldError message={formErrors.documento} />
               </div>
 
-              <div className="space-y-2">
-                <Label>Correo electrónico *</Label>
-                <Input
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  className="border-green-200"
-                />
+              <div className="md:col-span-2 rounded-lg border border-green-100 bg-green-50/40 p-4 space-y-4">
+                <div>
+                  <h4 className="text-sm font-medium text-green-800">Acceso al sistema</h4>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Correo y contraseña de inicio de sesión del empleado.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Correo electrónico *</Label>
+                    <Input
+                      type="email"
+                      placeholder="empleado@occitours.com"
+                      value={formData.email}
+                      onChange={(e) => {
+                        clearFieldError('email');
+                        setFormData({ ...formData, email: e.target.value });
+                      }}
+                      onBlur={() => {
+                        setFormData((prev) => ({
+                          ...prev,
+                          email: normalizeClientEmail(prev.email || ''),
+                        }));
+                        touchField('email', 'edit');
+                      }}
+                      className={inputClass(!!formErrors.email)}
+                      maxLength={254}
+                    />
+                    <FieldError message={formErrors.email} />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Contraseña</Label>
+                    <div className="relative">
+                      <Input
+                        type={showEditPassword ? 'text' : 'password'}
+                        placeholder="Nueva contraseña (opcional)"
+                        value={(formData as any).contrasena || ''}
+                        onChange={(e) => {
+                          clearFieldError('contrasena');
+                          setFormData({ ...formData, contrasena: e.target.value } as any);
+                        }}
+                        onBlur={() => touchField('contrasena', 'edit')}
+                        className={cn(inputClass(!!formErrors.contrasena), 'pr-10')}
+                        maxLength={128}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                        onClick={() => setShowEditPassword((prev) => !prev)}
+                        aria-label={showEditPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
+                      >
+                        {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <FieldError message={formErrors.contrasena} />
+                  </div>
+
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>Confirmar contraseña</Label>
+                    <div className="relative md:max-w-[calc(50%-0.5rem)]">
+                      <Input
+                        type={showEditConfirmPassword ? 'text' : 'password'}
+                        placeholder="Repite la nueva contraseña"
+                        value={(formData as any).confirmarContrasena || ''}
+                        onChange={(e) => {
+                          clearFieldError('confirmarContrasena');
+                          setFormData({ ...formData, confirmarContrasena: e.target.value } as any);
+                        }}
+                        onBlur={() => touchField('confirmarContrasena', 'edit')}
+                        className={cn(inputClass(!!formErrors.confirmarContrasena), 'pr-10')}
+                        maxLength={128}
+                        autoComplete="new-password"
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+                        onClick={() => setShowEditConfirmPassword((prev) => !prev)}
+                        aria-label={showEditConfirmPassword ? 'Ocultar confirmación' : 'Mostrar confirmación'}
+                      >
+                        {showEditConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                    <FieldError message={formErrors.confirmarContrasena} />
+                    <ul className="text-xs text-gray-500 space-y-0.5 mt-1">
+                      {getEmployeePasswordRequirementChecks((formData as any).contrasena || '').map((req) => (
+                        <li key={req.id} className={req.met ? 'text-green-700' : ''}>
+                          {req.met ? '✓' : '○'} {req.label}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-xs text-gray-500">Déjala en blanco si no deseas cambiarla.</p>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-2">
                 <Label>Teléfono *</Label>
                 <Input
                   value={formData.telefono}
-                  onChange={(e) => setFormData({ ...formData, telefono: e.target.value })}
-                  className="border-green-200"
+                  onChange={(e) => {
+                    clearFieldError('telefono');
+                    setFormData({
+                      ...formData,
+                      telefono: sanitizeEmployeePhoneInput(e.target.value),
+                    });
+                  }}
+                  onBlur={() => touchField('telefono', 'edit')}
+                  className={inputClass(!!formErrors.telefono)}
+                  maxLength={20}
                 />
+                <FieldError message={formErrors.telefono} />
               </div>
 
              <div className="space-y-2">
-                <Label>Cargo</Label>
+                <Label>Cargo *</Label>
                 <Select 
                   value={(formData as any).cargo || ''}
-                  onValueChange={(value: any) => setFormData({ ...formData, cargo: value } as any)}
+                  onValueChange={(value: string) => {
+                    clearFieldError('cargo');
+                    setFormData({
+                      ...formData,
+                      cargo: value,
+                      rol: cargoToRol(value),
+                    } as any);
+                    setTimeout(() => touchField('cargo', 'edit'), 0);
+                  }}
                 >
-                  <SelectTrigger className="border-green-200">
+                  <SelectTrigger className={inputClass(!!formErrors.cargo)}>
                     <SelectValue placeholder="Selecciona un cargo" />
                   </SelectTrigger>
                   <SelectContent>
@@ -831,15 +1425,20 @@ export function EmployeeManagement() {
                     <SelectItem value="Guía Turístico">Guía Turístico</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError message={formErrors.cargo} />
               </div>
 
               <div className="space-y-2">
-                <Label>Estado</Label>
+                <Label>Estado *</Label>
                 <Select 
                   value={formData.estado} 
-                  onValueChange={(value: any) => setFormData({ ...formData, estado: value })}
+                  onValueChange={(value: any) => {
+                    clearFieldError('estado');
+                    setFormData({ ...formData, estado: value });
+                    setTimeout(() => touchField('estado', 'edit'), 0);
+                  }}
                 >
-                  <SelectTrigger className="border-green-200">
+                  <SelectTrigger className={inputClass(!!formErrors.estado)}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -848,47 +1447,8 @@ export function EmployeeManagement() {
                     <SelectItem value="Suspendido">Suspendido</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError message={formErrors.estado} />
               </div>
-
-              <div className="space-y-2 md:col-span-2">
-                <Label>Disponibilidad</Label>
-                <Input
-                  value={formData.disponibilidad}
-                  onChange={(e) => setFormData({ ...formData, disponibilidad: e.target.value })}
-                  className="border-green-200"
-                />
-              </div>
-
-              <div className="space-y-2 md:col-span-2">
-                <Label>Dirección</Label>
-                <Input
-                  value={formData.direccion}
-                  onChange={(e) => setFormData({ ...formData, direccion: e.target.value })}
-                  className="border-green-200"
-                />
-              </div>
-
-              {formData.rol === 'guide' && (
-                <>
-                  <div className="space-y-2">
-                    <Label>Especialidad</Label>
-                    <Input
-                      value={formData.especialidad}
-                      onChange={(e) => setFormData({ ...formData, especialidad: e.target.value })}
-                      className="border-green-200"
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Experiencia</Label>
-                    <Input
-                      value={formData.experiencia}
-                      onChange={(e) => setFormData({ ...formData, experiencia: e.target.value })}
-                      className="border-green-200"
-                    />
-                  </div>
-                </>
-              )}
             </div>
           </div>
 
@@ -907,8 +1467,18 @@ export function EmployeeManagement() {
       </Dialog>
 
       {/* Modal: Ver detalle */}
-      <Dialog open={showViewModal} onOpenChange={setShowViewModal}>
-        <DialogContent className="max-w-2xl">
+      <Dialog
+        open={showViewModal}
+        onOpenChange={(open) => {
+          setShowViewModal(open);
+          if (!open) {
+            setGuideProgramaciones([]);
+            setLoadingGuideProgramaciones(false);
+            setGuideAssignmentsPage(1);
+          }
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-green-800">Detalle del empleado</DialogTitle>
             <DialogDescription>
@@ -964,17 +1534,9 @@ export function EmployeeManagement() {
                     </div>
                   </div>
 
-                  <div className="flex items-start space-x-3">
-                    <MapPin className="w-5 h-5 text-green-600 mt-0.5" />
-                    <div>
-                      <p className="text-sm text-gray-600">Dirección</p>
-                      <p className="text-gray-800">{selectedEmployee.direccion || 'No especificada'}</p>
-                    </div>
-                  </div>
                 </div>
               </div>
 
-              {/* Información laboral */}
               {/* Información laboral */}
               <div className="space-y-3">
                 <h4 className="text-gray-700">Información laboral</h4>
@@ -1029,6 +1591,119 @@ export function EmployeeManagement() {
                 </div>
               </div>
 
+              {isGuideEmployee(selectedEmployee) && (
+                <div className="space-y-6">
+                  <GuideAvailabilityCalendar
+                    programaciones={guideProgramaciones}
+                    loading={loadingGuideProgramaciones}
+                  />
+
+                  <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-gray-700 flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-green-600" />
+                      Rutas asignadas
+                    </h4>
+                    {!loadingGuideProgramaciones && guideProgramaciones.length > 0 && (
+                      <Badge variant="secondary" className="bg-green-100 text-green-800">
+                        {guideProgramaciones.length} en total
+                      </Badge>
+                    )}
+                  </div>
+
+                  {loadingGuideProgramaciones ? null : guideProgramaciones.length === 0 ? (
+                    <Card className="border-dashed border-green-200">
+                      <CardContent className="py-6 text-center text-sm text-gray-500">
+                        Este guía no tiene rutas asignadas por el momento.
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <div className="rounded-lg border border-green-100 overflow-hidden">
+                      <Table>
+                        <TableHeader>
+                          <TableRow className="bg-green-50/60">
+                            <TableHead>Ruta</TableHead>
+                            <TableHead>Salida</TableHead>
+                            <TableHead>Regreso</TableHead>
+                            <TableHead>Estado</TableHead>
+                            <TableHead className="text-right">Cupos</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {paginatedGuideProgramaciones.map((prog) => (
+                            <TableRow key={prog.id_programacion}>
+                              <TableCell className="font-medium text-gray-900">
+                                {prog.ruta_nombre || `Ruta #${prog.id_ruta}`}
+                              </TableCell>
+                              <TableCell className="text-sm text-gray-700">
+                                {formatDateDisplay(prog.fecha_salida)}
+                                {prog.hora_salida ? (
+                                  <span className="block text-xs text-gray-500">{prog.hora_salida}</span>
+                                ) : null}
+                              </TableCell>
+                              <TableCell className="text-sm text-gray-700">
+                                {formatDateDisplay(prog.fecha_regreso)}
+                                {prog.hora_regreso ? (
+                                  <span className="block text-xs text-gray-500">{prog.hora_regreso}</span>
+                                ) : null}
+                              </TableCell>
+                              <TableCell>
+                                <Badge className={programacionEstadoBadgeClass(prog.estado)}>
+                                  {programacionEstadoLabel(prog.estado)}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="text-right text-sm text-gray-700">
+                                {prog.cupos_disponibles ?? '—'} / {prog.cupos_totales ?? '—'}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {totalGuideAssignmentPages > 1 && (
+                        <div className="flex items-center justify-between px-3 py-3 border-t border-green-100 bg-green-50/30">
+                          <p className="text-xs text-gray-600">
+                            Mostrando {guideAssignmentsStartIndex + 1} a{' '}
+                            {Math.min(
+                              guideAssignmentsStartIndex + guideAssignmentsPerPage,
+                              guideProgramaciones.length,
+                            )}{' '}
+                            de {guideProgramaciones.length} rutas
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setGuideAssignmentsPage((p) => Math.max(1, p - 1))}
+                              disabled={guideAssignmentsPage === 1}
+                              className="border-green-200 text-green-700 hover:bg-green-50 h-8"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                            </Button>
+                            <span className="text-xs text-gray-600">
+                              Página {guideAssignmentsPage} de {totalGuideAssignmentPages}
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                setGuideAssignmentsPage((p) =>
+                                  Math.min(totalGuideAssignmentPages, p + 1),
+                                )
+                              }
+                              disabled={guideAssignmentsPage === totalGuideAssignmentPages}
+                              className="border-green-200 text-green-700 hover:bg-green-50 h-8"
+                            >
+                              <ChevronRight className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  </div>
+                </div>
+              )}
+
               {/* Estadísticas */}
               <div className="space-y-3">
                 <h4 className="text-gray-700">Estadísticas</h4>
@@ -1036,16 +1711,26 @@ export function EmployeeManagement() {
                   <Card className="border-green-200">
                     <CardContent className="pt-6">
                       <p className="text-sm text-gray-600">Asignaciones activas</p>
-                      <p className="text-2xl text-green-800">{selectedEmployee.asignaciones_activas || 0}</p>
+                      <p className="text-2xl text-green-800">
+                        {isGuideEmployee(selectedEmployee)
+                          ? guideAsignacionesActivas
+                          : selectedEmployee.asignaciones_activas || 0}
+                      </p>
                     </CardContent>
                   </Card>
 
-                  {selectedEmployee.ultima_asignacion && (
+                  {(isGuideEmployee(selectedEmployee)
+                    ? guideUltimaAsignacion
+                    : selectedEmployee.ultima_asignacion) && (
                     <Card className="border-blue-200">
                       <CardContent className="pt-6">
                         <p className="text-sm text-gray-600">Última asignación</p>
                         <p className="text-sm text-gray-800">
-                          {new Date(selectedEmployee.ultima_asignacion).toLocaleDateString('es-CO')}
+                          {formatDateDisplay(
+                            isGuideEmployee(selectedEmployee)
+                              ? guideUltimaAsignacion
+                              : selectedEmployee.ultima_asignacion,
+                          )}
                         </p>
                       </CardContent>
                     </Card>
@@ -1072,6 +1757,53 @@ export function EmployeeManagement() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Dialog: Confirmar cambio de estado */}
+      <AlertDialog
+        open={showStatusConfirmDialog}
+        onOpenChange={(open) => {
+          if (!open && !applyingStatusChange) {
+            setShowStatusConfirmDialog(false);
+            setPendingStatusChange(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Confirmar cambio de estado?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Vas a cambiar el estado de{' '}
+                  <span className="font-semibold text-gray-900">{pendingStatusChange?.employeeName}</span>
+                  {' '}de{' '}
+                  <span className="font-semibold text-gray-900">{pendingStatusChange?.estadoAnterior}</span>
+                  {' '}a{' '}
+                  <span className="font-semibold text-gray-900">{pendingStatusChange?.estadoNuevo}</span>.
+                </p>
+                {pendingStatusChange?.estadoNuevo === 'Activo' ? (
+                  <p>El empleado recuperará el acceso al sistema.</p>
+                ) : (
+                  <p>El empleado no podrá iniciar sesión mientras permanezca inactivo o suspendido.</p>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={applyingStatusChange}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmStatusChange();
+              }}
+              disabled={applyingStatusChange}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {applyingStatusChange ? 'Aplicando...' : 'Confirmar cambio'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Dialog: Confirmar eliminación */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import { permisosAPI, rolesAPI, usersAPI } from '../services/api';
@@ -23,6 +23,11 @@ import {
   ensureProgramacionesPermisosInCatalog,
   PROGRAMACIONES_MODULE_KEY,
 } from '../utils/programacionesPermisosCatalog';
+import {
+  ROLE_NAME_LIMITS,
+  sanitizeRoleNameInput,
+  validateRoleName,
+} from '../utils/roleFormValidation';
 
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -98,6 +103,7 @@ export function RolesManagement() {
   const [selectedReassignRole, setSelectedReassignRole] = useState<string>('');
 
   const [formData, setFormData] = useState<any>({});
+  const [roleNameError, setRoleNameError] = useState('');
 
   const normalizarRolUsuario = (rol?: string | null) => {
     const rolNormalizado = (rol || '').toLowerCase().trim();
@@ -433,6 +439,7 @@ export function RolesManagement() {
     }
 
     setSelectedItem(null);
+    setRoleNameError('');
     setFormData({
       name: '',
       description: '',
@@ -450,6 +457,7 @@ export function RolesManagement() {
     }
 
     setSelectedItem(item);
+    setRoleNameError('');
     const modules = getPermissionModules();
     const firstPermissionModule = (item.permissions || [])[0]?.split('.')?.[0];
     setSelectedPermissionModule(firstPermissionModule || modules[0] || '');
@@ -549,10 +557,14 @@ export function RolesManagement() {
     try {
       const ahora = new Date().toISOString();
 
-      if (!formData.name || !String(formData.name).trim()) {
-        toast.error('El nombre del rol es obligatorio');
+      const nombreValidation = validateRoleName(formData.name);
+      if (!nombreValidation.valid) {
+        setRoleNameError(nombreValidation.message || '');
+        toast.error(nombreValidation.message || 'El nombre del rol no es válido');
         return;
       }
+      const nombreRol = sanitizeRoleNameInput(formData.name).trim();
+      setRoleNameError('');
 
       const permisosSeleccionadosIds = (formData.permissionIds || [])
         .map((id: any) => Number(id))
@@ -566,7 +578,7 @@ export function RolesManagement() {
       }
 
       const rolDataBase = {
-        nombre: formData.name,
+        nombre: nombreRol,
         descripcion: formData.description || null,
         estado: formData.status === 'Activo',
         fecha_creacion: ahora,
@@ -584,7 +596,7 @@ export function RolesManagement() {
 
       if (selectedItem) {
         const rolData = {
-          nombre: formData.name,
+          nombre: nombreRol,
           descripcion: formData.description || null,
           estado: formData.status === 'Activo',
           fecha_modificacion: ahora,
@@ -593,8 +605,8 @@ export function RolesManagement() {
 
         const rolOptimista = {
           ...selectedItem,
-          nombre: formData.name,
-          name: formData.name,
+          nombre: nombreRol,
+          name: nombreRol,
           descripcion: formData.description || '',
           description: formData.description || '',
           permissions: permisosFormateados,
@@ -667,8 +679,8 @@ export function RolesManagement() {
       const rolNuevo: any = {
         id: idTemporal,
         id_roles: null,
-        nombre: formData.name,
-        name: formData.name,
+        nombre: nombreRol,
+        name: nombreRol,
         descripcion: formData.description || '',
         description: formData.description || '',
         permissions: permisosFormateados,
@@ -750,9 +762,28 @@ export function RolesManagement() {
               <Input
                 id="name"
                 value={formData.name || ''}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="Ingrese el nombre"
+                maxLength={ROLE_NAME_LIMITS.max}
+                onChange={(e) => {
+                  const name = sanitizeRoleNameInput(e.target.value);
+                  setFormData({ ...formData, name });
+                  if (roleNameError) {
+                    const check = validateRoleName(name);
+                    setRoleNameError(check.valid ? '' : check.message || '');
+                  }
+                }}
+                onBlur={() => {
+                  const check = validateRoleName(formData.name);
+                  setRoleNameError(check.valid ? '' : check.message || '');
+                }}
+                placeholder="Ingrese el nombre del rol"
+                aria-invalid={Boolean(roleNameError)}
+                className={roleNameError ? 'border-red-500 focus-visible:ring-red-500' : undefined}
               />
+              <p className="mt-1 text-xs text-gray-500">
+                Entre {ROLE_NAME_LIMITS.min} y {ROLE_NAME_LIMITS.max} caracteres
+                {formData.name ? ` · ${String(formData.name).trim().length}/${ROLE_NAME_LIMITS.max}` : ''}
+              </p>
+              {roleNameError ? <p className="mt-1 text-xs text-red-600">{roleNameError}</p> : null}
             </div>
 
             <div>
@@ -891,6 +922,7 @@ export function RolesManagement() {
               setIsCreateModalOpen(false);
               setIsEditModalOpen(false);
               setFormData({});
+              setRoleNameError('');
             }}
           >
             Cancelar

@@ -24,9 +24,15 @@ import {
   extractRutaServiciosOpcionales,
   type Ruta,
 } from '../services/api';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import { toast } from 'sonner';
+import {
+  marcarRecordatorioDocumentoPerfil,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+} from '../utils/documentIdentityValidation';
+import { titularDocumentoValidoParaReservar } from '../utils/titularDocumentoReserva';
 
 interface RouteDetailPageProps {
   routeId: string;
@@ -54,8 +60,15 @@ function uniqueImageUrls(urls: string[]): string[] {
   return out;
 }
 
+const PRINCIPAL_STORAGE_IMAGE_RE = /\/principal\.(png|jpe?g|webp|gif|bmp)$/i;
+
+/** Misma prioridad que fincas: `principal.*` primero si existe en Storage. */
 function orderGalleryUrls(urls: string[]): string[] {
-  return urls;
+  if (!urls.length) return urls;
+  const i = urls.findIndex((u) => PRINCIPAL_STORAGE_IMAGE_RE.test(u));
+  if (i <= 0) return urls;
+  const principal = urls[i];
+  return [principal, ...urls.slice(0, i), ...urls.slice(i + 1)];
 }
 
 function normalizeString(value: unknown): string {
@@ -69,15 +82,13 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
   const [route, setRoute] = useState<Ruta | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [imageGallery, setImageGallery] = useState<string[]>([]);
   const [heroIndex, setHeroIndex] = useState(0);
+  const [imageGallery, setImageGallery] = useState<string[]>([]);
 
   const id = useMemo(() => Number(routeId), [routeId]);
 
   useEffect(() => {
     let cancelled = false;
-    setHeroIndex(0);
-    setImageGallery([]);
 
     const load = async () => {
       if (Number.isNaN(id)) {
@@ -113,27 +124,6 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           return;
         }
 
-        let rawImagenes: string[] = [];
-        try {
-          rawImagenes = await rutasAPI.getImagenes(id);
-        } catch {
-          rawImagenes = [];
-        }
-
-        const orderedFromStorage = orderGalleryUrls(uniqueImageUrls(rawImagenes));
-        const storageImage = bestRutaImageFromStorageUrls(rawImagenes, base.imagen_url);
-
-        let gallery: string[] = [];
-        if (orderedFromStorage.length) {
-          gallery = orderedFromStorage;
-        } else if (storageImage) {
-          gallery = [storageImage];
-        } else if (base.imagen_url?.trim()) {
-          gallery = [base.imagen_url.trim()];
-        } else {
-          gallery = [CATALOG_IMAGE_PLACEHOLDER];
-        }
-
         const incA = extractRutaServiciosPredefinidos(rActiva);
         const incB = extractRutaServiciosPredefinidos(rById);
         const includedMerged = incA.length >= incB.length ? incA : incB;
@@ -144,14 +134,11 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
 
         if (cancelled) return;
 
-        setImageGallery(gallery);
-        setHeroIndex(0);
         setRoute({
           ...rActiva,
           ...rById,
           id_ruta: id,
           nombre: String(rById?.nombre || rActiva?.nombre || 'Ruta'),
-          imagen_url: storageImage ?? null,
           servicios_predefinidos: includedMerged,
           servicios_opcionales: optionalMerged,
         });
@@ -171,7 +158,38 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
     };
   }, [id]);
 
-  const handleBookingClick = () => {
+  useEffect(() => {
+    if (Number.isNaN(id) || id <= 0) {
+      setImageGallery([]);
+      setHeroIndex(0);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadGallery = async () => {
+      try {
+        const imagenes = await rutasAPI.getImagenes(id);
+        if (cancelled) return;
+        const ordered = orderGalleryUrls(uniqueImageUrls(imagenes));
+        setImageGallery(ordered);
+        setHeroIndex(0);
+      } catch {
+        if (!cancelled) {
+          setImageGallery([]);
+          setHeroIndex(0);
+        }
+      }
+    };
+
+    void loadGallery();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const handleBookingClick = async () => {
     if (!user) {
       onViewChange('home');
       setTimeout(() => {
@@ -182,6 +200,16 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
     }
 
     if (route?.estado === false) return;
+
+    if (user?.role === 'client') {
+      const documentoOk = await titularDocumentoValidoParaReservar(user);
+      if (!documentoOk) {
+        marcarRecordatorioDocumentoPerfil();
+        toast.error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+        onViewChange('profile');
+        return;
+      }
+    }
 
     setIsBookingModalOpen(true);
   };
@@ -322,7 +350,6 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           <div className="space-y-4">
             <div className="relative h-96 overflow-hidden rounded-2xl border border-green-100/80 shadow-xl">
               <ImageWithFallback
-                key={heroSrc ?? `hero-${heroIndex}`}
                 src={heroSrc}
                 alt={route.nombre}
                 loading="eager"

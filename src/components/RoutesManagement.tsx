@@ -53,8 +53,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
 import { toast } from 'sonner';
-import { rutasAPI, Ruta, RutaServicioPredefinido, RutaServicioOpcional } from '../services/api';
+import {
+  rutasAPI,
+  Ruta,
+  RutaServicioPredefinido,
+  RutaServicioOpcional,
+  type ReservaBloqueoCatalogo,
+} from '../services/api';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import {
+  isRutaPortadaUrl,
+  RUTA_IMAGE_LIMITS,
+  validateRutaImageFile,
+} from '../utils/rutaImageUpload';
+import { findRouteNameConflict, validateRutaForm } from '../utils/rutaFormValidation';
+import { RutaImageUploadSection } from './RutaImageUploadSection';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
@@ -131,6 +144,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [routePendingDelete, setRoutePendingDelete] = useState<Route | null>(null);
+  const [deleteCheck, setDeleteCheck] = useState<{
+    puedeEliminar: boolean;
+    totalReservas: number;
+    reservas: ReservaBloqueoCatalogo[];
+  } | null>(null);
+  const [isCheckingDelete, setIsCheckingDelete] = useState(false);
+  const [isDeletingRoute, setIsDeletingRoute] = useState(false);
   const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
   
   const [formData, setFormData] = useState({
@@ -140,13 +161,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     duracion_dias: '',
     precio_base: '',
     dificultad: 'Moderado',
-    imagen_url: '',
     recomendaciones_participantes: '',
     briefing_operativo_equipo: '',
   });
 
-  const [createImageFiles, setCreateImageFiles] = useState<File[]>([]);
-  const [editImageFiles, setEditImageFiles] = useState<File[]>([]);
+  const [createCoverFile, setCreateCoverFile] = useState<File | null>(null);
+  const [createGalleryFiles, setCreateGalleryFiles] = useState<File[]>([]);
+  const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [editGalleryFiles, setEditGalleryFiles] = useState<File[]>([]);
+  const [editExistingCoverUrl, setEditExistingCoverUrl] = useState<string | null>(null);
+  const [editExistingGalleryUrls, setEditExistingGalleryUrls] = useState<string[]>([]);
 
   const [predefinedServices, setPredefinedServices] = useState<PredefinedServiceFormItem[]>([]);
   const [serviceToAdd, setServiceToAdd] = useState<string>('');
@@ -176,6 +200,55 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     // Nunca permitir que un obligatorio esté como opcional
     setOptionalServices((prev) => prev.filter((s) => !requiredServiceIds.ids.includes(s.id_servicio)));
   }, [requiredServiceIds, isCreateModalOpen, isEditModalOpen]);
+
+  useEffect(() => {
+    if (!isEditModalOpen || !selectedRoute?.id_ruta) return;
+
+    const routeId = selectedRoute.id_ruta;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const urls = await rutasAPI.getImagenes(routeId);
+        if (cancelled) return;
+
+        const portadaFromStorage = urls.find(isRutaPortadaUrl);
+        const portada =
+          portadaFromStorage ||
+          (selectedRoute.imagen_url?.trim() && !urls.length ? selectedRoute.imagen_url.trim() : '') ||
+          '';
+        const galeria = urls.filter((u) => u !== portada && !isRutaPortadaUrl(u));
+
+        setEditExistingCoverUrl(portada || null);
+        setEditExistingGalleryUrls(galeria);
+      } catch {
+        if (!cancelled && selectedRoute.imagen_url?.trim()) {
+          setEditExistingCoverUrl(selectedRoute.imagen_url.trim());
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditModalOpen, selectedRoute?.id_ruta, selectedRoute?.imagen_url]);
+
+  const validatePendingRutaImages = (cover: File | null, gallery: File[]): boolean => {
+    if (gallery.length > RUTA_IMAGE_LIMITS.maxGalleryFiles) {
+      toast.error(
+        `Máximo ${RUTA_IMAGE_LIMITS.maxGalleryFiles} fotos nuevas en la galería por guardado.`,
+      );
+      return false;
+    }
+    for (const file of [...(cover ? [cover] : []), ...gallery]) {
+      const err = validateRutaImageFile(file);
+      if (err) {
+        toast.error(err);
+        return false;
+      }
+    }
+    return true;
+  };
 
   // Cargar rutas desde la API al montar el componente
   useEffect(() => {
@@ -240,13 +313,21 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     }
   };
 
-  // Filter routes
-  const filteredRoutes = routes.filter(route =>
-    route.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    route.descripcion?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (route.ubicacion || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    route.dificultad?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter routes (más reciente creada primero)
+  const filteredRoutes = routes
+    .filter(
+      (route) =>
+        route.nombre?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        route.descripcion?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (route.ubicacion || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+        route.dificultad?.toLowerCase().includes(searchTerm.toLowerCase()),
+    )
+    .sort((a, b) => {
+      const ta = a.fecha_creacion ? Date.parse(String(a.fecha_creacion)) : 0;
+      const tb = b.fecha_creacion ? Date.parse(String(b.fecha_creacion)) : 0;
+      if (tb !== ta) return tb - ta;
+      return Number(b.id_ruta) - Number(a.id_ruta);
+    });
 
   // Pagination
   const totalPages = Math.ceil(filteredRoutes.length / itemsPerPage);
@@ -295,7 +376,6 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       duracion_dias: route.duracion_dias?.toString() || '',
       precio_base: route.precio_base?.toString() || '',
       dificultad: route.dificultad || 'Moderado',
-      imagen_url: route.imagen_url || '',
       recomendaciones_participantes: route.recomendaciones_participantes || '',
       briefing_operativo_equipo: route.briefing_operativo_equipo || '',
     });
@@ -321,8 +401,11 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     
     console.log('📝 FormData preparado:', formData);
 
-    setEditImageFiles([]);
-    
+    setEditCoverFile(null);
+    setEditGalleryFiles([]);
+    setEditExistingCoverUrl(route.imagen_url?.trim() || null);
+    setEditExistingGalleryUrls([]);
+
     setIsEditModalOpen(true);
   };
 
@@ -400,39 +483,75 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     );
   };
 
-  const handleDelete = (route: Route) => {
-    if (!canDeleteRoute) {
-      toast.error('No tienes permiso para eliminar rutas');
-      return;
-    }
-
-    setSelectedRoute(route);
-    setIsDeleteDialogOpen(true);
+  const formatReservaFecha = (value?: string | null) => {
+    if (!value) return '—';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleDateString('es-CO');
   };
 
-  const confirmDelete = async () => {
+  const closeDeleteDialog = () => {
+    if (isDeletingRoute) return;
+    setIsDeleteDialogOpen(false);
+    setRoutePendingDelete(null);
+    setDeleteCheck(null);
+    setIsCheckingDelete(false);
+  };
+
+  const openDeleteDialog = async (route: Route) => {
     if (!canDeleteRoute) {
       toast.error('No tienes permiso para eliminar rutas');
       return;
     }
 
-    if (selectedRoute) {
-      try {
-        const routeId = selectedRoute.id_ruta;
-        await rutasAPI.delete(routeId);
-        
-        toast.success('Ruta eliminada correctamente de la base de datos');
-        setIsDeleteDialogOpen(false);
-        setSelectedRoute(null);
+    const id = Number(route.id_ruta);
+    if (!Number.isFinite(id) || id <= 0) {
+      toast.error('ID de ruta no válido.');
+      return;
+    }
 
-        // Forzar recarga inmediata de rutas
-        console.log('🔄 Recargando lista de rutas...');
-        setIsLoading(true);
-        await loadRoutes();
-      } catch (error) {
-        console.error('❌ Error eliminando ruta:', error);
-        toast.error('Error al eliminar la ruta');
+    setRoutePendingDelete(route);
+    setIsDeleteDialogOpen(true);
+    setDeleteCheck(null);
+    setIsCheckingDelete(true);
+
+    try {
+      const check = await rutasAPI.canDelete(id);
+      setDeleteCheck(check);
+    } catch {
+      setDeleteCheck(null);
+      toast.error('No se pudo verificar si la ruta tiene reservas asociadas.');
+    } finally {
+      setIsCheckingDelete(false);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!routePendingDelete) return;
+    if (deleteCheck && !deleteCheck.puedeEliminar) return;
+
+    const routeId = Number(routePendingDelete.id_ruta);
+    if (!Number.isFinite(routeId) || routeId <= 0) {
+      toast.error('ID de ruta no válido.');
+      return;
+    }
+
+    setIsDeletingRoute(true);
+    try {
+      await rutasAPI.delete(routeId);
+      toast.success('Ruta eliminada correctamente.');
+      if (selectedRoute?.id_ruta === routeId) {
+        setSelectedRoute(null);
       }
+      closeDeleteDialog();
+      setIsLoading(true);
+      await loadRoutes();
+    } catch (error: any) {
+      const msg =
+        error?.message ||
+        'No se pudo eliminar la ruta. Cancela primero las reservas futuras no canceladas vinculadas.';
+      toast.error(msg);
+    } finally {
+      setIsDeletingRoute(false);
     }
   };
 
@@ -442,44 +561,28 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       return;
     }
 
-    // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
-    if (!formData.nombre.trim()) {
-      toast.error('El nombre de la ruta es obligatorio');
+    const validation = validateRutaForm(formData);
+    if (!validation.valid) {
+      toast.error(validation.error);
       return;
     }
 
-    // Validar precio si se proporciona
-    let precio: number | null = null;
-    if (formData.precio_base && formData.precio_base.trim() !== '') {
-      precio = parseFloat(formData.precio_base);
-      if (isNaN(precio) || precio <= 0) {
-        toast.error('El precio debe ser un número válido mayor a 0');
-        return;
-      }
+    if (
+      findRouteNameConflict(routes, {
+        nombre: validation.payload.nombre,
+      })
+    ) {
+      toast.error('Ya existe otra ruta con ese nombre.');
+      return;
     }
 
-    // Validar duración si se proporciona
-    let duracion: number | null = null;
-    if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
-      duracion = parseInt(formData.duracion_dias);
-      if (isNaN(duracion) || duracion <= 0) {
-        toast.error('Las horas de duración deben ser un número válido mayor a 0');
-        return;
-      }
+    if (!validatePendingRutaImages(createCoverFile, createGalleryFiles)) {
+      return;
     }
 
     try {
-      // Preparar datos para el backend (solo nombre es obligatorio)
       const rutaData: Partial<Ruta> = {
-        nombre: formData.nombre.trim(),
-        descripcion: formData.descripcion?.trim() || null,
-        duracion_dias: duracion,
-        precio_base: precio,
-        dificultad: formData.dificultad || null,
-        imagen_url: formData.imagen_url?.trim() || null,
-        ubicacion: formData.ubicacion?.trim() || null,
-        recomendaciones_participantes: formData.recomendaciones_participantes?.trim() || null,
-        briefing_operativo_equipo: formData.briefing_operativo_equipo?.trim() || null,
+        ...validation.payload,
         estado: true,
         servicios_predefinidos: predefinedServices
           .map((s) => ({
@@ -507,9 +610,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       const createdIdRaw = createdPayload?.id_ruta ?? createdPayload?.id;
       const createdId = createdIdRaw != null ? Number(createdIdRaw) : null;
 
-      if (createdId && createImageFiles.length > 0) {
+      const hasNewImages = Boolean(createCoverFile) || createGalleryFiles.length > 0;
+      if (createdId && hasNewImages) {
         try {
-          await rutasAPI.uploadImagenes(createdId, createImageFiles);
+          await rutasAPI.uploadImagenes(createdId, {
+            portada: createCoverFile,
+            galeria: createGalleryFiles,
+          });
         } catch (e: any) {
           toast.error(`La ruta se creó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
         }
@@ -544,46 +651,31 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
     if (!selectedRoute) return;
 
-    // Validar solo el campo obligatorio (nombre es NOT NULL en BD)
-    if (!formData.nombre.trim()) {
-      toast.error('El nombre de la ruta es obligatorio');
+    const validation = validateRutaForm(formData);
+    if (!validation.valid) {
+      toast.error(validation.error);
       return;
     }
 
-    // Validar precio si se proporciona
-    let precio: number | null = null;
-    if (formData.precio_base && formData.precio_base.trim() !== '') {
-      precio = parseFloat(formData.precio_base);
-      if (isNaN(precio) || precio <= 0) {
-        toast.error('El precio debe ser un número válido mayor a 0');
-        return;
-      }
+    if (
+      findRouteNameConflict(routes, {
+        nombre: validation.payload.nombre,
+        excludeIdRuta: selectedRoute.id_ruta,
+      })
+    ) {
+      toast.error('Ya existe otra ruta con ese nombre.');
+      return;
     }
 
-    // Validar duración si se proporciona
-    let duracion: number | null = null;
-    if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
-      duracion = parseInt(formData.duracion_dias);
-      if (isNaN(duracion) || duracion <= 0) {
-        toast.error('Las horas de duración deben ser un número válido mayor a 0');
-        return;
-      }
+    if (!validatePendingRutaImages(editCoverFile, editGalleryFiles)) {
+      return;
     }
 
     try {
       const routeId = selectedRoute.id_ruta;
-      
-      // Preparar datos para el backend (solo nombre es obligatorio)
+
       const rutaData: Partial<Ruta> = {
-        nombre: formData.nombre.trim(),
-        descripcion: formData.descripcion?.trim() || null,
-        duracion_dias: duracion,
-        precio_base: precio,
-        dificultad: formData.dificultad || null,
-        imagen_url: formData.imagen_url?.trim() || null,
-        ubicacion: formData.ubicacion?.trim() || null,
-        recomendaciones_participantes: formData.recomendaciones_participantes?.trim() || null,
-        briefing_operativo_equipo: formData.briefing_operativo_equipo?.trim() || null,
+        ...validation.payload,
         estado: selectedRoute.estado,
         servicios_predefinidos: predefinedServices
           .map((s) => ({
@@ -607,9 +699,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       await rutasAPI.update(routeId, rutaData);
       console.log('✅ Ruta actualizada en BD');
 
-      if (editImageFiles.length > 0) {
+      const hasNewImages = Boolean(editCoverFile) || editGalleryFiles.length > 0;
+      if (hasNewImages) {
         try {
-          await rutasAPI.uploadImagenes(routeId, editImageFiles);
+          await rutasAPI.uploadImagenes(routeId, {
+            portada: editCoverFile,
+            galeria: editGalleryFiles,
+          });
         } catch (e: any) {
           toast.error(`La ruta se actualizó, pero falló la subida de fotos: ${e?.message || 'Error'}`);
         }
@@ -640,12 +736,15 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
       duracion_dias: '',
       precio_base: '',
       dificultad: 'Moderado',
-      imagen_url: '',
       recomendaciones_participantes: '',
       briefing_operativo_equipo: '',
     });
-    setCreateImageFiles([]);
-    setEditImageFiles([]);
+    setCreateCoverFile(null);
+    setCreateGalleryFiles([]);
+    setEditCoverFile(null);
+    setEditGalleryFiles([]);
+    setEditExistingCoverUrl(null);
+    setEditExistingGalleryUrls([]);
     setPredefinedServices([]);
     setServiceToAdd('');
     setOptionalServices([]);
@@ -915,7 +1014,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleDelete(route)}
+                                onClick={() => openDeleteDialog(route)}
                                 title="Eliminar ruta"
                               >
                                 <Trash2 className="w-4 h-4 text-red-600" />
@@ -1024,6 +1123,19 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </div>
 
               <div>
+                <Label htmlFor="ubicacion">Zona / municipios</Label>
+                <Input
+                  id="ubicacion"
+                  value={formData.ubicacion}
+                  onChange={(e) => setFormData({ ...formData, ubicacion: e.target.value })}
+                  placeholder="Ej: Sopetrán, San Jerónimo, Santa Fe de Antioquia"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Dónde transcurre el tour en el catálogo. El punto exacto de encuentro de cada salida se define en la programación.
+                </p>
+              </div>
+
+              <div>
                 <Label htmlFor="recomendaciones_participantes">
                   Recomendaciones para participantes (visible a clientes y en el catálogo)
                 </Label>
@@ -1105,27 +1217,13 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 </div>
               </div>
 
-              <div>
-                <Label htmlFor="imagen_url">URL de imagen (opcional)</Label>
-                <Input
-                  id="imagen_url"
-                  value={formData.imagen_url}
-                  onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
-                  placeholder="https://ejemplo.com/imagen.jpg"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="imagenes">Subir fotos (Supabase Storage)</Label>
-                <Input
-                  id="imagenes"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => setCreateImageFiles(Array.from(e.target.files || []))}
-                />
-                <p className="text-xs text-gray-500 mt-1">Máx. 5 imágenes, 5MB c/u.</p>
-              </div>
+              <RutaImageUploadSection
+                idPrefix="create-ruta"
+                coverFile={createCoverFile}
+                onCoverChange={setCreateCoverFile}
+                galleryFiles={createGalleryFiles}
+                onGalleryFilesChange={setCreateGalleryFiles}
+              />
 
               <Separator />
 
@@ -1402,6 +1500,19 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
               </div>
 
               <div>
+                <Label htmlFor="edit-ubicacion">Zona / municipios</Label>
+                <Input
+                  id="edit-ubicacion"
+                  value={formData.ubicacion}
+                  onChange={(e) => setFormData({ ...formData, ubicacion: e.target.value })}
+                  placeholder="Ej: Sopetrán, San Jerónimo, Santa Fe de Antioquia"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Dónde transcurre el tour en el catálogo. El punto exacto de encuentro de cada salida se define en la programación.
+                </p>
+              </div>
+
+              <div>
                 <Label htmlFor="edit-recomendaciones_participantes">
                   Recomendaciones para participantes (visible a clientes y en el catálogo)
                 </Label>
@@ -1483,27 +1594,16 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                 </div>
               </div>
 
-              <div>
-                <Label htmlFor="edit-imagen_url">URL de imagen (opcional)</Label>
-                <Input
-                  id="edit-imagen_url"
-                  value={formData.imagen_url}
-                  onChange={(e) => setFormData({ ...formData, imagen_url: e.target.value })}
-                  placeholder="https://ejemplo.com/imagen.jpg"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="edit-imagenes">Subir fotos (Supabase Storage)</Label>
-                <Input
-                  id="edit-imagenes"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => setEditImageFiles(Array.from(e.target.files || []))}
-                />
-                <p className="text-xs text-gray-500 mt-1">Máx. 5 imágenes, 5MB c/u.</p>
-              </div>
+              <RutaImageUploadSection
+                idPrefix="edit-ruta"
+                coverFile={editCoverFile}
+                onCoverChange={setEditCoverFile}
+                galleryFiles={editGalleryFiles}
+                onGalleryFilesChange={setEditGalleryFiles}
+                existingCoverUrl={editExistingCoverUrl}
+                existingGalleryUrls={editExistingGalleryUrls}
+                showExistingGallery
+              />
 
               <Separator />
 
@@ -1971,32 +2071,87 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
       {/* Delete Confirmation Dialog */}
       {canDeleteRoute && (
-        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-          <AlertDialogContent>
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={(open) => !open && closeDeleteDialog()}>
+          <AlertDialogContent className="max-w-lg">
             <AlertDialogHeader>
               <AlertDialogTitle className="flex items-center space-x-2 text-red-700">
                 <Trash2 className="w-5 h-5" />
                 <span>¿Eliminar esta ruta?</span>
               </AlertDialogTitle>
-              <AlertDialogDescription className="space-y-2">
-                <p>
-                  Está a punto de eliminar la ruta <span className="font-semibold">{selectedRoute?.nombre}</span>.
-                </p>
-                <p className="text-red-600">
-                  Esta acción es <strong>permanente</strong> y no se puede deshacer.
-                </p>
-                <p>
-                  Todos los datos asociados a esta ruta serán eliminados del sistema.
-                </p>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  {routePendingDelete && (
+                    <p>
+                      Esta acción no se puede deshacer. Se eliminará permanentemente la ruta{' '}
+                      <span className="font-semibold text-gray-900">{routePendingDelete.nombre}</span>.
+                    </p>
+                  )}
+                  {isCheckingDelete && <p>Verificando reservas asociadas…</p>}
+                  {!isCheckingDelete && deleteCheck && !deleteCheck.puedeEliminar && (
+                    <>
+                      <p className="text-red-700 font-medium">
+                        No se puede eliminar: hay {deleteCheck.totalReservas} reserva(s) futura(s) de
+                        ruta no cancelada(s). Cancélalas desde Reservas y vuelve a intentar.
+                      </p>
+                      {deleteCheck.reservas.length > 0 && (
+                        <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-red-200 bg-red-50/50 p-2">
+                          <p className="text-xs font-medium text-red-900 mb-2">Reservas vinculadas:</p>
+                          <ul className="space-y-2">
+                            {deleteCheck.reservas.map((r) => (
+                              <li
+                                key={r.id_reserva}
+                                className="text-xs text-red-950 border-b border-red-100 last:border-0 pb-2 last:pb-0"
+                              >
+                                <span className="font-semibold">Reserva #{r.id_reserva}</span>
+                                {r.estado ? (
+                                  <span className="ml-1 text-red-800">({r.estado})</span>
+                                ) : null}
+                                {r.cliente ? (
+                                  <span className="block text-red-900/90">Cliente: {r.cliente}</span>
+                                ) : null}
+                                <span className="block text-red-800/90">
+                                  Salida: {formatReservaFecha(r.fecha_salida)}
+                                  {r.fecha_regreso
+                                    ? ` → Regreso: ${formatReservaFecha(r.fecha_regreso)}`
+                                    : ''}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {!isCheckingDelete && deleteCheck?.puedeEliminar && (
+                    <p className="text-green-800">
+                      No hay reservas futuras de ruta sin cancelar. Puedes eliminar esta ruta. Reservas
+                      pasadas o ya canceladas no bloquean.
+                    </p>
+                  )}
+                  {!isCheckingDelete && !deleteCheck && (
+                    <p>
+                      Solo es posible eliminar si no quedan reservas futuras de ruta sin cancelar
+                      vinculadas a esta ruta.
+                    </p>
+                  )}
+                </div>
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogCancel disabled={isDeletingRoute}>Cancelar</AlertDialogCancel>
               <AlertDialogAction
-                onClick={confirmDelete}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void handleConfirmDelete();
+                }}
+                disabled={
+                  isCheckingDelete ||
+                  isDeletingRoute ||
+                  (deleteCheck != null && !deleteCheck.puedeEliminar)
+                }
                 className="bg-red-600 hover:bg-red-700"
               >
-                Sí, Eliminar Ruta
+                {isDeletingRoute ? 'Eliminando…' : 'Sí, eliminar ruta'}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -14,6 +14,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from './ui/dropdown-menu';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { toast } from 'sonner';
+import {
+  ROLE_NAME_LIMITS,
+  sanitizeRoleNameInput,
+  validateRoleName,
+} from '../utils/roleFormValidation';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 
@@ -177,10 +182,12 @@ export function RoleManagement() {
       return;
     }
 
-    if (!newRole.nombre.trim()) {
-      toast.error('El nombre del rol es obligatorio');
+    const nombreValidation = validateRoleName(newRole.nombre);
+    if (!nombreValidation.valid) {
+      toast.error(nombreValidation.message || 'El nombre del rol no es válido');
       return;
     }
+    const nombreRol = sanitizeRoleNameInput(newRole.nombre).trim();
 
     if (newRole.permisos.length === 0) {
       toast.error('Debe asignar al menos un permiso al rol');
@@ -190,7 +197,7 @@ export function RoleManagement() {
     try {
       // Crear el rol en la BD
       await rolesAPI.create({
-        nombre: newRole.nombre,
+        nombre: nombreRol,
         descripcion: newRole.descripcion
       });
 
@@ -212,10 +219,12 @@ export function RoleManagement() {
       return;
     }
 
-    if (!selectedRole || !newRole.nombre.trim()) {
-      toast.error('Datos del rol incompletos');
+    const nombreValidation = validateRoleName(newRole.nombre);
+    if (!selectedRole || !nombreValidation.valid) {
+      toast.error(nombreValidation.message || 'Datos del rol incompletos');
       return;
     }
+    const nombreRol = sanitizeRoleNameInput(newRole.nombre).trim();
 
     if (newRole.permisos.length === 0) {
       toast.error('Debe asignar al menos un permiso al rol');
@@ -225,7 +234,7 @@ export function RoleManagement() {
     try {
       // Actualizar datos básicos del rol
       await rolesAPI.update(selectedRole.id_roles, {
-        nombre: newRole.nombre,
+        nombre: nombreRol,
         descripcion: newRole.descripcion
       });
 
@@ -797,8 +806,14 @@ export function RoleManagement() {
                 id="roleName"
                 placeholder="Ej: Coordinador"
                 value={newRole.nombre}
-                onChange={(e) => setNewRole(prev => ({ ...prev, nombre: e.target.value }))}
+                maxLength={ROLE_NAME_LIMITS.max}
+                onChange={(e) =>
+                  setNewRole((prev) => ({ ...prev, nombre: sanitizeRoleNameInput(e.target.value) }))
+                }
               />
+              <p className="text-xs text-gray-500">
+                Entre {ROLE_NAME_LIMITS.min} y {ROLE_NAME_LIMITS.max} caracteres
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -884,8 +899,14 @@ export function RoleManagement() {
                 id="editRoleName"
                 placeholder="Ej: Coordinador"
                 value={newRole.nombre}
-                onChange={(e) => setNewRole(prev => ({ ...prev, nombre: e.target.value }))}
+                maxLength={ROLE_NAME_LIMITS.max}
+                onChange={(e) =>
+                  setNewRole((prev) => ({ ...prev, nombre: sanitizeRoleNameInput(e.target.value) }))
+                }
               />
+              <p className="text-xs text-gray-500">
+                Entre {ROLE_NAME_LIMITS.min} y {ROLE_NAME_LIMITS.max} caracteres
+              </p>
             </div>
 
             <div className="space-y-2">

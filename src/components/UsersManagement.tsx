@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
+  AlertCircle,
   ChevronLeft,
   ChevronRight,
   Edit,
@@ -18,12 +19,26 @@ import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
 import { rolesAPI, usersAPI } from '../services/api';
+import {
+  buildUserValidationContext,
+  getClientPasswordRequirementChecks,
+  normalizeClientEmail,
+  sanitizeDocumentInput,
+  sanitizePhoneInput,
+  sanitizeUserNameInput,
+  USER_NAME_LIMITS,
+  validateUserFormFields,
+  validateUserFormForSubmit,
+  validateUserSingleField,
+  type UserFormInput,
+} from '../utils/userFormValidation';
+import { cn } from './ui/utils';
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from './ui/alert-dialog';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -59,7 +74,43 @@ type UserFormData = {
   documentType?: string;
   documentNumber?: string;
   password?: string;
+  confirmPassword?: string;
 };
+
+function limpiarValorFormulario(value?: string | null) {
+  const t = String(value ?? '').trim();
+  if (!t || t === '−' || t === '-') return '';
+  return t;
+}
+
+function buildUserFormInput(data: UserFormData): UserFormInput {
+  return {
+    nombre: data.nombre || '',
+    apellido: data.apellido || '',
+    email: data.email || '',
+    phone: data.phone || '',
+    role: data.role || '',
+    status: data.status || 'Activo',
+    documentType: data.documentType || '',
+    documentNumber: data.documentNumber || '',
+    password: data.password || '',
+    confirmPassword: data.confirmPassword || '',
+  };
+}
+
+function FieldError({ message }: { message?: string }) {
+  if (!message) return null;
+  return (
+    <p className="text-xs text-red-600 flex items-start gap-1 mt-1">
+      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+      <span>{message}</span>
+    </p>
+  );
+}
+
+function inputClass(hasError?: boolean) {
+  return cn('border-green-200 focus:border-green-500', hasError && 'border-red-400 focus:border-red-500');
+}
 
 function formatearFechaUsuario(fecha?: string | null) {
   if (!fecha) return '−';
@@ -74,23 +125,50 @@ function formatearFechaUsuario(fecha?: string | null) {
   });
 }
 
-function mapearUsuarioBackend(usuario: any): UserRow {
-  const nombreCompleto = [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ').trim();
+const DOCUMENT_TYPE_VALUES = ['C.C.', 'C.E.', 'Pasaporte', 'T.I.', 'NIT'] as const;
 
-  const rolRaw = (usuario?.rol_nombre || usuario?.rol || usuario?.role || usuario?.tipo_usuario || '').toString();
-  const rolNormalizado = rolRaw.toLowerCase().trim();
-  const mapaRolVista: Record<string, string> = {
+function normalizeComparable(value: unknown) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function normalizeRoleLabel(raw: unknown): string {
+  const normalized = normalizeComparable(raw);
+  const roleMap: Record<string, string> = {
     administrador: 'Administrador',
     admin: 'Administrador',
     asesor: 'Asesor',
     advisor: 'Asesor',
-    guía: 'Guía Turístico',
     guia: 'Guía Turístico',
+    guiaturistico: 'Guía Turístico',
     guide: 'Guía Turístico',
     cliente: 'Cliente',
     client: 'Cliente',
-    sin_perfil: 'Sin perfil',
+    sinperfil: 'Sin perfil',
   };
+  return roleMap[normalized] || String(raw ?? '').trim() || 'Cliente';
+}
+
+function normalizeDocumentType(raw: unknown): string {
+  const value = String(raw ?? '').trim();
+  if (!value || value === '−' || value === '-') return '−';
+  const normalized = normalizeComparable(value);
+  if (normalized === 'cc' || normalized.includes('ceduladeciudadania')) return 'C.C.';
+  if (normalized === 'ce' || normalized.includes('ceduladeextranjeria')) return 'C.E.';
+  if (normalized === 'pasaporte' || normalized === 'passport') return 'Pasaporte';
+  if (normalized === 'ti' || normalized.includes('tarjetadeidentidad')) return 'T.I.';
+  if (normalized === 'nit') return 'NIT';
+  const direct = DOCUMENT_TYPE_VALUES.find((item) => normalizeComparable(item) === normalized);
+  return direct || value;
+}
+
+function mapearUsuarioBackend(usuario: any): UserRow {
+  const nombreCompleto = [usuario?.nombre, usuario?.apellido].filter(Boolean).join(' ').trim();
+
+  const rolRaw = (usuario?.rol_nombre || usuario?.rol || usuario?.role || usuario?.tipo_usuario || '').toString();
 
   const estadoRaw = usuario?.estado;
   const estado = typeof estadoRaw === 'boolean'
@@ -103,8 +181,8 @@ function mapearUsuarioBackend(usuario: any): UserRow {
     name: nombreCompleto || usuario?.correo || usuario?.email || 'Sin nombre',
     email: usuario?.correo || usuario?.email || '−',
     numero_documento: usuario?.numero_documento || '−',
-    tipo_documento: usuario?.tipo_documento || '−',
-    role: mapaRolVista[rolNormalizado] || rolRaw || 'Cliente',
+    tipo_documento: normalizeDocumentType(usuario?.tipo_documento),
+    role: normalizeRoleLabel(rolRaw),
     status: estado,
     phone: usuario?.telefono || usuario?.phone || '−',
     joinDate: formatearFechaUsuario(
@@ -143,6 +221,9 @@ export function UsersManagement() {
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<UserRow | null>(null);
   const [formData, setFormData] = useState<UserFormData>({});
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
   const cargarRoles = async () => {
     try {
@@ -186,15 +267,16 @@ export function UsersManagement() {
   }, [searchTerm, roleFilter, statusFilter, documentTypeFilter]);
 
   const roleOptions = useMemo(() => {
-    const fromApi = roles.map((r) => r.nombre).filter(Boolean);
+    const fromApi = roles.map((r) => normalizeRoleLabel(r.nombre)).filter(Boolean);
     const fromUsers = users.map((u) => u.role).filter(Boolean);
     return [...new Set([...fromApi, ...fromUsers])].sort((a, b) => a.localeCompare(b, 'es'));
   }, [roles, users]);
 
   const documentTypeOptions = useMemo(() => {
-    const tipos = users.map((u) => u.tipo_documento).filter((t) => t && t !== '−');
-    const base = ['C.C.', 'C.E.', 'Pasaporte', 'T.I.', 'NIT'];
-    return [...new Set([...base, ...tipos])].sort((a, b) => a.localeCompare(b, 'es'));
+    const tipos = users
+      .map((u) => normalizeDocumentType(u.tipo_documento))
+      .filter((t) => t && t !== '−');
+    return [...new Set([...DOCUMENT_TYPE_VALUES, ...tipos])].sort((a, b) => a.localeCompare(b, 'es'));
   }, [users]);
 
   const hasActiveFilters =
@@ -236,6 +318,141 @@ export function UsersManagement() {
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / itemsPerPage));
   const paginatedData = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const validationContext = useMemo(
+    () =>
+      buildUserValidationContext(
+        users.map((u) => ({
+          id: u.id,
+          email: u.email,
+          numero_documento: u.numero_documento,
+        })),
+        selectedItem?.id,
+      ),
+    [users, selectedItem?.id],
+  );
+
+  const resetFormState = () => {
+    setFormData({});
+    setFormErrors({});
+    setTouchedFields({});
+    setSelectedItem(null);
+  };
+
+  const clearFieldError = (field: string) => {
+    setFormErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
+  const touchField = (
+    field: string,
+    mode: 'create' | 'edit',
+    data?: UserFormData,
+  ) => {
+    const msg = validateUserSingleField(
+      field,
+      buildUserFormInput(data ?? formData),
+      mode,
+      validationContext,
+    );
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      if (msg) next[field] = msg;
+      else delete next[field];
+      return next;
+    });
+  };
+
+  const touchFields = (
+    fields: string[],
+    mode: 'create' | 'edit',
+    data?: UserFormData,
+  ) => {
+    const input = buildUserFormInput(data ?? formData);
+    const allErrors = validateUserFormFields(input, mode, validationContext);
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      for (const field of fields) {
+        if (allErrors[field]) next[field] = allErrors[field];
+        else delete next[field];
+      }
+      return next;
+    });
+  };
+
+  const markTouched = (field: string) => {
+    setTouchedFields((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
+  };
+
+  const updateFormField = (
+    field: keyof UserFormData,
+    value: string,
+    mode: 'create' | 'edit',
+    relatedFields: string[] = [],
+  ) => {
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value };
+      const fieldsToValidate = [field, ...relatedFields];
+
+      setTouchedFields((prevTouched) => {
+        const shouldValidate = fieldsToValidate.some((f) => prevTouched[f]);
+        if (shouldValidate) {
+          const allErrors = validateUserFormFields(
+            buildUserFormInput(next),
+            mode,
+            validationContext,
+          );
+          setFormErrors((prevErrors) => {
+            const updated = { ...prevErrors };
+            for (const f of fieldsToValidate) {
+              if (allErrors[f]) updated[f] = allErrors[f];
+              else delete updated[f];
+            }
+            return updated;
+          });
+        } else {
+          setFormErrors((prevErrors) => {
+            const updated = { ...prevErrors };
+            fieldsToValidate.forEach((f) => {
+              delete updated[f];
+            });
+            return updated;
+          });
+        }
+        return prevTouched;
+      });
+
+      return next;
+    });
+  };
+
+  const blurField = (
+    field: string,
+    mode: 'create' | 'edit',
+    relatedFields: string[] = [],
+    transform?: (current: UserFormData) => UserFormData,
+  ) => {
+    const nextData = transform ? transform(formData) : formData;
+    if (transform) setFormData(nextData);
+    setTouchedFields((prev) => {
+      const next = { ...prev, [field]: true };
+      relatedFields.forEach((f) => {
+        next[f] = true;
+      });
+      return next;
+    });
+    touchFields([field, ...relatedFields], mode, nextData);
+  };
+
   const openCreate = () => {
     if (!canCreateUser) {
       toast.error(usuariosPerms.getErrorMessage('crear'));
@@ -243,16 +460,22 @@ export function UsersManagement() {
     }
 
     setSelectedItem(null);
+    setFormErrors({});
+    setTouchedFields({});
     setFormData({
       nombre: '',
       apellido: '',
       email: '',
       phone: '',
-      role: 'Cliente',
+      role:
+        roleOptions.find((r) => normalizeComparable(r) === normalizeComparable('Cliente')) ||
+        roleOptions[0] ||
+        'Cliente',
       status: 'Activo',
-      documentType: '',
+      documentType: 'C.C.',
       documentNumber: '',
       password: '',
+      confirmPassword: '',
     });
     setIsCreateModalOpen(true);
   };
@@ -268,16 +491,19 @@ export function UsersManagement() {
     const apellido = partes.slice(1).join(' ') || '';
 
     setSelectedItem(item);
+    setFormErrors({});
+    setTouchedFields({});
     setFormData({
       nombre,
       apellido,
-      email: item.email,
-      phone: item.phone,
+      email: limpiarValorFormulario(item.email),
+      phone: limpiarValorFormulario(item.phone),
       role: item.role,
       status: item.status,
-      documentType: item.tipo_documento,
-      documentNumber: item.numero_documento,
+      documentType: limpiarValorFormulario(item.tipo_documento) || 'C.C.',
+      documentNumber: limpiarValorFormulario(item.numero_documento),
       password: '',
+      confirmPassword: '',
     });
     setIsEditModalOpen(true);
   };
@@ -342,79 +568,81 @@ export function UsersManagement() {
       return;
     }
 
-    const estadoString = formData.status || selectedItem?.status || 'Activo';
+    const input = buildUserFormInput(formData);
+    const errors = validateUserFormFields(input, isEdit ? 'edit' : 'create', validationContext);
+    setFormErrors(errors);
+    setTouchedFields({
+      nombre: true,
+      apellido: true,
+      email: true,
+      phone: true,
+      role: true,
+      documentType: true,
+      documentNumber: true,
+      status: true,
+      password: true,
+      confirmPassword: true,
+    });
+    const summary = validateUserFormForSubmit(input, isEdit ? 'edit' : 'create', validationContext);
+    if (summary) {
+      toast.error(summary);
+      return;
+    }
 
-    const roleName = formData.role ?? selectedItem?.role ?? null;
-    const roleId = roles.find((r) => r.nombre === roleName)?.id_roles ?? null;
+    const estadoString = input.status || 'Activo';
+    const roleName = input.role;
+    const matchedRole = roles.find(
+      (r) => normalizeComparable(r.nombre) === normalizeComparable(roleName),
+    );
+    const roleId = matchedRole?.id_roles ?? null;
+    const backendRoleName = matchedRole?.nombre || roleName;
 
-    const payload: any = {
-      nombre: formData.nombre ?? null,
-      apellido: formData.apellido ?? null,
-      correo: formData.email ?? null,
-      telefono: formData.phone ?? null,
-      numero_documento: formData.documentNumber ?? null,
-      tipo_documento: formData.documentType ?? null,
+    const payload: Record<string, unknown> = {
+      nombre: input.nombre.trim(),
+      apellido: input.apellido.trim(),
+      correo: normalizeClientEmail(input.email),
+      telefono: sanitizePhoneInput(input.phone),
+      numero_documento: sanitizeDocumentInput(input.documentNumber),
+      tipo_documento: normalizeDocumentType(input.documentType),
       id_roles: roleId,
-      rol_nombre: roleName,
-      perfil: roleName === 'Cliente' ? 'cliente' : 'empleado',
+      rol_nombre: backendRoleName,
+      perfil: normalizeComparable(roleName).includes('cliente') ? 'cliente' : 'empleado',
       estado: estadoString === 'Activo',
     };
 
     if (!isEdit) {
-      if (!formData.password) {
-        toast.error('Debe ingresar una contraseña para el nuevo usuario');
-        return;
-      }
-      payload.contrasena = formData.password;
-    } else if (formData.password) {
-      payload.contrasena = formData.password;
+      payload.contrasena = input.password;
     }
 
-    if (isEdit && selectedItem) {
-      const idUsuario = selectedItem.id_usuarios || selectedItem.id;
-      const previousUsers = users;
-
-      const updatedLocal = mapearUsuarioBackend({
-        ...selectedItem,
-        id_usuarios: idUsuario,
-        nombre: payload.nombre,
-        apellido: payload.apellido,
-        correo: payload.correo,
-        telefono: payload.telefono,
-        numero_documento: payload.numero_documento,
-        tipo_documento: payload.tipo_documento,
-        rol_nombre: payload.rol_nombre,
-        estado: payload.estado,
-        fecha_creacion: selectedItem.fecha_creacion,
-      });
-
-      setUsers((prev) => prev.map((u) => (u.id === selectedItem.id ? updatedLocal : u)));
-      setIsEditModalOpen(false);
-      setFormData({});
-      setSelectedItem(null);
-
-      try {
+    setIsSaving(true);
+    try {
+      if (isEdit && selectedItem) {
+        const idUsuario = selectedItem.id_usuarios || selectedItem.id;
         await usersAPI.update(idUsuario, payload);
         toast.success('Usuario actualizado correctamente');
-        void cargarUsuarios();
-      } catch (err: any) {
-        setUsers(previousUsers);
-        toast.error(err?.message || 'Error al guardar el usuario');
+        setIsEditModalOpen(false);
+        resetFormState();
+      } else {
+        const resp: any = await usersAPI.create(payload);
+        if (resp?.emailSent) {
+          toast.success(
+            resp?.message ||
+              'Usuario creado. Las credenciales se enviaron al correo del usuario.',
+          );
+        } else {
+          toast.warning(
+            resp?.message ||
+              'Usuario creado, pero no se pudo enviar el correo con la contraseña. Verifica SMTP en el servidor.',
+          );
+        }
+        setIsCreateModalOpen(false);
+        resetFormState();
       }
-
-      return;
-    }
-
-    // CREATE
-    setIsCreateModalOpen(false);
-    setFormData({});
-
-    try {
-      await usersAPI.create(payload);
-      toast.success('Usuario creado correctamente');
-      void cargarUsuarios();
+      await cargarUsuarios();
     } catch (err: any) {
-      toast.error(err?.message || 'Error al crear el usuario');
+      toast.error(err?.message || 'Error al guardar el usuario');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -433,75 +661,132 @@ export function UsersManagement() {
 
   const columns = ['Nombre', 'Email', 'Documento', 'Tipo Documento', 'Rol', 'Estado', 'Teléfono', 'Acciones'];
 
-  const renderForm = (isEdit: boolean) => (
-    <div className="space-y-6 max-h-96 overflow-y-auto">
+  const passwordChecks = getClientPasswordRequirementChecks(formData.password || '');
+
+  const renderForm = (isEdit: boolean) => {
+    const formMode = isEdit ? 'edit' : 'create';
+
+    return (
+    <div className="space-y-6 max-h-[min(70vh,520px)] overflow-y-auto pr-1">
       <div className="space-y-4">
-        <h4 className="font-medium text-gray-900">Información Básica</h4>
+        <h4 className="font-medium text-green-900">Información básica</h4>
+        <p className="text-xs text-gray-500">Los campos marcados con * son obligatorios.</p>
+        {!isEdit ? (
+          <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-100 rounded-md px-3 py-2">
+            Al crear la cuenta, la contraseña se enviará al correo del usuario. En el mensaje se
+            indicará que puede cambiarla cuando quiera desde <strong>Mi Perfil → Seguridad</strong>.
+          </p>
+        ) : null}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <Label htmlFor={isEdit ? 'edit-nombre' : 'create-nombre'}>Nombre</Label>
+            <Label htmlFor={isEdit ? 'edit-nombre' : 'create-nombre'}>Nombre *</Label>
             <Input
               id={isEdit ? 'edit-nombre' : 'create-nombre'}
               value={formData.nombre || ''}
-              onChange={(e) => setFormData({ ...formData, nombre: e.target.value })}
+              maxLength={USER_NAME_LIMITS.max}
+              onChange={(e) =>
+                updateFormField('nombre', sanitizeUserNameInput(e.target.value), formMode)
+              }
+              onBlur={() => blurField('nombre', formMode)}
               placeholder="Ingrese el nombre"
+              className={inputClass(!!formErrors.nombre)}
             />
+            <FieldError message={formErrors.nombre} />
           </div>
           <div>
-            <Label htmlFor={isEdit ? 'edit-apellido' : 'create-apellido'}>Apellido</Label>
+            <Label htmlFor={isEdit ? 'edit-apellido' : 'create-apellido'}>Apellido *</Label>
             <Input
               id={isEdit ? 'edit-apellido' : 'create-apellido'}
               value={formData.apellido || ''}
-              onChange={(e) => setFormData({ ...formData, apellido: e.target.value })}
+              maxLength={USER_NAME_LIMITS.max}
+              onChange={(e) =>
+                updateFormField('apellido', sanitizeUserNameInput(e.target.value), formMode)
+              }
+              onBlur={() => blurField('apellido', formMode)}
               placeholder="Ingrese el apellido"
+              className={inputClass(!!formErrors.apellido)}
             />
+            <FieldError message={formErrors.apellido} />
           </div>
 
           <div>
-            <Label htmlFor={isEdit ? 'edit-email' : 'create-email'}>Email</Label>
+            <Label htmlFor={isEdit ? 'edit-email' : 'create-email'}>Correo electrónico *</Label>
             <Input
               id={isEdit ? 'edit-email' : 'create-email'}
               type="email"
               value={formData.email || ''}
-              onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              maxLength={254}
+              onChange={(e) => updateFormField('email', e.target.value, formMode)}
+              onBlur={() =>
+                blurField('email', formMode, [], (current) => ({
+                  ...current,
+                  email: normalizeClientEmail(current.email || ''),
+                }))
+              }
               placeholder="correo@ejemplo.com"
+              className={inputClass(!!formErrors.email)}
             />
+            <FieldError message={formErrors.email} />
           </div>
           <div>
-            <Label htmlFor={isEdit ? 'edit-phone' : 'create-phone'}>Teléfono</Label>
+            <Label htmlFor={isEdit ? 'edit-phone' : 'create-phone'}>Teléfono *</Label>
             <Input
               id={isEdit ? 'edit-phone' : 'create-phone'}
               value={formData.phone || ''}
-              onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              maxLength={20}
+              onChange={(e) =>
+                updateFormField('phone', sanitizePhoneInput(e.target.value), formMode)
+              }
+              onBlur={() => blurField('phone', formMode)}
               placeholder="+57 300 000 0000"
+              className={inputClass(!!formErrors.phone)}
             />
+            <FieldError message={formErrors.phone} />
           </div>
 
           <div>
-            <Label htmlFor={isEdit ? 'edit-role' : 'create-role'}>Rol</Label>
-            <Select value={formData.role || ''} onValueChange={(value) => setFormData({ ...formData, role: value })}>
-              <SelectTrigger>
+            <Label htmlFor={isEdit ? 'edit-role' : 'create-role'}>Rol *</Label>
+            <Select
+              value={formData.role || ''}
+              onValueChange={(value) => {
+                updateFormField('role', value, formMode);
+                markTouched('role');
+                touchField('role', formMode, { ...formData, role: value });
+              }}
+            >
+              <SelectTrigger className={inputClass(!!formErrors.role)}>
                 <SelectValue placeholder="Seleccionar rol" />
               </SelectTrigger>
               <SelectContent>
-                {roles
+                {[...new Set(
+                  roles
                   .filter((rol) => rol.estado !== false)
-                  .map((rol) => (
-                    <SelectItem key={rol.id_roles} value={rol.nombre}>
-                      {rol.nombre}
+                  .map((rol) => normalizeRoleLabel(rol.nombre)),
+                )]
+                  .map((roleLabel) => (
+                    <SelectItem key={roleLabel} value={roleLabel}>
+                      {roleLabel}
                     </SelectItem>
                   ))}
               </SelectContent>
             </Select>
+            <FieldError message={formErrors.role} />
           </div>
 
           <div>
-            <Label htmlFor={isEdit ? 'edit-documentType' : 'create-documentType'}>Tipo de Documento</Label>
+            <Label htmlFor={isEdit ? 'edit-documentType' : 'create-documentType'}>Tipo de documento *</Label>
             <Select
               value={formData.documentType || ''}
-              onValueChange={(value) => setFormData({ ...formData, documentType: value })}
+              onValueChange={(value) => {
+                updateFormField('documentType', value, formMode, ['documentNumber']);
+                markTouched('documentType');
+                touchFields(['documentType', 'documentNumber'], formMode, {
+                  ...formData,
+                  documentType: value,
+                });
+              }}
             >
-              <SelectTrigger>
+              <SelectTrigger className={inputClass(!!formErrors.documentType || !!formErrors.documentNumber)}>
                 <SelectValue placeholder="Seleccionar tipo" />
               </SelectTrigger>
               <SelectContent>
@@ -512,26 +797,42 @@ export function UsersManagement() {
                 <SelectItem value="NIT">NIT</SelectItem>
               </SelectContent>
             </Select>
+            <FieldError message={formErrors.documentType} />
           </div>
 
           <div>
-            <Label htmlFor={isEdit ? 'edit-documentNumber' : 'create-documentNumber'}>Número de Documento</Label>
+            <Label htmlFor={isEdit ? 'edit-documentNumber' : 'create-documentNumber'}>Número de documento *</Label>
             <Input
               id={isEdit ? 'edit-documentNumber' : 'create-documentNumber'}
               type="text"
               value={formData.documentNumber || ''}
-              onChange={(e) => setFormData({ ...formData, documentNumber: e.target.value })}
+              maxLength={20}
+              onChange={(e) =>
+                updateFormField(
+                  'documentNumber',
+                  sanitizeDocumentInput(e.target.value),
+                  formMode,
+                  ['documentType'],
+                )
+              }
+              onBlur={() => blurField('documentNumber', formMode, ['documentType'])}
               placeholder="Ingrese el número de documento"
+              className={inputClass(!!formErrors.documentNumber)}
             />
+            <FieldError message={formErrors.documentNumber} />
           </div>
 
           <div>
-            <Label htmlFor={isEdit ? 'edit-status' : 'create-status'}>Estado</Label>
+            <Label htmlFor={isEdit ? 'edit-status' : 'create-status'}>Estado *</Label>
             <Select
               value={formData.status || 'Activo'}
-              onValueChange={(value) => setFormData({ ...formData, status: value })}
+              onValueChange={(value) => {
+                updateFormField('status', value, formMode);
+                markTouched('status');
+                touchField('status', formMode, { ...formData, status: value });
+              }}
             >
-              <SelectTrigger>
+              <SelectTrigger className={inputClass(!!formErrors.status)}>
                 <SelectValue placeholder="Seleccionar estado" />
               </SelectTrigger>
               <SelectContent>
@@ -539,50 +840,104 @@ export function UsersManagement() {
                 <SelectItem value="Inactivo">Inactivo</SelectItem>
               </SelectContent>
             </Select>
+            <FieldError message={formErrors.status} />
           </div>
 
-          <div>
-            <Label htmlFor={isEdit ? 'edit-password' : 'create-password'}>Contraseña</Label>
-            <Input
-              id={isEdit ? 'edit-password' : 'create-password'}
-              type="password"
-              value={formData.password || ''}
-              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-              placeholder={isEdit ? 'Opcional (dejar vacío para no cambiar)' : 'Ingrese una contraseña'}
-            />
-          </div>
+          {!isEdit ? (
+            <>
+              <div className="md:col-span-2">
+                <Label htmlFor="create-password">Contraseña *</Label>
+                <Input
+                  id="create-password"
+                  type="password"
+                  value={formData.password || ''}
+                  maxLength={64}
+                  onChange={(e) =>
+                    updateFormField('password', e.target.value, formMode, ['confirmPassword'])
+                  }
+                  onBlur={() => blurField('password', formMode, ['confirmPassword'])}
+                  placeholder="Contraseña segura"
+                  className={inputClass(!!formErrors.password)}
+                />
+                <FieldError message={formErrors.password} />
+                <ul className="mt-2 space-y-1">
+                  {passwordChecks.map((check) => (
+                    <li
+                      key={check.id}
+                      className={`text-xs ${check.met ? 'text-green-700' : 'text-gray-500'}`}
+                    >
+                      {check.met ? '✓' : '○'} {check.label}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="md:col-span-2">
+                <Label htmlFor="create-confirm-password">Confirmar contraseña *</Label>
+                <Input
+                  id="create-confirm-password"
+                  type="password"
+                  value={formData.confirmPassword || ''}
+                  maxLength={64}
+                  onChange={(e) =>
+                    updateFormField('confirmPassword', e.target.value, formMode, ['password'])
+                  }
+                  onBlur={() => blurField('confirmPassword', formMode, ['password'])}
+                  placeholder="Repita la contraseña"
+                  className={inputClass(!!formErrors.confirmPassword)}
+                />
+                <FieldError message={formErrors.confirmPassword} />
+              </div>
+            </>
+          ) : (
+            <div className="md:col-span-2">
+              <p className="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                La contraseña <strong>no se puede modificar</strong> al editar el usuario. Si debe
+                cambiarla, el propio usuario puede hacerlo cuando quiera en{' '}
+                <strong>Mi Perfil → Seguridad</strong>.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="flex justify-end space-x-2 pt-4 border-t">
         <Button
           variant="outline"
+          disabled={isSaving}
           onClick={() => {
             setIsCreateModalOpen(false);
             setIsEditModalOpen(false);
-            setFormData({});
-            setSelectedItem(null);
+            resetFormState();
           }}
         >
           Cancelar
         </Button>
-        <Button onClick={() => void handleSave()} disabled={loading}>
+        <Button onClick={() => void handleSave()} disabled={loading || isSaving} className="bg-green-600 hover:bg-green-700">
           <Save className="w-4 h-4 mr-2" />
-          Guardar
+          {isSaving ? 'Guardando…' : 'Guardar'}
         </Button>
       </div>
     </div>
-  );
+    );
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 min-w-0 w-full max-w-full">
+      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} className="space-y-1">
+        <h1 className="text-2xl font-semibold text-green-800">Gestión de usuarios</h1>
+        <p className="text-gray-600 text-sm">
+          Administra cuentas del sistema, roles, documentos y estado de acceso.
+        </p>
+      </motion.div>
+
       {/* Header Actions */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0"
+        className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between min-w-0"
       >
-        <div className="flex flex-col gap-3 w-full sm:w-auto">
+        <div className="flex flex-col gap-3 w-full min-w-0 lg:flex-1">
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
           <motion.div
             initial={{ opacity: 0, x: -20 }}
@@ -695,41 +1050,59 @@ export function UsersManagement() {
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ delay: 0.15 }}
-          className="flex items-center space-x-2"
+          className="flex shrink-0 items-center space-x-2 self-start"
         >
           {canCreateUser && (
-            <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
-              <DialogTrigger asChild>
-                <Button onClick={openCreate} className="bg-green-600 hover:bg-green-700">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Crear Usuarios
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Crear Usuarios</DialogTitle>
-                  <DialogDescription>Complete los campos para crear un nuevo usuario.</DialogDescription>
-                </DialogHeader>
-                {renderForm(false)}
-              </DialogContent>
-            </Dialog>
+            <>
+              <Button onClick={openCreate} className="bg-green-600 hover:bg-green-700">
+                <Plus className="w-4 h-4 mr-2" />
+                Crear usuario
+              </Button>
+              <Dialog
+                open={isCreateModalOpen}
+                onOpenChange={(open) => {
+                  setIsCreateModalOpen(open);
+                  if (!open) resetFormState();
+                }}
+              >
+                <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
+                  <DialogHeader>
+                    <DialogTitle className="text-green-800">Crear usuario</DialogTitle>
+                    <DialogDescription>
+                      Complete los campos para registrar un nuevo usuario en el sistema.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {renderForm(false)}
+                </DialogContent>
+              </Dialog>
+            </>
           )}
         </motion.div>
       </motion.div>
 
       {/* Data Table */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-        <Card className="shadow-md border-green-100">
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }}
+        className="min-w-0 w-full"
+      >
+        <Card className="shadow-md border-green-100 overflow-hidden">
           <CardContent className="p-0">
-            <div>
-              <Table>
+            <div className="overflow-x-auto">
+              <Table className="min-w-[920px]">
                 <TableHeader>
                   <TableRow className="bg-green-50 hover:bg-green-50">
-                    {columns.map((column) => (
-                      <TableHead key={column} className="text-green-800">
-                        {column}
-                      </TableHead>
-                    ))}
+                    <TableHead className="text-green-800 min-w-[120px] max-w-[160px]">Nombre</TableHead>
+                    <TableHead className="text-green-800 min-w-[160px] max-w-[220px]">Email</TableHead>
+                    <TableHead className="text-green-800 min-w-[100px]">Documento</TableHead>
+                    <TableHead className="text-green-800 min-w-[90px]">Tipo Documento</TableHead>
+                    <TableHead className="text-green-800 min-w-[100px]">Rol</TableHead>
+                    <TableHead className="text-green-800 w-[90px]">Estado</TableHead>
+                    <TableHead className="text-green-800 min-w-[110px] max-w-[140px]">Teléfono</TableHead>
+                    <TableHead className="text-green-800 sticky right-0 z-10 bg-green-50 min-w-[168px]">
+                      Acciones
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -741,22 +1114,32 @@ export function UsersManagement() {
                     </TableRow>
                   ) : paginatedData.length > 0 ? (
                     paginatedData.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-medium">{item.name}</TableCell>
-                        <TableCell>{item.email}</TableCell>
-                        <TableCell>{item.numero_documento}</TableCell>
+                      <TableRow key={item.id} className="group">
+                        <TableCell className="font-medium max-w-[160px] truncate" title={item.name}>
+                          {item.name}
+                        </TableCell>
+                        <TableCell className="max-w-[220px] truncate" title={item.email}>
+                          {item.email}
+                        </TableCell>
+                        <TableCell className="max-w-[120px] truncate" title={item.numero_documento}>
+                          {item.numero_documento}
+                        </TableCell>
                         <TableCell>{item.tipo_documento}</TableCell>
                         <TableCell>
-                          <Badge variant="outline">{item.role}</Badge>
+                          <Badge variant="outline" className="whitespace-nowrap">
+                            {item.role}
+                          </Badge>
                         </TableCell>
                         <TableCell>
                           <Badge className={item.status === 'Activo' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}>
                             {item.status}
                           </Badge>
                         </TableCell>
-                        <TableCell>{item.phone}</TableCell>
-                        <TableCell>
-                          <div className="flex space-x-2">
+                        <TableCell className="max-w-[140px] truncate" title={item.phone}>
+                          {item.phone}
+                        </TableCell>
+                        <TableCell className="sticky right-0 z-10 bg-white group-hover:bg-muted/50">
+                          <div className="flex flex-nowrap gap-1">
                             <Button size="sm" variant="outline" onClick={() => openView(item)}>
                               <Eye className="w-4 h-4" />
                             </Button>
@@ -790,7 +1173,8 @@ export function UsersManagement() {
                                   <AlertDialogHeader>
                                     <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
                                     <AlertDialogDescription>
-                                      Esta acción no se puede deshacer. Se eliminará permanentemente el usuario.
+                                      Esta acción no se puede deshacer. Se eliminará permanentemente al usuario{' '}
+                                      <span className="font-semibold">{item.name}</span> ({item.email}).
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
@@ -825,7 +1209,7 @@ export function UsersManagement() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-6 px-4"
+            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-6 px-2 sm:px-4 min-w-0"
           >
             <div className="text-sm text-gray-600">
               Mostrando {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, filteredUsers.length)} de{' '}
@@ -883,10 +1267,16 @@ export function UsersManagement() {
       </motion.div>
 
       {/* Edit Modal */}
-      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="max-w-2xl">
+      <Dialog
+        open={isEditModalOpen}
+        onOpenChange={(open) => {
+          setIsEditModalOpen(open);
+          if (!open) resetFormState();
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Editar Usuarios</DialogTitle>
+            <DialogTitle className="text-green-800">Editar usuario</DialogTitle>
             <DialogDescription>Modifique los campos que desea actualizar.</DialogDescription>
           </DialogHeader>
           {renderForm(true)}

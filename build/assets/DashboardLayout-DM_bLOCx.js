@@ -1,0 +1,1 @@
+import{j as e}from"./index-DQet6Hel.js";function t({children:s,className:a=""}){return e.jsx("div",{className:`p-4 lg:p-6 xl:p-8 space-y-6 lg:space-y-8 min-h-screen bg-white ${a}`,children:s})}function c({children:s,className:a=""}){return e.jsx("div",{className:`space-y-4 lg:space-y-6 ${a}`,children:s})}export{t as D,c as a};

@@ -6,11 +6,18 @@ import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './ui/carousel';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { fincasAPI, programacionAPI, rutasAPI, type Finca, type Programacion, type Ruta } from '../services/api';
+import { authAPI, fincasAPI, programacionAPI, rutasAPI, type Finca, type Programacion, type Ruta } from '../services/api';
+import { filterFincasActivas } from '../utils/fincaActiva';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import {
+  marcarRecordatorioDocumentoPerfil,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+  titularTieneDocumentoValidoParaReserva,
+} from '../utils/documentIdentityValidation';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
-import { useAuth } from '../App';
+import { formatTimeDisplay } from '../utils/dateTimeDisplay';
+import { useAuth } from '../context/AuthContext';
 import { motion } from 'motion/react';
 import heroImage from '../assets/hero.webp';
 
@@ -84,7 +91,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
       .getPublicas({ limit: 4, cacheTtlMs: 5 * 60_000 })
       .then((fincasData) => {
         if (cancelled) return;
-        const activas = Array.isArray(fincasData) ? fincasData.filter((f) => f.estado !== false) : [];
+        const activas = filterFincasActivas(Array.isArray(fincasData) ? fincasData : []);
         setHomeFincas(activas.slice(0, 4));
       })
       .catch(() => {
@@ -141,8 +148,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
     if (!d) return String(value);
     return d.toLocaleDateString('es-CO', { weekday: 'short', year: 'numeric', month: 'short', day: '2-digit' });
   };
-
-  const handleProgrammedBookingClick = (programacion: Programacion) => {
+  const handleProgrammedBookingClick = async (programacion: Programacion) => {
     if (!user) {
       onViewChange('home');
       setTimeout(() => {
@@ -154,6 +160,14 @@ export function HomePage({ onViewChange }: HomePageProps) {
 
     if (user.role !== 'client') {
       toast.error('Solo los clientes pueden reservar cupos desde el home.');
+      return;
+    }
+
+    const profileRes = await authAPI.getProfile().catch(() => null);
+    if (!titularTieneDocumentoValidoParaReserva(profileRes?.perfil, user)) {
+      marcarRecordatorioDocumentoPerfil();
+      toast.error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+      onViewChange('profile');
       return;
     }
 
@@ -257,7 +271,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
                             </div>
                             <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-gray-700">
                               <span className="text-xs text-gray-500 block">Horario</span>
-                              <span className="font-medium">{p.hora_salida || 'Por definir'}</span>
+                              <span className="font-medium">{formatTimeDisplay(p.hora_salida, 'Por definir')}</span>
                             </div>
                             <div className="rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-gray-700">
                               <span className="text-xs text-gray-500 block">Capacidad</span>

@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator, 
   DropdownMenuTrigger 
 } from './ui/dropdown-menu';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 
 interface PublicNavigationProps {
   currentView: string;

@@ -14,8 +14,9 @@ import {
   Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import {
+  authAPI,
   reservasAPI,
   rutasAPI,
   extractRutaServiciosPredefinidos,
@@ -27,10 +28,18 @@ import {
   type VentaReserva,
 } from '../services/api';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
+import {
+  documentoTitularCompletoValidoParaReserva,
+  extraerDocumentoTitularDesdePerfil,
+  MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL,
+} from '../utils/documentIdentityValidation';
 import { montoPagoUnicoSalidaProgramada } from '../utils/clientPaymentFlow';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import { formatDateDisplay, formatDateTimeDisplay, formatTimeDisplay } from '../utils/dateTimeDisplay';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { OccitoursPaymentBankDetails } from './OccitoursPaymentBankDetails';
+import { OCCITOURS_PAYMENT_INFO } from '../utils/occitoursPaymentBankInfo';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
@@ -60,6 +69,8 @@ interface CompanionFormState {
 interface ProgrammedRouteBookingModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Redirige a Mi Perfil cuando falta documento del titular. */
+  onGoToProfile?: () => void;
   programacion: Programacion | null;
   ruta?: Ruta | null;
   onSuccess?: () => Promise<void> | void;
@@ -78,12 +89,6 @@ const ALLOWED_PROOF_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'imag
 const MAX_PROOF_FILE_NAME = 180;
 const MAX_METODO_PAGO = 40;
 const MAX_NUMERO_TRANSACCION = 80;
-const OCCITOURS_PAYMENT_INFO = {
-  titular: 'Occitours S.A.S',
-  nequiNumero: '3001234567',
-  bancolombiaTipoCuenta: 'Ahorros',
-  bancolombiaNumeroCuenta: '12345678901',
-};
 
 function normalizeMultilineText(value?: string | null): string {
   const t = String(value || '').trim();
@@ -113,14 +118,7 @@ function parseApiDate(value?: string | null): Date | null {
 }
 
 function formatDate(value?: string | null): string {
-  const parsed = parseApiDate(value);
-  if (!parsed) return 'Por definir';
-  return parsed.toLocaleDateString('es-CO', {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-  });
+  return formatDateDisplay(value, { fallback: 'Por definir' });
 }
 
 function formatCurrency(value?: number | string | null): string {
@@ -159,6 +157,7 @@ function resolveAmountDue(checkout: CreatedCheckoutState | null, estimate: numbe
 export function ProgrammedRouteBookingModal({
   isOpen,
   onClose,
+  onGoToProfile,
   programacion,
   ruta,
   onSuccess,
@@ -390,8 +389,15 @@ export function ProgrammedRouteBookingModal({
         toast.error(`Completa nombre y apellido del acompañante ${i + 1}.`);
         return;
       }
-      if (!String(companion.numero_documento).trim()) {
-        toast.error(`El número de documento del acompañante ${i + 1} es obligatorio.`);
+      if (
+        !documentoTitularCompletoValidoParaReserva(
+          companion.tipo_documento,
+          companion.numero_documento,
+        )
+      ) {
+        toast.error(
+          `El documento del acompañante ${i + 1} no es válido (tipo y número reales, sin solo “-”).`,
+        );
         return;
       }
     }
@@ -463,6 +469,21 @@ export function ProgrammedRouteBookingModal({
 
   const handleRegisterPayment = async () => {
     if (!createdCheckout) return;
+
+    if (!user || user.role !== 'client') {
+      toast.error('No se puede registrar el pago desde esta cuenta.');
+      return;
+    }
+
+    const profilePago = await authAPI.getProfile().catch(() => null);
+    const { tipo: tipoPago, numero: docPagoNumero } = extraerDocumentoTitularDesdePerfil(
+      profilePago?.perfil,
+      user,
+    );
+    if (!documentoTitularCompletoValidoParaReserva(tipoPago, docPagoNumero)) {
+      toast.error(MENSAJE_ACTUALIZAR_DOCUMENTO_PERFIL);
+      return;
+    }
 
     if (amountDue <= 0) {
       toast.error('Esta reserva no tiene saldo pendiente para registrar.');
@@ -646,9 +667,11 @@ export function ProgrammedRouteBookingModal({
       .filter(Boolean)
       .join(' ');
     const cuposTotales = Number(programacion.cupos_totales ?? 0);
-    const lugarEncuentroText = String(programacion.lugar_encuentro || '').trim() || 'Se confirma al cliente';
-    const horaSalida = String(programacion.hora_salida || '').trim() || null;
-    const horaRegreso = String(programacion.hora_regreso || '').trim() || null;
+      const lugarEncuentroText = String(programacion.lugar_encuentro || '').trim() || 'Se confirma al cliente';
+    const horaSalidaRaw = String(programacion.hora_salida || '').trim() || null;
+    const horaRegresoRaw = String(programacion.hora_regreso || '').trim() || null;
+    const horaSalida = horaSalidaRaw ? formatTimeDisplay(horaSalidaRaw) : null;
+    const horaRegreso = horaRegresoRaw ? formatTimeDisplay(horaRegresoRaw) : null;
     const horarioViaje =
       horaSalida && horaRegreso
         ? `Desde ${horaSalida} hasta ${horaRegreso}`
@@ -801,6 +824,22 @@ export function ProgrammedRouteBookingModal({
                 </CardHeader>
                 <CardContent>
                   <p className="text-gray-700 leading-relaxed text-[15px] whitespace-pre-line">{descripcionRuta}</p>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {normalizeMultilineText(ruta?.recomendaciones_participantes) ? (
+              <Card className="overflow-hidden border-teal-200 shadow-md bg-teal-50/50">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-teal-900">Recomendaciones para tu salida</CardTitle>
+                  <CardDescription className="text-teal-900/80">
+                    Léelas antes del día del tour. Si hay cambios de última hora, OCCITOUR te avisará por los canales de contacto.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-gray-800 leading-relaxed text-[15px] whitespace-pre-wrap">
+                    {ruta?.recomendaciones_participantes}
+                  </p>
                 </CardContent>
               </Card>
             ) : null}
@@ -1220,6 +1259,8 @@ export function ProgrammedRouteBookingModal({
                     </div>
                   </div>
 
+                  <OccitoursPaymentBankDetails />
+
                   <div
                     className={`border-2 rounded-xl p-6 ${
                       paymentData.metodo_pago === 'QR'
@@ -1267,7 +1308,7 @@ export function ProgrammedRouteBookingModal({
                           <div className="w-64 space-y-2 text-left">
                             <div>
                               <p className="text-xs text-gray-600">Banco</p>
-                              <p className="font-medium">Bancolombia</p>
+                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaBankName}</p>
                             </div>
                             <div>
                               <p className="text-xs text-gray-600">Tipo de cuenta</p>
@@ -1280,6 +1321,13 @@ export function ProgrammedRouteBookingModal({
                             <div>
                               <p className="text-xs text-gray-600">Titular</p>
                               <p className="font-medium">{OCCITOURS_PAYMENT_INFO.titular}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-600">Documento del titular</p>
+                              <p className="font-medium font-mono text-sm">
+                                {OCCITOURS_PAYMENT_INFO.beneficiarioTipoDocumento}{' '}
+                                {OCCITOURS_PAYMENT_INFO.beneficiarioNumeroDocumento}
+                              </p>
                             </div>
                           </div>
                         )}

@@ -30,6 +30,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { Textarea } from './ui/textarea';
+import { formatDateDisplay } from '../utils/dateTimeDisplay';
 
 type ViewMode = 'list' | 'detail';
 
@@ -44,10 +45,7 @@ function formatCurrency(value?: number | string | null) {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString('es-CO');
+  return formatDateDisplay(value);
 }
 
 function getSaleType(reserva: Reserva | null) {

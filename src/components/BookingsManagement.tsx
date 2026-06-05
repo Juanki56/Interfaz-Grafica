@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   ArrowLeft,
+  Ban,
   CalendarDays,
   CheckCircle,
   DollarSign,
@@ -12,6 +13,7 @@ import {
   Filter,
   MapPin,
   Plus,
+  Receipt,
   RefreshCw,
   Search,
   Trash2,
@@ -42,6 +44,13 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -52,7 +61,24 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
 import { Calendar as BookingCalendar } from './ui/calendar';
-import { programacionAPI, reservasAPI, clientesAPI, rutasAPI, fincasAPI } from '../services/api';
+import {
+  programacionAPI,
+  reservasAPI,
+  clientesAPI,
+  rutasAPI,
+  fincasAPI,
+  pagosAPI,
+  type PagoCliente,
+} from '../services/api';
+import {
+  enrichReservaRouteContext,
+  resolveRouteIdFromReservaPayload,
+  resolveRouteNameFromReservaPayload,
+} from '../utils/reservaRouteDisplay';
+import {
+  resolveReservaProductoNombre,
+  resolveReservaServicioEtiqueta,
+} from '../utils/reservaProductoDisplay';
 import {
   addDays,
   durationDaysFromRutaDetail,
@@ -64,6 +90,20 @@ import { staffReservaPaymentStatusForUi } from '../utils/clientPaymentFlow';
 import { clienteProgramacionPrecioFila } from '../utils/programacionLinePricing';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
+import {
+  BookingClientPicker,
+  BookingFincaPicker,
+  BookingProgramacionPicker,
+  BookingRoutePicker,
+} from './booking/BookingSearchPickers';
+import {
+  formatDateDisplay,
+  formatDateTimeDisplay,
+  formatTimeDisplay,
+  toCalendarYmd,
+} from '../utils/dateTimeDisplay';
+import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
+import { normalizeReceiptUrl } from '../utils/receiptProof';
 
 type StaffView = 'list' | 'create' | 'edit' | 'detail';
 
@@ -73,9 +113,15 @@ type BookingRecord = {
   clientName: string;
   clientEmail: string;
   clientPhone: string;
+  clientDocument: string;
   packageName: string;
+  productName: string;
+  serviceTypeLabel: string;
   serviceTypeForm: 'ruta' | 'finca';
   date: string;
+  bookingDateRaw: string;
+  createdAtLabel: string;
+  createdAtMs: number;
   participants: number;
   adults: number;
   children: number;
@@ -86,7 +132,84 @@ type BookingRecord = {
   paidAmount: number;
   pendingAmount: number;
   specialRequests: string;
+  cancellationReason?: string;
 };
+
+type BookingSortField = 'created' | 'bookingDate' | 'id' | 'client' | 'total' | 'status';
+type SortDirection = 'asc' | 'desc';
+
+const toYmdOnly = (value?: string | null): string => toCalendarYmd(value);
+
+const parseBookingTimestamp = (
+  fechaCreacion?: string | null,
+  fechaReserva?: string | null,
+  idReserva?: number | string | null,
+): number => {
+  for (const candidate of [fechaCreacion, fechaReserva]) {
+    if (!candidate) continue;
+    const raw = String(candidate).trim();
+    const parsed = Date.parse(raw.includes('T') ? raw : `${raw.slice(0, 10)}T12:00:00`);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  const idNum = Number(idReserva);
+  return Number.isFinite(idNum) && idNum > 0 ? idNum : 0;
+};
+
+const matchesBookingDateRange = (ymd: string, from: string, to: string): boolean => {
+  if (!from && !to) return true;
+  if (!ymd) return false;
+  if (from && ymd < from) return false;
+  if (to && ymd > to) return false;
+  return true;
+};
+
+const matchesServiceTypeFilter = (booking: BookingRecord, filter: string): boolean => {
+  if (filter === 'all') return true;
+  const label = booking.serviceTypeLabel.toLowerCase();
+  if (filter === 'ruta') return label.includes('ruta') || booking.serviceTypeForm === 'ruta';
+  if (filter === 'finca') return label.includes('finca') || booking.serviceTypeForm === 'finca';
+  if (filter === 'servicio') return label.includes('servicio');
+  if (filter === 'reserva') {
+    return (
+      label === 'reserva' ||
+      (!label.includes('ruta') && !label.includes('finca') && !label.includes('servicio'))
+    );
+  }
+  return true;
+};
+
+const compareBookings = (
+  a: BookingRecord,
+  b: BookingRecord,
+  field: BookingSortField,
+  direction: SortDirection,
+): number => {
+  let cmp = 0;
+  switch (field) {
+    case 'id':
+      cmp = Number(a.id) - Number(b.id);
+      break;
+    case 'client':
+      cmp = a.clientName.localeCompare(b.clientName, 'es', { sensitivity: 'base' });
+      break;
+    case 'bookingDate':
+      cmp = a.bookingDateRaw.localeCompare(b.bookingDateRaw, 'es');
+      break;
+    case 'total':
+      cmp = a.total - b.total;
+      break;
+    case 'status':
+      cmp = a.status.localeCompare(b.status, 'es', { sensitivity: 'base' });
+      break;
+    case 'created':
+    default:
+      cmp = a.createdAtMs - b.createdAtMs;
+      break;
+  }
+  return direction === 'asc' ? cmp : -cmp;
+};
+
+const STAFF_CANCEL_MOTIVO_MIN = 10;
 
 type ClientSummary = {
   id: string;
@@ -143,19 +266,58 @@ const canReservationBeConfirmed = (paymentStatus?: string | null) =>
   ['Parcial', 'Pagado'].includes(normalizePaymentStatus(paymentStatus));
 
 const formatCurrency = (value?: number | string | null) =>
-  `$${Number(value || 0).toLocaleString('es-CO')}`;
+  `${Number(value || 0).toLocaleString('es-CO')}`;
 
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  return String(value).split('T')[0] || '—';
+const bookingClientContactLine = (booking: {
+  clientEmail?: string;
+  clientPhone?: string;
+  clientDocument?: string;
+}) => {
+  const email = String(booking.clientEmail || '').trim();
+  if (email) return email;
+  const phone = String(booking.clientPhone || '').trim();
+  if (phone) return phone;
+  const doc = String(booking.clientDocument || '').trim();
+  if (doc) return doc;
+  return 'Sin datos de contacto';
 };
 
-const formatDateTime = (date?: string | null, time?: string | null) => {
-  const dateLabel = formatDate(date);
-  if (dateLabel === '—') return '—';
-  if (!time) return dateLabel;
-  return `${dateLabel} · ${String(time).slice(0, 5)}`;
-};
+const formatDate = (value?: string | null) => formatDateDisplay(value);
+
+const formatDateTime = (date?: string | null, time?: string | null) =>
+  formatDateTimeDisplay(date, time);
+
+function mergePagosReservaDedupe(pagosLists: PagoCliente[][]): PagoCliente[] {
+  const seen = new Set<number>();
+  const out: PagoCliente[] = [];
+  for (const list of pagosLists) {
+    if (!Array.isArray(list)) continue;
+    for (const p of list) {
+      const id = Number(p?.id_pago);
+      if (!Number.isFinite(id) || id <= 0 || seen.has(id)) continue;
+      seen.add(id);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+function pagoComprobanteRaw(p: PagoCliente): string {
+  return String(
+    p.comprobante_url ||
+      (p as { url_comprobante?: string | null }).url_comprobante ||
+      (p as { comprobante?: string | null }).comprobante ||
+      ''
+  ).trim();
+}
+
+function pagoComprobanteUrl(p: PagoCliente): string | null {
+  return normalizeReceiptUrl(pagoComprobanteRaw(p));
+}
+
+function pagoTieneComprobante(p: PagoCliente): boolean {
+  return Boolean(pagoComprobanteUrl(p));
+}
 
 const fincaDetalleLabel = (item: any) =>
   item?.finca_nombre ||
@@ -165,6 +327,9 @@ const fincaDetalleLabel = (item: any) =>
 
 const rutaProgramacionLabel = (item: any) =>
   item?.ruta_nombre || item?.nombre_ruta || (item?.id_ruta ? `Ruta #${item.id_ruta}` : 'Ruta programada');
+
+
+
 
 const getStatusBadge = (status: string) => {
   const normalized = normalizeReservationStatus(status);
@@ -212,6 +377,7 @@ const EMPTY_FORM = {
   total: 0,
   status: 'Pendiente',
   specialRequests: '',
+  cancellationReason: '',
   checkIn: '',
   checkOut: '',
   nights: 1,
@@ -246,7 +412,12 @@ export function BookingsManagement() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState('');
+  const [paymentFilter, setPaymentFilter] = useState('all');
+  const [serviceTypeFilter, setServiceTypeFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [sortField, setSortField] = useState<BookingSortField>('created');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -254,10 +425,23 @@ export function BookingsManagement() {
   const [isLoadingRouteDetail, setIsLoadingRouteDetail] = useState(false);
   const [isLoadingProgramacionesRuta, setIsLoadingProgramacionesRuta] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isLoadingReservaPagos, setIsLoadingReservaPagos] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deleteCancelMotivo, setDeleteCancelMotivo] = useState('');
+  const [staffCancelDialogOpen, setStaffCancelDialogOpen] = useState(false);
+  const [staffCancelMotivo, setStaffCancelMotivo] = useState('');
+  const [isCancellingStaffReserva, setIsCancellingStaffReserva] = useState(false);
 
   const [selectedBooking, setSelectedBooking] = useState<BookingRecord | null>(null);
   const [reservaDetalle, setReservaDetalle] = useState<any>(null);
+  const [reservaDetallePagos, setReservaDetallePagos] = useState<PagoCliente[]>([]);
+  const [reservaComprobanteDialogOpen, setReservaComprobanteDialogOpen] = useState(false);
+  const [reservaComprobanteViewer, setReservaComprobanteViewer] = useState<{
+    open: boolean;
+    url: string | null;
+    fileName?: string | null;
+    mimeType?: string | null;
+  }>({ open: false, url: null });
   const [detalleRuta, setDetalleRuta] = useState<any>(null);
   const [detalleProgramacionId, setDetalleProgramacionId] = useState('');
   const [detalleOpcionalesSeleccion, setDetalleOpcionalesSeleccion] = useState<Record<number, number>>({});
@@ -385,23 +569,6 @@ export function BookingsManagement() {
     setCompanionDetails([]);
   };
 
-  const resolveRouteIdFromReservaDetalle = (payload: any): number | null => {
-    const candidates = [
-      payload?.id_ruta,
-      payload?.ruta?.id_ruta,
-      payload?.programacion?.id_ruta,
-      payload?.programacion?.ruta?.id_ruta,
-      payload?.programaciones?.[0]?.id_ruta,
-      payload?.programaciones?.[0]?.ruta?.id_ruta,
-      payload?.detalle_programacion?.id_ruta,
-    ];
-    for (const candidate of candidates) {
-      const value = Number(candidate);
-      if (Number.isFinite(value) && value > 0) return value;
-    }
-    return null;
-  };
-
   const resolveProgramacionIdFromReservaDetalle = (payload: any): number | null => {
     const candidates = [
       payload?.id_programacion,
@@ -440,15 +607,27 @@ export function BookingsManagement() {
         const tipoServicio = String(r.tipo_servicio || 'Reserva');
         const serviceTypeForm = tipoServicio.toLowerCase().includes('finca') ? 'finca' : 'ruta';
         const total = Number(r.total ?? r.monto_total ?? 0);
+        const idReserva = r.id_reserva ?? r.id;
+        const bookingDateRaw = toYmdOnly(r.fecha_reserva);
+        const createdAtMs = parseBookingTimestamp(r.fecha_creacion, r.fecha_reserva, idReserva);
+        const createdAtLabel = formatDateDisplay(r.fecha_creacion || r.fecha_reserva, {
+          style: 'numeric',
+        });
         return {
-          id: String(r.id_reserva ?? r.id ?? ''),
+          id: String(idReserva ?? ''),
           clientId: String(r.id_cliente ?? ''),
           clientName: `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim() || 'Cliente',
-          clientEmail: r.cliente_email || r.correo || '',
+          clientEmail: String(r.cliente_email || r.correo || '').trim(),
           clientPhone: r.cliente_telefono || r.telefono || '',
+          clientDocument: [r.tipo_documento, r.numero_documento].filter(Boolean).join(' ').trim(),
           packageName: tipoServicio,
+          productName: resolveReservaProductoNombre(r) || resolveReservaServicioEtiqueta(r),
+          serviceTypeLabel: tipoServicio,
           serviceTypeForm,
-          date: formatDate(r.fecha_reserva),
+          date: bookingDateRaw,
+          bookingDateRaw,
+          createdAtLabel,
+          createdAtMs,
           participants: Number(r.numero_participantes ?? 1),
           adults: 1,
           children: Math.max(0, Number(r.numero_participantes ?? 1) - 1),
@@ -466,8 +645,10 @@ export function BookingsManagement() {
           paidAmount: Number(r.monto_pagado ?? 0),
           pendingAmount: Number(r.saldo_pendiente ?? total),
           specialRequests: r.notas || '',
+          cancellationReason: r.motivo_cancelacion || '',
         };
       });
+      reservasMapeadas.sort((a, b) => compareBookings(a, b, 'created', 'desc'));
       setBookings(reservasMapeadas);
       return reservasMapeadas;
     } catch (error) {
@@ -514,7 +695,7 @@ export function BookingsManagement() {
 
   const loadFincas = async () => {
     try {
-      const data = await fincasAPI.getAll();
+      const data = await fincasAPI.getActivas();
       setFincas(
         (data || []).map((finca: any) => ({
           id: String(finca.id_finca),
@@ -604,42 +785,93 @@ export function BookingsManagement() {
   };
 
   const loadReservaDetail = async (idReserva: number) => {
+    setIsLoadingDetail(true);
+    setIsLoadingReservaPagos(true);
+    let detalle: any = null;
+    let rutaDetalleLoaded: any = null;
+
     try {
-      setIsLoadingDetail(true);
-      const detalle = await reservasAPI.getById(idReserva);
+      const [detalleReserva, pagosReserva] = await Promise.all([
+        reservasAPI.getById(idReserva),
+        pagosAPI.getByReserva(idReserva).catch(() => [] as PagoCliente[]),
+      ]);
+      detalle = detalleReserva;
+
+      const idVenta = Number(
+        detalle?.id_venta ?? detalle?.venta?.id_venta ?? detalle?.idVenta ?? 0,
+      );
+      const pagosVenta =
+        idVenta > 0
+          ? await pagosAPI.getByVenta(idVenta).catch(() => [] as PagoCliente[])
+          : ([] as PagoCliente[]);
+
+      setReservaDetallePagos(mergePagosReservaDedupe([pagosReserva, pagosVenta]));
+
+      const enriched = await enrichReservaRouteContext(detalle);
+      detalle = enriched.detalleEnriched;
+      rutaDetalleLoaded = enriched.rutaDetalle;
       setReservaDetalle(detalle);
+      setDetalleRuta(rutaDetalleLoaded);
+
+      setSelectedBooking((prev) => {
+        if (!prev || String(prev.id) !== String(idReserva)) return prev;
+        const tipoServicio = String(detalle?.tipo_servicio || prev.packageName);
+        const total = Number(detalle?.total ?? detalle?.monto_total ?? prev.total);
+        return {
+          ...prev,
+          packageName: tipoServicio,
+          productName:
+            resolveReservaProductoNombre(detalle) || resolveReservaServicioEtiqueta(detalle) || prev.productName,
+          serviceTypeLabel: tipoServicio,
+          status: normalizeReservationStatus(detalle?.estado ?? prev.status),
+          paymentStatus: staffReservaPaymentStatusForUi({
+            tipoServicio,
+            estadoPago: detalle?.estado_pago,
+            estadoReserva: detalle?.estado,
+            saldoPendiente: detalle?.saldo_pendiente,
+            montoPagado: detalle?.monto_pagado,
+            montoTotal: total,
+          }),
+          paymentMethod: detalle?.metodo_pago || prev.paymentMethod,
+          total,
+          paidAmount: Number(detalle?.monto_pagado ?? prev.paidAmount),
+          pendingAmount: Number(detalle?.saldo_pendiente ?? prev.pendingAmount),
+          specialRequests: detalle?.notas || prev.specialRequests,
+          cancellationReason: detalle?.motivo_cancelacion || prev.cancellationReason,
+        };
+      });
 
       const idProgramacion = resolveProgramacionIdFromReservaDetalle(detalle);
       setDetalleProgramacionId(idProgramacion ? String(idProgramacion) : '');
-
-      const idRuta = resolveRouteIdFromReservaDetalle(detalle);
-      if (!idRuta) {
-        setDetalleRuta(null);
-        setDetalleOpcionalesSeleccion({});
-        return;
-      }
-
-      const ruta = await rutasAPI.getById(idRuta);
-      setDetalleRuta(ruta);
-      setDetalleOpcionalesSeleccion((prev) => {
-        const next: Record<number, number> = {};
-        const opcionales = Array.isArray(ruta?.servicios_opcionales) ? ruta.servicios_opcionales : [];
-        for (const so of opcionales) {
-          const idServicio = Number(so?.id_servicio);
-          if (!Number.isFinite(idServicio) || idServicio <= 0) continue;
-          next[idServicio] = prev[idServicio] ?? 0;
-        }
-        return next;
-      });
     } catch (error) {
       console.error('Error al cargar detalle de reserva:', error);
       toast.error('No se pudo cargar el detalle completo de la reserva.');
       setReservaDetalle(null);
+      setReservaDetallePagos([]);
       setDetalleRuta(null);
       setDetalleOpcionalesSeleccion({});
+      detalle = null;
     } finally {
+      setIsLoadingReservaPagos(false);
       setIsLoadingDetail(false);
     }
+
+    const ruta = rutaDetalleLoaded;
+    if (!ruta) {
+      setDetalleOpcionalesSeleccion({});
+      return;
+    }
+
+    setDetalleOpcionalesSeleccion((prev) => {
+      const next: Record<number, number> = {};
+      const opcionales = Array.isArray(ruta?.servicios_opcionales) ? ruta.servicios_opcionales : [];
+      for (const so of opcionales) {
+        const idServicio = Number(so?.id_servicio);
+        if (!Number.isFinite(idServicio) || idServicio <= 0) continue;
+        next[idServicio] = prev[idServicio] ?? 0;
+      }
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -703,11 +935,56 @@ export function BookingsManagement() {
   }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
 
   useEffect(() => {
-    if (activeView !== 'detail') return;
+    if (formData.serviceType !== 'ruta' || formData.rutaReservaModo !== 'taquilla_personalizada') {
+      setTaquillaOccupiedDates(new Set());
+      setTaquillaAvailabilityWarning(false);
+      return;
+    }
+    const idRuta = Number(formData.routeId);
+    if (!Number.isFinite(idRuta) || idRuta <= 0) {
+      setTaquillaOccupiedDates(new Set());
+      return;
+    }
+    let cancelled = false;
+    setIsLoadingTaquillaCalendar(true);
+    setTaquillaAvailabilityWarning(false);
+    programacionAPI
+      .getFechasOcupadasRuta(idRuta)
+      .then((dates) => {
+        if (cancelled) return;
+        setTaquillaOccupiedDates(
+          new Set((dates || []).map((d) => normalizeOccupiedYmd(String(d))).filter(Boolean))
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setTaquillaOccupiedDates(new Set());
+        setTaquillaAvailabilityWarning(true);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingTaquillaCalendar(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
+
+  useEffect(() => {
+    if (activeView !== 'detail' && activeView !== 'edit') return;
     const idReserva = Number(selectedBooking?.id);
     if (!Number.isFinite(idReserva) || idReserva <= 0) return;
     void loadReservaDetail(idReserva);
   }, [activeView, selectedBooking?.id]);
+
+  useEffect(() => {
+    if (formData.serviceType !== 'ruta') return;
+    if (!formData.routeId) return;
+    const ok = rutasConSalidaProgramada.some((r) => r.id === formData.routeId);
+    if (ok) return;
+    setFormData((prev) => ({ ...prev, routeId: '', programacionId: '' }));
+    setFormRutaDetalle(null);
+    setFormRutaOpcionalesSeleccion({});
+  }, [formData.serviceType, formData.routeId, rutasConSalidaProgramada]);
 
   useEffect(() => {
     if (formData.serviceType !== 'finca') return;
@@ -809,18 +1086,79 @@ export function BookingsManagement() {
         !query ||
         booking.clientName.toLowerCase().includes(query) ||
         booking.packageName.toLowerCase().includes(query) ||
-        booking.id.toLowerCase().includes(query);
+        booking.productName.toLowerCase().includes(query) ||
+        booking.serviceTypeLabel.toLowerCase().includes(query) ||
+        booking.id.toLowerCase().includes(query) ||
+        booking.clientPhone.toLowerCase().includes(query) ||
+        booking.clientEmail.toLowerCase().includes(query) ||
+        booking.paymentStatus.toLowerCase().includes(query);
       const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
-      const matchesDate = !dateFilter || booking.date === dateFilter;
-      return matchesSearch && matchesStatus && matchesDate;
+      const matchesPayment =
+        paymentFilter === 'all' ||
+        normalizePaymentStatus(booking.paymentStatus) === paymentFilter;
+      const matchesService = matchesServiceTypeFilter(booking, serviceTypeFilter);
+      const matchesDate = matchesBookingDateRange(booking.bookingDateRaw, dateFrom, dateTo);
+      return (
+        matchesSearch &&
+        matchesStatus &&
+        matchesPayment &&
+        matchesService &&
+        matchesDate
+      );
     });
-  }, [bookings, searchTerm, statusFilter, dateFilter]);
+  }, [
+    bookings,
+    searchTerm,
+    statusFilter,
+    paymentFilter,
+    serviceTypeFilter,
+    dateFrom,
+    dateTo,
+  ]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredBookings.length / itemsPerPage));
-  const paginatedBookings = filteredBookings.slice(
+  const sortedBookings = useMemo(() => {
+    const list = [...filteredBookings];
+    list.sort((a, b) => compareBookings(a, b, sortField, sortDirection));
+    return list;
+  }, [filteredBookings, sortField, sortDirection]);
+
+  const hasActiveFilters =
+    Boolean(searchTerm.trim()) ||
+    statusFilter !== 'all' ||
+    paymentFilter !== 'all' ||
+    serviceTypeFilter !== 'all' ||
+    Boolean(dateFrom) ||
+    Boolean(dateTo) ||
+    sortField !== 'created' ||
+    sortDirection !== 'desc';
+
+  const clearBookingFilters = () => {
+    setSearchTerm('');
+    setStatusFilter('all');
+    setPaymentFilter('all');
+    setServiceTypeFilter('all');
+    setDateFrom('');
+    setDateTo('');
+    setSortField('created');
+    setSortDirection('desc');
+    setCurrentPage(1);
+  };
+
+  const totalPages = Math.max(1, Math.ceil(sortedBookings.length / itemsPerPage));
+  const paginatedBookings = sortedBookings.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, paymentFilter, serviceTypeFilter, dateFrom, dateTo, sortField, sortDirection]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const dashboardStats = useMemo(() => {
     return {
@@ -832,10 +1170,54 @@ export function BookingsManagement() {
     };
   }, [bookings]);
 
+  const reservaPagosConComprobante = useMemo(() => {
+    const list = reservaDetallePagos.filter(pagoTieneComprobante);
+    const ts = (p: PagoCliente) => {
+      const t = Date.parse(String((p.fecha_pago ?? p.fecha_verificacion ?? '').toString()).trim());
+      return Number.isFinite(t) ? t : 0;
+    };
+    return [...list].sort((a, b) => ts(b) - ts(a));
+  }, [reservaDetallePagos]);
+
+  const abrirVisorComprobantePago = (pago: PagoCliente) => {
+    const url = pagoComprobanteUrl(pago);
+    if (!url) {
+      toast.error('Este abono no tiene comprobante adjunto.');
+      return;
+    }
+    setReservaComprobanteViewer({
+      open: true,
+      url,
+      fileName: pago.comprobante_nombre,
+      mimeType: pago.comprobante_tipo,
+    });
+  };
+
+  const abrirComprobantesReserva = () => {
+    if (isLoadingReservaPagos) {
+      toast.info('Cargando comprobantes…');
+      return;
+    }
+    if (reservaPagosConComprobante.length === 0) {
+      toast.error('No hay comprobante registrado para esta reserva.');
+      return;
+    }
+    if (reservaPagosConComprobante.length === 1) {
+      abrirVisorComprobantePago(reservaPagosConComprobante[0]);
+      return;
+    }
+    setReservaComprobanteDialogOpen(true);
+  };
+
   const goBackToList = () => {
     setActiveView('list');
     setSelectedBooking(null);
     setReservaDetalle(null);
+    setReservaDetallePagos([]);
+    setReservaComprobanteDialogOpen(false);
+    setReservaComprobanteViewer({ open: false, url: null });
+    setStaffCancelDialogOpen(false);
+    setStaffCancelMotivo('');
     setDetalleRuta(null);
     setDetalleProgramacionId('');
     setDetalleOpcionalesSeleccion({});
@@ -865,8 +1247,48 @@ export function BookingsManagement() {
       total: booking.total,
       status: booking.status,
       specialRequests: booking.specialRequests || '',
+      cancellationReason:
+        booking.cancellationReason ||
+        reservaDetalle?.motivo_cancelacion ||
+        '',
     });
     setActiveView('edit');
+  };
+
+  const ejecutarCancelacionReservaStaff = async (idReserva: number, motivo: string) => {
+    await reservasAPI.cancelar(idReserva, motivo, {
+      cancelado_por: 'Personal OCCITOUR',
+      liberar_programacion: true,
+    });
+    await reservasAPI.liberarProgramacionesVinculadas(idReserva);
+  };
+
+  const confirmarCancelacionStaff = async () => {
+    const idReserva = Number(selectedBooking?.id ?? 0);
+    if (!idReserva) return;
+    const motivo = staffCancelMotivo.trim();
+    if (motivo.length < STAFF_CANCEL_MOTIVO_MIN) {
+      toast.error(`Indica el motivo de cancelación (mínimo ${STAFF_CANCEL_MOTIVO_MIN} caracteres).`);
+      return;
+    }
+    setIsCancellingStaffReserva(true);
+    try {
+      await ejecutarCancelacionReservaStaff(idReserva, motivo);
+      toast.success('Reserva cancelada. El motivo quedó registrado.');
+      setStaffCancelDialogOpen(false);
+      setStaffCancelMotivo('');
+      const fresh = await loadReservas();
+      const row = fresh.find((b) => b.id === String(idReserva));
+      if (row) setSelectedBooking(row);
+      if (activeView === 'detail') {
+        void loadReservaDetail(idReserva);
+      }
+    } catch (error: any) {
+      console.error('Error al cancelar reserva:', error);
+      toast.error(error?.message || 'No se pudo cancelar la reserva.');
+    } finally {
+      setIsCancellingStaffReserva(false);
+    }
   };
 
   const applySelectedServices = async (idReserva: number, map: Record<number, number>, rutaDetalle: any) => {
@@ -1074,29 +1496,15 @@ export function BookingsManagement() {
       }
 
       toast.success('Reserva creada correctamente.');
-      await loadReservas();
-      setSelectedBooking({
-        id: String(idReserva),
-        clientId: formData.clientId,
-        clientName: selectedClient?.name || formData.clientName || 'Cliente',
-        clientEmail: selectedClient?.email || '',
-        clientPhone: selectedClient?.phone || '',
-        packageName: formData.serviceType === 'ruta' ? 'Ruta' : 'Finca',
-        serviceTypeForm: formData.serviceType,
-        date: formData.bookingDate,
-        participants: participantTotal,
-        adults: 1,
-        children: Math.max(0, Number(formData.companions || 0)),
-        status: 'Pendiente',
-        paymentStatus: 'Pendiente',
-        paymentMethod: 'Por definir',
-        total: Number(formData.total || 0),
-        paidAmount: 0,
-        pendingAmount: Number(formData.total || 0),
-        specialRequests: formData.specialRequests || '',
-      });
       resetForm();
-      setActiveView('detail');
+      const fresh = await loadReservas();
+      const row = fresh.find((booking) => booking.id === String(idReserva));
+      if (row) {
+        setSelectedBooking(row);
+        setActiveView('detail');
+      } else {
+        setActiveView('list');
+      }
     } catch (error: any) {
       console.error('Error al crear reserva:', error);
       toast.error(error?.message || 'No se pudo crear la reserva.');
@@ -1121,16 +1529,36 @@ export function BookingsManagement() {
       return;
     }
 
+    if (formData.status === 'Cancelada' && selectedBooking.status !== 'Cancelada') {
+      const motivo = formData.cancellationReason.trim();
+      if (motivo.length < STAFF_CANCEL_MOTIVO_MIN) {
+        toast.error(`Debes indicar el motivo de cancelación (mínimo ${STAFF_CANCEL_MOTIVO_MIN} caracteres).`);
+        return;
+      }
+    }
+
     try {
       setIsLoading(true);
+      const idReserva = Number(selectedBooking.id);
       if (formData.status === 'Cancelada') {
         const motivo =
-          formData.specialRequests?.trim() ||
-          'Cancelación solicitada desde edición de gestión de reservas';
-        await reservasAPI.cancelar(Number(selectedBooking.id), motivo, { liberar_programacion: true });
-        await reservasAPI.liberarProgramacionesVinculadas(Number(selectedBooking.id));
+          selectedBooking.status === 'Cancelada'
+            ? (selectedBooking.cancellationReason || formData.cancellationReason || '').trim()
+            : formData.cancellationReason.trim();
+        if (selectedBooking.status !== 'Cancelada') {
+          await ejecutarCancelacionReservaStaff(idReserva, motivo);
+        } else {
+          await reservasAPI.update(idReserva, {
+            id_cliente: Number(formData.clientId),
+            fecha_reserva: formData.bookingDate,
+            estado: 'Cancelada',
+            total: Number(formData.total) || 0,
+            notas: formData.specialRequests || '',
+            motivo_cancelacion: motivo || undefined,
+          });
+        }
       } else {
-        await reservasAPI.update(Number(selectedBooking.id), {
+        await reservasAPI.update(idReserva, {
           id_cliente: Number(formData.clientId),
           fecha_reserva: formData.bookingDate,
           estado: formData.status,
@@ -1166,6 +1594,7 @@ export function BookingsManagement() {
       const row = fresh.find((b) => b.id === String(selectedBooking.id));
       if (row) setSelectedBooking(row);
       setActiveView('detail');
+      void loadReservaDetail(idReserva);
     } catch (error: any) {
       console.error('Error al editar reserva:', error);
       toast.error(error?.message || 'No se pudo actualizar la reserva.');
@@ -1191,15 +1620,18 @@ export function BookingsManagement() {
       return;
     }
 
-    try {
-      if (newStatus === 'Cancelada') {
-        await reservasAPI.cancelar(Number(bookingId), 'Cancelación solicitada desde gestión de reservas', {
-          liberar_programacion: true,
-        });
-        await reservasAPI.liberarProgramacionesVinculadas(Number(bookingId));
-      } else {
-        await reservasAPI.update(Number(bookingId), { estado: newStatus });
+    if (newStatus === 'Cancelada') {
+      const booking = bookings.find((b) => b.id === bookingId) || selectedBooking;
+      if (booking) {
+        setSelectedBooking(booking);
+        setStaffCancelMotivo(booking.cancellationReason || '');
       }
+      setStaffCancelDialogOpen(true);
+      return;
+    }
+
+    try {
+      await reservasAPI.update(Number(bookingId), { estado: newStatus });
       toast.success(`Estado actualizado a ${newStatus}.`);
       const fresh = await loadReservas();
       if (selectedBooking?.id === bookingId) {
@@ -1212,24 +1644,61 @@ export function BookingsManagement() {
     }
   };
 
-  const handleDeleteBooking = async () => {
-    if (!canDeleteReservas || !selectedBooking?.id) {
-      toast.error('No tienes permiso para eliminar reservas.');
+  const openDeleteReservaDialog = (booking?: BookingRecord) => {
+    const target = booking ?? selectedBooking;
+    if (!target?.id) return;
+
+    if (target.status === 'Cancelada') {
+      toast.info('Esta reserva ya está cancelada.');
       return;
     }
 
-    try {
-      setIsLoading(true);
-      await reservasAPI.delete(Number(selectedBooking.id));
-      toast.success('Reserva eliminada correctamente.');
+    if (booking) setSelectedBooking(booking);
+    setDeleteCancelMotivo('');
+    setIsDeleteDialogOpen(true);
+  };
+
+  /** El botón «Eliminar» cancela la reserva (misma lógica que cancelar), no borra el registro. */
+  const handleDeleteBooking = async () => {
+    if (!canDeleteReservas || !selectedBooking?.id) {
+      toast.error('No tienes permiso para cancelar reservas.');
+      return;
+    }
+
+    if (selectedBooking.status === 'Cancelada') {
+      toast.info('Esta reserva ya está cancelada.');
       setIsDeleteDialogOpen(false);
-      await loadReservas();
-      goBackToList();
+      return;
+    }
+
+    const idReserva = Number(selectedBooking.id);
+    const motivo = deleteCancelMotivo.trim();
+    if (motivo.length < STAFF_CANCEL_MOTIVO_MIN) {
+      toast.error(`Indica el motivo (mínimo ${STAFF_CANCEL_MOTIVO_MIN} caracteres).`);
+      return;
+    }
+
+    setIsCancellingStaffReserva(true);
+    try {
+      await ejecutarCancelacionReservaStaff(idReserva, motivo);
+      toast.success(
+        'Reserva cancelada. Quedó registrada en el historial; si era hospedaje en finca, ya no bloquea eliminar la finca.',
+      );
+      setIsDeleteDialogOpen(false);
+      setDeleteCancelMotivo('');
+      const fresh = await loadReservas();
+      const row = fresh.find((b) => b.id === String(idReserva));
+      if (row && activeView === 'detail') {
+        setSelectedBooking(row);
+        void loadReservaDetail(idReserva);
+      } else {
+        goBackToList();
+      }
     } catch (error: any) {
-      console.error('Error al eliminar reserva:', error);
-      toast.error(error?.message || 'No se pudo eliminar la reserva.');
+      console.error('Error al cancelar reserva (desde eliminar):', error);
+      toast.error(error?.message || 'No se pudo cancelar la reserva.');
     } finally {
-      setIsLoading(false);
+      setIsCancellingStaffReserva(false);
     }
   };
 
@@ -1454,78 +1923,136 @@ export function BookingsManagement() {
           </div>
 
           <Card className="border-green-200">
-            <CardContent className="pt-6">
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-                <div>
+            <CardContent className="pt-6 space-y-4">
+              <div className="flex items-center gap-2 text-green-800">
+                <Filter className="h-4 w-4" />
+                <span className="font-medium">Buscar y filtrar reservas</span>
+                {hasActiveFilters && (
+                  <Badge variant="outline" className="border-green-300 text-green-800">
+                    Filtros activos
+                  </Badge>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div className="md:col-span-2 xl:col-span-3">
                   <Label>Buscar</Label>
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                     <Input
-                      placeholder="Cliente, servicio o ID..."
+                      placeholder="ID, cliente, teléfono, correo, tipo de servicio o estado de pago..."
                       value={searchTerm}
-                      onChange={(e) => {
-                        setSearchTerm(e.target.value);
-                        setCurrentPage(1);
-                      }}
+                      onChange={(e) => setSearchTerm(e.target.value)}
                       className="pl-10"
                     />
                   </div>
                 </div>
                 <div>
-                  <Label>Estado</Label>
-                  <Select
-                    value={statusFilter}
-                    onValueChange={(value) => {
-                      setStatusFilter(value);
-                      setCurrentPage(1);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Todos los estados" />
+                  <Label>Tipo de servicio</Label>
+                  <Select value={serviceTypeFilter} onValueChange={setServiceTypeFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos los tipos" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Todos</SelectItem>
-                      <SelectItem value="Confirmada">Confirmada</SelectItem>
-                      <SelectItem value="Pendiente">Pendiente</SelectItem>
-                      <SelectItem value="Cancelada">Cancelada</SelectItem>
-                      <SelectItem value="Completada">Completada</SelectItem>
+                      <SelectItem value="ruta">Ruta</SelectItem>
+                      <SelectItem value="finca">Finca</SelectItem>
+                      <SelectItem value="servicio">Servicio</SelectItem>
+                      <SelectItem value="reserva">Reserva (sin detalle)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
-                  <Label>Fecha</Label>
-                  <Input
-                    type="date"
-                    value={dateFilter}
-                    onChange={(e) => {
-                      setDateFilter(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                  />
+                  <Label>Estado de la reserva</Label>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos los estados" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos</SelectItem>
+                      <SelectItem value="Pendiente">Pendiente</SelectItem>
+                      <SelectItem value="Confirmada">Confirmada</SelectItem>
+                      <SelectItem value="Completada">Completada</SelectItem>
+                      <SelectItem value="Cancelada">Cancelada</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="flex items-end">
+                <div>
+                  <Label>Estado del pago</Label>
+                  <Select value={paymentFilter} onValueChange={setPaymentFilter}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Todos los pagos" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Todos</SelectItem>
+                      <SelectItem value="Pendiente">Pendiente</SelectItem>
+                      <SelectItem value="Parcial">Parcial</SelectItem>
+                      <SelectItem value="Pagado">Pagado</SelectItem>
+                      <SelectItem value="Cancelado">Cancelado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Fecha de reserva (desde)</Label>
+                  <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                </div>
+                <div>
+                  <Label>Fecha de reserva (hasta)</Label>
+                  <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                </div>
+                <div>
+                  <Label>Ordenar por</Label>
+                  <Select
+                    value={sortField}
+                    onValueChange={(value) => setSortField(value as BookingSortField)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Campo" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="created">Fecha de registro (más recientes)</SelectItem>
+                      <SelectItem value="bookingDate">Fecha de la reserva</SelectItem>
+                      <SelectItem value="id">ID de reserva</SelectItem>
+                      <SelectItem value="client">Cliente</SelectItem>
+                      <SelectItem value="total">Monto total</SelectItem>
+                      <SelectItem value="status">Estado</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Orden</Label>
+                  <Select
+                    value={sortDirection}
+                    onValueChange={(value) => setSortDirection(value as SortDirection)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Dirección" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="desc">Descendente (más reciente primero)</SelectItem>
+                      <SelectItem value="asc">Ascendente (más antiguo primero)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              {hasActiveFilters && (
+                <div className="flex justify-end">
                   <Button
                     variant="outline"
-                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
-                    onClick={() => {
-                      setSearchTerm('');
-                      setStatusFilter('all');
-                      setDateFilter('');
-                      setCurrentPage(1);
-                    }}
+                    size="sm"
+                    className="border-green-300 text-green-700 hover:bg-green-50"
+                    onClick={clearBookingFilters}
                   >
-                    <Filter className="mr-2 h-4 w-4" />
                     Limpiar filtros
                   </Button>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
 
           <Card className="border-green-200">
             <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
               <CardTitle className="text-green-800">
-                Reservas ({filteredBookings.length})
+                Reservas ({sortedBookings.length})
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-6">
@@ -1535,7 +2062,7 @@ export function BookingsManagement() {
                     <TableRow>
                       <TableHead>Cliente</TableHead>
                       <TableHead>Servicio</TableHead>
-                      <TableHead>Fecha</TableHead>
+                      <TableHead>Fechas</TableHead>
                       <TableHead>Participantes</TableHead>
                       <TableHead>Total</TableHead>
                       <TableHead>Estado</TableHead>
@@ -1547,7 +2074,11 @@ export function BookingsManagement() {
                     {paginatedBookings.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={8} className="py-10 text-center text-gray-500">
-                          {isLoading ? 'Cargando reservas...' : 'No hay reservas para mostrar.'}
+                          {isLoading
+                            ? 'Cargando reservas...'
+                            : hasActiveFilters
+                              ? 'No hay reservas que coincidan con los filtros aplicados.'
+                              : 'No hay reservas para mostrar.'}
                         </TableCell>
                       </TableRow>
                     ) : (
@@ -1556,16 +2087,29 @@ export function BookingsManagement() {
                           <TableCell>
                             <div>
                               <p className="font-medium text-gray-900">{booking.clientName}</p>
-                              <p className="text-xs text-gray-500">{booking.clientEmail || 'Sin correo'}</p>
+                              <p className="text-xs text-gray-500">{bookingClientContactLine(booking)}</p>
                             </div>
                           </TableCell>
                           <TableCell>
                             <div>
-                              <p className="font-medium text-gray-900">{booking.packageName}</p>
-                              <p className="text-xs text-gray-500">Reserva #{booking.id}</p>
+                              <p className="font-medium text-gray-900">
+                                {booking.productName || booking.packageName}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {booking.productName
+                                  ? `${booking.packageName} · #${booking.id}`
+                                  : `Reserva #${booking.id}`}
+                              </p>
                             </div>
                           </TableCell>
-                          <TableCell>{booking.date}</TableCell>
+                          <TableCell>
+                            <div>
+                              <p className="text-sm text-gray-900">
+                                Reserva: {formatDateDisplay(booking.bookingDateRaw || booking.date, { style: 'numeric' })}
+                              </p>
+                              <p className="text-xs text-gray-500">Registrada: {booking.createdAtLabel}</p>
+                            </div>
+                          </TableCell>
                           <TableCell>{booking.participants}</TableCell>
                           <TableCell>{formatCurrency(booking.total)}</TableCell>
                           <TableCell>
@@ -1611,10 +2155,13 @@ export function BookingsManagement() {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => {
-                                    setSelectedBooking(booking);
-                                    setIsDeleteDialogOpen(true);
-                                  }}
+                                  onClick={() => openDeleteReservaDialog(booking)}
+                                  disabled={booking.status === 'Cancelada'}
+                                  title={
+                                    booking.status === 'Cancelada'
+                                      ? 'La reserva ya está cancelada'
+                                      : 'Cancelar reserva (dar de baja)'
+                                  }
                                   className="border-red-600 text-red-700 hover:bg-red-50"
                                 >
                                   <Trash2 className="h-4 w-4" />
@@ -1639,8 +2186,11 @@ export function BookingsManagement() {
 
               <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <p className="text-sm text-gray-600">
-                  Mostrando {filteredBookings.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} a{' '}
-                  {Math.min(currentPage * itemsPerPage, filteredBookings.length)} de {filteredBookings.length} reservas
+                  Mostrando {sortedBookings.length === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1} a{' '}
+                  {Math.min(currentPage * itemsPerPage, sortedBookings.length)} de {sortedBookings.length} reservas
+                  {bookings.length !== sortedBookings.length
+                    ? ` (filtradas de ${bookings.length})`
+                    : ''}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -1685,29 +2235,23 @@ export function BookingsManagement() {
                   </CardHeader>
                   <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div className="md:col-span-2">
-                      <Label>Cliente *</Label>
-                      <Select
+                      <BookingClientPicker
+                        clients={clientes}
                         value={formData.clientId}
-                        onValueChange={(value) => {
-                          const client = clientes.find((item) => item.id === value);
+                        disabled={clientes.length === 0}
+                        onChange={(value, client) => {
                           setFormData((prev) => ({
                             ...prev,
                             clientId: value,
                             clientName: client?.name || '',
                           }));
                         }}
-                      >
-                        <SelectTrigger className="bg-gray-50">
-                          <SelectValue placeholder="Seleccione un cliente" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {clientes.map((client) => (
-                            <SelectItem key={client.id} value={client.id}>
-                              {client.name} {client.document ? `- ${client.document}` : ''}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      />
+                      {clientes.length === 0 && (
+                        <p className="text-xs text-amber-700 mt-1">
+                          No hay clientes cargados. Revisa permisos del módulo Clientes o recarga la página.
+                        </p>
+                      )}
                     </div>
                     <div>
                       <Label>Fecha de reserva *</Label>
@@ -1727,7 +2271,14 @@ export function BookingsManagement() {
                             toast.error('Solo puedes confirmar una reserva cuando la venta tenga pago parcial o completo aprobado.');
                             return;
                           }
-                          setFormData((prev) => ({ ...prev, status: value }));
+                          setFormData((prev) => ({
+                            ...prev,
+                            status: value,
+                            cancellationReason:
+                              value === 'Cancelada' && prev.status !== 'Cancelada'
+                                ? ''
+                                : prev.cancellationReason,
+                          }));
                         }}
                         disabled={activeView === 'create'}
                       >
@@ -1742,6 +2293,32 @@ export function BookingsManagement() {
                         </SelectContent>
                       </Select>
                     </div>
+                    {activeView === 'edit' && formData.status === 'Cancelada' ? (
+                      <div className="md:col-span-2">
+                        <Label htmlFor="staff-cancel-motivo-edit">
+                          Motivo de cancelación *{' '}
+                          <span className="font-normal text-gray-500">(mín. {STAFF_CANCEL_MOTIVO_MIN} caracteres)</span>
+                        </Label>
+                        <Textarea
+                          id="staff-cancel-motivo-edit"
+                          rows={3}
+                          value={formData.cancellationReason}
+                          onChange={(e) =>
+                            setFormData((prev) => ({ ...prev, cancellationReason: e.target.value }))
+                          }
+                          className="bg-gray-50 border-red-200 focus-visible:ring-red-400"
+                          placeholder="Ej: solicitud del cliente, falta de pago, cambio de fecha no disponible..."
+                          readOnly={selectedBooking?.status === 'Cancelada'}
+                        />
+                        {selectedBooking?.status === 'Cancelada' ? (
+                          <p className="mt-1 text-xs text-gray-500">Motivo registrado al cancelar la reserva.</p>
+                        ) : (
+                          <p className="mt-1 text-xs text-amber-800">
+                            Al guardar, la reserva pasará a <strong>Cancelada</strong> y este texto quedará almacenado.
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
                     <div>
                       <Label>Acompañantes</Label>
                       <Input
@@ -1879,82 +2456,54 @@ export function BookingsManagement() {
                                 personalizada interna), lista para cobrar en taquilla.
                               </p>
                             </div>
-                            <div>
-                              <Label>Ruta *</Label>
-                              <Select
-                                value={formData.routeId}
-                                disabled={
-                                  formData.rutaReservaModo === 'programada' && isLoadingProgramacionesRuta
-                                }
-                                onValueChange={(value) => {
-                                  setFormData((prev) => ({
-                                    ...prev,
-                                    routeId: value,
-                                    farmId: '',
-                                    programacionId: '',
-                                  }));
-                                }}
-                              >
-                                <SelectTrigger className="bg-gray-50">
-                                  <SelectValue
-                                    placeholder={
-                                      formData.rutaReservaModo === 'programada' &&
-                                      isLoadingProgramacionesRuta
-                                        ? 'Cargando rutas con salida…'
-                                        : formData.rutaReservaModo === 'programada' &&
-                                            routesForCurrentModo.length === 0
-                                          ? 'No hay rutas con salida en calendario'
-                                          : 'Seleccione una ruta'
-                                    }
-                                  />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {routesForCurrentModo.map((route) => (
-                                    <SelectItem key={route.id} value={route.id}>
-                                      {route.name}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <p className="mt-1 text-xs text-gray-500">
-                                {formData.rutaReservaModo === 'taquilla_personalizada'
+                            <BookingRoutePicker
+                              routes={routesForCurrentModo}
+                              value={formData.routeId}
+                              disabled={
+                                formData.rutaReservaModo === 'programada' && isLoadingProgramacionesRuta
+                              }
+                              placeholder={
+                                formData.rutaReservaModo === 'programada' && isLoadingProgramacionesRuta
+                                  ? 'Cargando rutas con salida…'
+                                  : formData.rutaReservaModo === 'programada' &&
+                                      routesForCurrentModo.length === 0
+                                    ? 'No hay rutas con salida en calendario'
+                                    : undefined
+                              }
+                              hint={
+                                formData.rutaReservaModo === 'taquilla_personalizada'
                                   ? 'Todas las rutas del catálogo. Luego defines fecha y cupos de esta salida.'
                                   : isLoadingProgramacionesRuta
                                     ? 'Sincronizando calendario…'
                                     : routesForCurrentModo.length === 0
                                       ? 'No hay salidas activas: cambia a “Mostrador” arriba o crea programaciones en el módulo Programación.'
-                                      : 'Solo rutas que tienen al menos una salida programada y reservable.'}
-                              </p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div>
-                            <Label>Finca *</Label>
-                            <Select
-                              value={formData.farmId}
-                              onValueChange={(value) => {
-                                const finca = fincas.find((item) => item.id === value);
+                                      : 'Solo rutas que tienen al menos una salida programada y reservable.'
+                              }
+                              onChange={(value) => {
                                 setFormData((prev) => ({
                                   ...prev,
-                                  farmId: value,
-                                  routeId: '',
-                                  nightlyPrice: Number(finca?.price || 0),
-                                  total: Number(finca?.price || 0) * Number(prev.nights || 1),
+                                  routeId: value,
+                                  farmId: '',
+                                  programacionId: '',
                                 }));
                               }}
-                            >
-                              <SelectTrigger className="bg-gray-50">
-                                <SelectValue placeholder="Seleccione una finca" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {fincas.map((farm) => (
-                                  <SelectItem key={farm.id} value={farm.id}>
-                                    {farm.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            />
                           </div>
+                        ) : (
+                          <BookingFincaPicker
+                            fincas={fincas}
+                            value={formData.farmId}
+                            disabled={fincas.length === 0}
+                            onChange={(value, finca) => {
+                              setFormData((prev) => ({
+                                ...prev,
+                                farmId: value,
+                                routeId: '',
+                                nightlyPrice: Number(finca?.price || 0),
+                                total: Number(finca?.price || 0) * Number(prev.nights || 1),
+                              }));
+                            }}
+                          />
                         )}
                       </div>
 
@@ -1962,49 +2511,31 @@ export function BookingsManagement() {
                         <>
                           {formData.rutaReservaModo === 'programada' ? (
                             <>
-                              <div>
-                                <Label>Salida programada *</Label>
-                                <Select
-                                  value={formData.programacionId}
-                                  onValueChange={(value) =>
-                                    setFormData((prev) => ({
-                                      ...prev,
-                                      programacionId: value,
-                                    }))
-                                  }
-                                >
-                                  <SelectTrigger className="bg-gray-50">
-                                    <SelectValue placeholder="Selecciona una programación disponible" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {filteredProgramacionesRuta.map((programacion) => (
-                                      <SelectItem key={programacion.id} value={programacion.id}>
-                                        {`${programacion.routeName} • ${programacion.date}${programacion.startTime ? ` ${programacion.startTime}` : ''} • ${programacion.availableSeats}/${programacion.totalSeats} cupos${programacion.availableSeats < participantTotal ? ' • Cupo insuficiente' : ''}`}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <p className="mt-1 text-xs text-gray-500">
-                                  {isLoadingProgramacionesRuta
-                                    ? 'Cargando salidas operativas...'
-                                    : filteredProgramacionesRuta.length > 0
-                                      ? 'Elige la salida del calendario (cupos ya publicados).'
-                                      : 'No hay salidas operativas para esta ruta en el calendario — usa “Mostrador” o crea la salida en Programación.'}
-                                </p>
-                              </div>
+                              <BookingProgramacionPicker
+                                programaciones={filteredProgramacionesRuta}
+                                value={formData.programacionId}
+                                participantTotal={participantTotal}
+                                loading={isLoadingProgramacionesRuta}
+                                onChange={(value) =>
+                                  setFormData((prev) => ({
+                                    ...prev,
+                                    programacionId: value,
+                                  }))
+                                }
+                              />
 
                               {selectedProgramacion && (
                                 <div className="grid grid-cols-1 gap-4 rounded-lg border bg-green-50 p-4 md:grid-cols-4">
                                   <div>
                                     <p className="text-xs text-gray-500">Fecha salida</p>
                                     <p className="font-medium text-gray-900">
-                                      {selectedProgramacion.date}
+                                      {formatDateDisplay(selectedProgramacion.date, { style: 'numeric' })}
                                     </p>
                                   </div>
                                   <div>
                                     <p className="text-xs text-gray-500">Hora</p>
                                     <p className="font-medium text-gray-900">
-                                      {selectedProgramacion.startTime || 'Por definir'}
+                                      {formatTimeDisplay(selectedProgramacion.startTime, 'Por definir')}
                                     </p>
                                   </div>
                                   <div>
@@ -2425,6 +2956,12 @@ export function BookingsManagement() {
                       </p>
                     </div>
                     <div>
+                      <p className="text-sm text-gray-600">Contacto</p>
+                      <p className="font-medium text-gray-900 text-sm">
+                        {selectedClient?.email || selectedClient?.phone || '—'}
+                      </p>
+                    </div>
+                    <div>
                       <p className="text-sm text-gray-600">Participantes</p>
                       <p className="font-medium text-gray-900">{participantTotal}</p>
                     </div>
@@ -2530,6 +3067,60 @@ export function BookingsManagement() {
 
       {activeView === 'detail' && selectedBooking && (
         <>
+          <ReceiptProofViewerDialog
+            open={reservaComprobanteViewer.open}
+            onOpenChange={(open) =>
+              setReservaComprobanteViewer((prev) => ({ ...prev, open, url: open ? prev.url : null }))
+            }
+            url={reservaComprobanteViewer.url}
+            fileName={reservaComprobanteViewer.fileName}
+            mimeType={reservaComprobanteViewer.mimeType}
+          />
+          <Dialog open={reservaComprobanteDialogOpen} onOpenChange={setReservaComprobanteDialogOpen}>
+            <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Comprobantes de pago</DialogTitle>
+                <DialogDescription>
+                  Reserva #{selectedBooking.id}. Selecciona un abono para ver el soporte en pantalla completa.
+                </DialogDescription>
+              </DialogHeader>
+              {reservaPagosConComprobante.length === 0 ? (
+                <p className="text-sm text-gray-600">No hay comprobantes cargados para esta reserva.</p>
+              ) : (
+                <div className="space-y-3">
+                  {reservaPagosConComprobante.map((pago) => (
+                    <div
+                      key={pago.id_pago}
+                      className="flex flex-col gap-2 rounded-lg border border-gray-200 bg-gray-50/80 p-4 sm:flex-row sm:items-center sm:justify-between"
+                    >
+                      <div className="text-sm text-gray-800">
+                        <p className="font-semibold text-green-900">Abono #{pago.id_pago}</p>
+                        <p className="text-gray-600">
+                          {formatCurrency(pago.monto)} · {pago.metodo_pago || '—'} · {pago.estado || 'Pendiente'}
+                        </p>
+                        {pago.fecha_pago ? (
+                          <p className="text-xs text-gray-500">{formatDate(pago.fecha_pago)}</p>
+                        ) : null}
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-blue-300 text-blue-700 shrink-0"
+                        onClick={() => {
+                          setReservaComprobanteDialogOpen(false);
+                          abrirVisorComprobantePago(pago);
+                        }}
+                      >
+                        <Eye className="h-4 w-4 mr-2" />
+                        Ver comprobante
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card className="border-green-200">
               <CardContent className="flex items-center justify-between pt-6">
@@ -2614,6 +3205,22 @@ export function BookingsManagement() {
                       <p className="font-medium">{reservaDetalle?.tipo_servicio || selectedBooking.packageName}</p>
                     </div>
                     <div>
+                      <p className="text-sm text-gray-600">Servicio reservado</p>
+                      <p className="font-medium">
+                        {resolveReservaProductoNombre(reservaDetalle, { rutaDetalle: detalleRuta }) ||
+                          selectedBooking.productName ||
+                          resolveRouteNameFromReservaPayload(reservaDetalle, {
+                            rutaDetalle: detalleRuta,
+                          }) ||
+                          '—'}
+                      </p>
+                      {resolveRouteIdFromReservaPayload(reservaDetalle) ? (
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          ID ruta: {resolveRouteIdFromReservaPayload(reservaDetalle)}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div>
                       <p className="text-sm text-gray-600">Fecha de reserva</p>
                       <p className="font-medium">
                         {formatDate(reservaDetalle?.fecha_reserva || selectedBooking.date)}
@@ -2643,6 +3250,14 @@ export function BookingsManagement() {
                         {reservaDetalle?.metodo_pago || selectedBooking.paymentMethod || 'Por definir'}
                       </p>
                     </div>
+                    {reservaDetalle?.motivo_desaprobacion_pago ? (
+                      <div className="md:col-span-2">
+                        <p className="text-sm text-gray-600">Motivo de desaprobación del pago</p>
+                        <p className="font-medium text-red-700 mt-1">
+                          {reservaDetalle.motivo_desaprobacion_pago}
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="rounded-lg border bg-gray-50 p-4">
@@ -2671,7 +3286,7 @@ export function BookingsManagement() {
                     <div>
                       <p className="text-sm text-gray-600">ID ruta</p>
                       <p className="font-medium">
-                        {resolveRouteIdFromReservaDetalle(reservaDetalle) || '—'}
+                        {resolveRouteIdFromReservaPayload(reservaDetalle) || '—'}
                       </p>
                     </div>
                   </div>
@@ -2861,6 +3476,62 @@ export function BookingsManagement() {
 
               <Card className="border-green-200">
                 <CardHeader className="pb-3">
+                  <CardTitle className="text-base text-green-800">Pagos y abonos</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {isLoadingReservaPagos ? (
+                    <p className="text-sm text-gray-500">Cargando pagos de la reserva…</p>
+                  ) : reservaDetallePagos.length === 0 ? (
+                    <p className="text-sm text-gray-500">
+                      No hay pagos registrados. Si el cliente acaba de pagar, usa «Recargar detalle».
+                    </p>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Abono</TableHead>
+                          <TableHead>Monto</TableHead>
+                          <TableHead>Estado</TableHead>
+                          <TableHead>Fecha</TableHead>
+                          <TableHead className="text-right">Comprobante</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservaDetallePagos.map((pago) => (
+                          <TableRow key={pago.id_pago}>
+                            <TableCell className="font-medium">#{pago.id_pago}</TableCell>
+                            <TableCell>{formatCurrency(pago.monto)}</TableCell>
+                            <TableCell>{pago.estado || 'Pendiente'}</TableCell>
+                            <TableCell>{pago.fecha_pago ? formatDate(pago.fecha_pago) : '—'}</TableCell>
+                            <TableCell className="text-right">
+                              {pagoTieneComprobante(pago) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-blue-300 text-blue-700"
+                                  onClick={() => abrirVisorComprobantePago(pago)}
+                                >
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  Ver
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-gray-500">Sin archivo</span>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                  <p className="mt-3 text-xs text-gray-500">
+                    La verificación de comprobantes se realiza en el módulo Abonos.
+                  </p>
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-200">
+                <CardHeader className="pb-3">
                   <CardTitle className="text-base text-green-800">Acompañantes</CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -2921,6 +3592,39 @@ export function BookingsManagement() {
                     <RefreshCw className="mr-2 h-4 w-4" />
                     Recargar detalle
                   </Button>
+                  {canEditReservas &&
+                    selectedBooking.status !== 'Cancelada' &&
+                    selectedBooking.status !== 'Completada' && (
+                      <Button
+                        variant="outline"
+                        className="w-full border-red-600 text-red-700 hover:bg-red-50"
+                        onClick={() => {
+                          setStaffCancelMotivo(
+                            reservaDetalle?.motivo_cancelacion || selectedBooking.cancellationReason || '',
+                          );
+                          setStaffCancelDialogOpen(true);
+                        }}
+                      >
+                        <Ban className="mr-2 h-4 w-4" />
+                        Cancelar reserva
+                      </Button>
+                    )}
+                  <Button
+                    variant="outline"
+                    className="w-full border-green-600 text-green-700 hover:bg-green-50"
+                    disabled={isLoadingReservaPagos || reservaPagosConComprobante.length === 0}
+                    title={
+                      isLoadingReservaPagos
+                        ? 'Cargando comprobantes…'
+                        : reservaPagosConComprobante.length === 0
+                          ? 'No hay comprobante registrado. Usa Recargar detalle si el cliente acaba de pagar.'
+                          : undefined
+                    }
+                    onClick={abrirComprobantesReserva}
+                  >
+                    <Receipt className="mr-2 h-4 w-4" />
+                    Comprobante
+                  </Button>
                   <Button
                     variant="outline"
                     className="w-full border-green-600 text-green-700 hover:bg-green-50"
@@ -2933,10 +3637,11 @@ export function BookingsManagement() {
                     <Button
                       variant="outline"
                       className="w-full border-red-600 text-red-700 hover:bg-red-50"
-                      onClick={() => setIsDeleteDialogOpen(true)}
+                      onClick={() => openDeleteReservaDialog()}
+                      disabled={selectedBooking?.status === 'Cancelada'}
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
-                      Eliminar reserva
+                      Cancelar reserva
                     </Button>
                   )}
                 </CardContent>
@@ -3005,23 +3710,108 @@ export function BookingsManagement() {
         </>
       )}
 
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+      <AlertDialog
+        open={staffCancelDialogOpen}
+        onOpenChange={(open) => {
+          setStaffCancelDialogOpen(open);
+          if (!open) setStaffCancelMotivo('');
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-red-700">¿Eliminar reserva?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta acción eliminará permanentemente la reserva de{' '}
-              <span className="font-semibold">{selectedBooking?.clientName || 'este cliente'}</span>.
+            <AlertDialogTitle className="text-red-700">Cancelar reserva</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  La reserva #{selectedBooking?.id} pasará a estado <strong>Cancelada</strong>. Indica el motivo; quedará
+                  guardado con la reserva.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="staff-cancel-motivo-dialog">
+                    Motivo de cancelación *{' '}
+                    <span className="font-normal text-gray-500">(mín. {STAFF_CANCEL_MOTIVO_MIN} caracteres)</span>
+                  </Label>
+                  <Textarea
+                    id="staff-cancel-motivo-dialog"
+                    value={staffCancelMotivo}
+                    onChange={(e) => setStaffCancelMotivo(e.target.value)}
+                    rows={4}
+                    className="bg-white"
+                    placeholder="Ej: el cliente solicitó cancelación, no hubo pago a tiempo, cupo no disponible..."
+                  />
+                </div>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogCancel disabled={isCancellingStaffReserva}>Volver</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDeleteBooking}
-              disabled={!canDeleteReservas || isLoading}
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isCancellingStaffReserva || staffCancelMotivo.trim().length < STAFF_CANCEL_MOTIVO_MIN}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmarCancelacionStaff();
+              }}
+            >
+              {isCancellingStaffReserva ? 'Cancelando…' : 'Confirmar cancelación'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={isDeleteDialogOpen}
+        onOpenChange={(open) => {
+          setIsDeleteDialogOpen(open);
+          if (!open) setDeleteCancelMotivo('');
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-700">¿Cancelar reserva?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  La reserva de{' '}
+                  <span className="font-semibold text-gray-900">
+                    {selectedBooking?.clientName || 'este cliente'}
+                  </span>{' '}
+                  pasará a estado <strong>Cancelada</strong>. No se borra de la base de datos: queda el
+                  historial y el motivo. Si incluye hospedaje en finca, al cancelar ya no impedirá
+                  eliminar esa finca.
+                </p>
+                <div>
+                  <Label htmlFor="delete-cancel-motivo" className="text-gray-800">
+                    Motivo de cancelación{' '}
+                    <span className="font-normal text-gray-500">(mín. {STAFF_CANCEL_MOTIVO_MIN} caracteres)</span>
+                  </Label>
+                  <Textarea
+                    id="delete-cancel-motivo"
+                    value={deleteCancelMotivo}
+                    onChange={(e) => setDeleteCancelMotivo(e.target.value)}
+                    rows={4}
+                    className="mt-1 bg-white"
+                    placeholder="Ej: cliente desistió, duplicado, prueba, no hubo pago..."
+                  />
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancellingStaffReserva}>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                void handleDeleteBooking();
+              }}
+              disabled={
+                !canDeleteReservas ||
+                isCancellingStaffReserva ||
+                deleteCancelMotivo.trim().length < STAFF_CANCEL_MOTIVO_MIN
+              }
               className="bg-red-600 hover:bg-red-700"
             >
-              Eliminar
+              {isCancellingStaffReserva ? 'Cancelando…' : 'Confirmar cancelación'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

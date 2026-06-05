@@ -1,5 +1,5 @@
 import React from 'react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { motion } from 'motion/react';
 import { Award, User, Calendar, Bell } from 'lucide-react';
 import { Card, CardContent } from './ui/card';

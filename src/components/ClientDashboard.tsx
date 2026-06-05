@@ -7,7 +7,7 @@ import { Badge } from './ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { SatisfactionSurvey } from './SatisfactionSurvey';
 import { ChatSimulator } from './ChatSimulator';
 import { TourBookingModal } from './TourBookingModal';

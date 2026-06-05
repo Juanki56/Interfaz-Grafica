@@ -51,6 +51,33 @@ export function estadoSalidaParaCliente(estadoRaw: string | null | undefined): E
     };
   }
 
+  // "Desactivada" = salida cerrada a nuevas reservas, pero los cupos ya confirmados
+  // siguen vigentes. Se muestra como "Confirmada" para no confundir al cliente.
+  if (e === 'desactivada' || e === 'desactivado' || e === 'inactiva' || e === 'inactivo') {
+    return {
+      label: 'Confirmada · tu cupo está asegurado',
+      compactLabel: 'Confirmada',
+      badgeClassName: `${CHIP} border-green-600 text-green-950`,
+    };
+  }
+
+  if (e === 'completada' || e === 'completado' || e === 'finalizada' || e === 'finalizado') {
+    return {
+      label: 'Completada',
+      compactLabel: 'Completada',
+      badgeClassName: `${CHIP} border-gray-400 text-gray-700`,
+    };
+  }
+
+  if (e === 'cancelada' || e === 'cancelado') {
+    return {
+      label: 'Cancelada',
+      compactLabel: 'Cancelada',
+      badgeClassName: `${CHIP} border-red-400 text-red-700`,
+    };
+  }
+
+  // Fallback: muestra el estado tal cual con estilo neutro verde
   return {
     label: estadoRaw?.trim() || 'Salida programada',
     compactLabel: estadoRaw?.trim() || 'Salida',

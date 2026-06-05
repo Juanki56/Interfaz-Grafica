@@ -4,6 +4,7 @@ import {
   Calendar,
   Plus,
   Search,
+  Filter,
   Eye,
   Edit,
   Trash2,
@@ -25,8 +26,11 @@ import {
   ChevronUp,
   ClipboardList,
   CheckCircle2,
+  Ban,
+  Download,
 } from 'lucide-react';
 import { ProgrammingFormImproved } from './ProgrammingFormImproved';
+import { GuideAvailabilityCalendar } from './GuideAvailabilityCalendar';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
@@ -65,6 +69,11 @@ import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { cn } from './ui/utils';
+import {
+  formatDateDisplay,
+  formatDateTimeDisplay,
+  formatTimeDisplay,
+} from '../utils/dateTimeDisplay';
 import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
@@ -97,6 +106,7 @@ type SolicitudRevisionEditRow = {
 };
 
 const SOLICITUD_REVISION_SESSION_KEY = 'occitour:staff:solicitud-revision-draft:v2';
+const SOLICITUD_RECHAZO_MOTIVO_MIN = 10;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v != null && typeof v === 'object' && !Array.isArray(v);
@@ -220,10 +230,15 @@ interface Programming {
   clients: Client[];
   guideId: string;
   guideName: string;
+  guidePhone?: string;
+  guideEmail?: string;
+  guideRoleLabel?: string;
   status: 'scheduled' | 'in-progress' | 'completed' | 'cancelled';
   additionalServices: AdditionalService[];
   notes?: string;
   createdAt: string;
+  /** Milisegundos para ordenar por “última creada” (API o id como respaldo). */
+  createdAtMs?: number;
   createdBy: string;
   totalSeats?: number;
   availableSeats?: number;
@@ -236,6 +251,29 @@ interface ProgrammingManagementProps {
   userId?: string;
   userName?: string;
 }
+
+type ProgrammingsSortFilter =
+  | 'created-desc'
+  | 'created-asc'
+  | 'date-asc'
+  | 'date-desc'
+  | 'time-asc'
+  | 'time-desc';
+
+const parseProgramacionCreatedMs = (
+  raw?: string | null,
+  fallbackId?: number | string | null,
+): number => {
+  const s = String(raw || '').trim();
+  if (s) {
+    const hasClock = /[T ]\d{1,2}:\d/.test(s);
+    const candidate = hasClock ? s : `${s.slice(0, 10)}T12:00:00`;
+    const ms = Date.parse(candidate);
+    if (!Number.isNaN(ms)) return ms;
+  }
+  const id = Number(fallbackId);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+};
 
 /** Coerción segura desde API/BD (evita `"false"` → truthy). */
 function normalizeEsPersonalizada(raw: unknown): boolean {
@@ -789,6 +827,13 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [tipoFilter, setTipoFilter] = useState<'all' | 'programada' | 'personalizada'>('all');
+  const [guideFilter, setGuideFilter] = useState('all');
+  const [routeFilter, setRouteFilter] = useState('all');
+  const [sortFilter, setSortFilter] = useState<ProgrammingsSortFilter>('created-desc');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [staffActiveTab, setStaffActiveTab] = useState<'programaciones' | 'solicitudes'>('programaciones');
   const [expandedSolicitudId, setExpandedSolicitudId] = useState<number | null>(null);
@@ -800,6 +845,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
+  const [staffProgrammingCreatePage, setStaffProgrammingCreatePage] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedProgramming, setSelectedProgramming] = useState<Programming | null>(null);
 
@@ -863,6 +909,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [solicitudRevApoyoGuideQuery, setSolicitudRevApoyoGuideQuery] = useState('');
   const [backendConvertingId, setBackendConvertingId] = useState<number | null>(null);
   const [backendSolicitudSavingId, setBackendSolicitudSavingId] = useState<number | null>(null);
+  const [solicitudRejectDialogOpen, setSolicitudRejectDialogOpen] = useState(false);
+  const [solicitudRejectTarget, setSolicitudRejectTarget] = useState<SolicitudPersonalizada | null>(null);
+  const [solicitudRejectMotivo, setSolicitudRejectMotivo] = useState('');
   const [backendViewDetail, setBackendViewDetail] = useState<ProgramacionBackend | null>(null);
   const [backendViewLoading, setBackendViewLoading] = useState(false);
   const [backendViewError, setBackendViewError] = useState<string | null>(null);
@@ -878,6 +927,63 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
   const backendGuides = backendEmpleados.filter(isGuideEmployee);
 
+  const programmingGuideOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of backendGuides) {
+      const id = String(g.id_empleado);
+      const name = [g.nombre, g.apellido].filter(Boolean).join(' ').trim();
+      if (id && name) map.set(id, name);
+    }
+    for (const p of backendProgramaciones || []) {
+      const id = p.id_empleado ? String(p.id_empleado) : '';
+      const name = [p.empleado_nombre, p.empleado_apellido].filter(Boolean).join(' ').trim();
+      if (id && name && !map.has(id)) map.set(id, name);
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }, [backendGuides, backendProgramaciones]);
+
+  const programmingRouteOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of backendRutas) {
+      const id = String(r.id_ruta);
+      const name = String(r.nombre || '').trim();
+      if (id && name) map.set(id, name);
+    }
+    for (const p of backendProgramaciones || []) {
+      const id = p.id_ruta ? String(p.id_ruta) : '';
+      const name = String(p.ruta_nombre || '').trim();
+      if (id && name && !map.has(id)) map.set(id, name || `Ruta ${id}`);
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  }, [backendRutas, backendProgramaciones]);
+
+  const hasActiveProgrammingFilters =
+    statusFilter !== 'all' ||
+    tipoFilter !== 'all' ||
+    guideFilter !== 'all' ||
+    routeFilter !== 'all' ||
+    sortFilter !== 'created-desc' ||
+    Boolean(dateFrom) ||
+    Boolean(dateTo);
+
+  const clearProgrammingFilters = () => {
+    setStatusFilter('all');
+    setTipoFilter('all');
+    setGuideFilter('all');
+    setRouteFilter('all');
+    setSortFilter('created-desc');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter, tipoFilter, guideFilter, routeFilter, sortFilter, dateFrom, dateTo]);
+
   const getReservaRowId = (r: Reserva): number | null => {
     const n = Number(r.id_reserva ?? r.id);
     return Number.isFinite(n) && n > 0 ? n : null;
@@ -885,6 +991,36 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
   const getReservaClienteLabel = (r: Reserva) =>
     `${r.cliente_nombre || ''} ${r.cliente_apellido || ''}`.trim() || 'Cliente';
+
+  const getReservaDocumentoLabel = (r: Reserva) => {
+    const label = [r.tipo_documento, r.numero_documento]
+      .filter(Boolean)
+      .map((v) => String(v).trim())
+      .join(' ')
+      .trim();
+    return label || '—';
+  };
+
+  const renderProgramacionSalidaHorario = (
+    route: { date: string; startTime?: string; endTime?: string } | undefined,
+  ) => {
+    if (!route?.date) return null;
+    return (
+      <div className="text-sm space-y-0.5 min-w-[7.5rem]">
+        <div>{formatDateDisplay(route.date)}</div>
+        {route.startTime ? (
+          <div className="text-xs text-gray-600 whitespace-nowrap">
+            Salida: {formatTimeDisplay(route.startTime)}
+          </div>
+        ) : null}
+        {route.endTime ? (
+          <div className="text-xs text-gray-600 whitespace-nowrap">
+            Regreso: {formatTimeDisplay(route.endTime)}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   const getReservaNotasResumen = (r: Reserva) => {
     const raw = (r as Record<string, unknown>).observaciones;
@@ -904,9 +1040,111 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const getReservaAcompanantes = (r: Reserva) =>
     Array.isArray(r.acompanantes) ? r.acompanantes : [];
 
-  const openReservaPreview = async (id: number) => {
+  /**
+   * Exporta la lista de participantes (titulares + acompañantes) a un CSV
+   * que abre directamente en Excel con los datos de la salida seleccionada.
+   */
+  const exportParticipantesCSV = () => {
+    if (backendViewReservas.length === 0) return;
+
+    const rutaNombre = backendViewDetail?.ruta_nombre || selectedProgramming?.routes[0]?.name || 'salida';
+    const fechaSalida = backendViewDetail?.fecha_salida || selectedProgramming?.routes[0]?.date || '';
+    const nombreArchivo = [
+      'participantes',
+      rutaNombre.replace(/[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ ]/g, '').replace(/\s+/g, '_'),
+      fechaSalida,
+    ]
+      .filter(Boolean)
+      .join('_');
+
+    const escapeCsv = (val: unknown): string => {
+      const s = String(val ?? '').replace(/"/g, '""');
+      return `"${s}"`;
+    };
+
+    const headers = [
+      'Reserva',
+      'Tipo participante',
+      'Nombre',
+      'Apellido',
+      'Tipo documento',
+      'Número documento',
+      'Teléfono',
+      'Email',
+      'Estado reserva',
+      'Estado pago',
+      'Notas (resumen)',
+    ];
+
+    const rows: string[][] = [];
+
+    backendViewReservas.forEach((reserva) => {
+      const rid = getReservaRowId(reserva);
+      const idLabel = rid != null ? `#${rid}` : '—';
+      const estadoReserva = reserva.estado ?? '—';
+      const estadoPago = reserva.estado_pago ?? '—';
+      const notas = getReservaNotasResumen(reserva);
+      const email = reserva.cliente_email ?? '';
+      const telefono = reserva.cliente_telefono ?? '';
+
+      // Fila del titular
+      rows.push([
+        idLabel,
+        'Titular',
+        reserva.cliente_nombre ?? '',
+        reserva.cliente_apellido ?? '',
+        reserva.tipo_documento ?? '',
+        reserva.numero_documento ?? '',
+        telefono,
+        email,
+        estadoReserva,
+        estadoPago,
+        notas,
+      ]);
+
+      // Filas de acompañantes
+      const acomps = getReservaAcompanantes(reserva);
+      acomps.forEach((ac: any) => {
+        rows.push([
+          idLabel,
+          'Acompañante',
+          ac.nombre ?? '',
+          ac.apellido ?? '',
+          ac.tipo_documento ?? '',
+          ac.numero_documento ?? '',
+          ac.telefono ?? '',
+          ac.correo ?? ac.email ?? '',
+          estadoReserva,
+          estadoPago,
+          '',
+        ]);
+      });
+    });
+
+    const csvContent =
+      '\uFEFF' + // BOM para que Excel reconozca UTF-8 con tildes y eñes
+      [headers, ...rows]
+        .map((row) => row.map(escapeCsv).join(';'))
+        .join('\r\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${nombreArchivo}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const openReservaPreview = async (id: number, cached?: Reserva | null) => {
     setReservaPreviewOpen(true);
-    setReservaPreview(null);
+    setReservaPreview(cached ?? null);
+    if (cached) {
+      setReservaPreviewLoading(false);
+      return;
+    }
     setReservaPreviewLoading(true);
     try {
       const full = await reservasAPI.getById(id);
@@ -958,9 +1196,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const selectedCreateGuide = backendGuides.find((guide) => String(guide.id_empleado) === backendCreateForm.id_empleado);
   const selectedEditGuide = backendGuides.find((guide) => String(guide.id_empleado) === backendEditForm.id_empleado);
 
+  const findBackendProgramacionById = (idProgramacion: number) =>
+    backendProgramaciones.find((row) => Number(row.id_programacion) === Number(idProgramacion));
+
   const backendEditContext = useMemo(() => {
     if (!backendEditTargetId) return null;
-    const row = backendProgramaciones.find((r) => r.id_programacion === backendEditTargetId);
+    const row = findBackendProgramacionById(backendEditTargetId);
     if (!row) return null;
     const sid = row.id_solicitud_personalizada;
     return {
@@ -994,14 +1235,15 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     const nom = String((d as any).empleado_nombre ?? '').trim();
     const ape = String((d as any).empleado_apellido ?? '').trim();
     const tel = String((d as any).empleado_telefono ?? '').trim();
+    const mail = String((d as any).empleado_correo ?? '').trim();
     if (!nom && !ape) return undefined;
     return {
       id_empleado: d.id_empleado as number,
       nombre: nom || '—',
       apellido: ape,
-      cargo: undefined,
-      rol_nombre: undefined,
-      correo: undefined,
+      cargo: (d as any).empleado_cargo,
+      rol_nombre: (d as any).empleado_rol_nombre,
+      correo: mail || undefined,
       telefono: tel || undefined,
     } as unknown as EmpleadoBackend;
   }, [selectedViewGuide, backendViewDetail]);
@@ -1029,7 +1271,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const buildSolicitudEditState = (solicitudes: SolicitudPersonalizada[]) => {
     const nextState: Record<number, SolicitudRevisionEditRow> = {};
 
-    for (const s of solicitudes) {
+     for (const s of solicitudes) {
       const id = Number(s?.id_solicitud_personalizada);
       if (!Number.isFinite(id) || id <= 0) continue;
 
@@ -1202,7 +1444,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     })();
 
     (async () => {
-      const p = backendProgramaciones.find((r) => r.id_programacion === backendEditTargetId);
+      const p = findBackendProgramacionById(backendEditTargetId);
       if (!p?.es_personalizada || !p.id_solicitud_personalizada) return;
       try {
         const s = await solicitudesPersonalizadasAPI.getById(Number(p.id_solicitud_personalizada));
@@ -1224,9 +1466,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     return () => {
       cancelled = true;
     };
-  }, [isEditModalOpen, backendEditTargetId]);
+  }, [isEditModalOpen, backendEditTargetId, backendProgramaciones]);
   
-  const itemsPerPage = 4; // Paginación de 4 items
+  const itemsPerPage = 10;
 
   // Permisos (staff) por sistema dinámico de roles/permisos
   const canCreate = isStaffRole ? canCreateProgramming : false;
@@ -1274,10 +1516,17 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         const prettyId = String(p.id_programacion).padStart(3, '0');
 
         const guideName = [p.empleado_nombre, p.empleado_apellido].filter(Boolean).join(' ').trim() || '—';
+        const guidePhone = String((p as any).empleado_telefono ?? '').trim() || undefined;
+        const guideEmail = String((p as any).empleado_correo ?? '').trim() || undefined;
+        const guideRoleLabel =
+          [(p as any).empleado_cargo, (p as any).empleado_rol_nombre].filter(Boolean).join(' · ').trim() ||
+          undefined;
         const routeName = p.ruta_nombre || `Ruta ${p.id_ruta}`;
         const totalSeats = Math.max(0, Number(p.cupos_totales ?? 0));
         const availableSeats = Math.max(0, Number(p.cupos_disponibles ?? 0));
         const occupiedSeats = Math.max(0, totalSeats - availableSeats);
+        const fechaCreacionRaw =
+          (p as any).fecha_creacion ?? (p as any).created_at ?? (p as any).fecha_registro ?? null;
 
         return {
           id,
@@ -1294,10 +1543,14 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           clients: [],
           guideId: p.id_empleado ? String(p.id_empleado) : '',
           guideName,
+          guidePhone,
+          guideEmail,
+          guideRoleLabel,
           status: mapEstadoToStatus(p.estado),
           additionalServices: [],
           notes: p.lugar_encuentro ? `Punto de encuentro: ${p.lugar_encuentro}` : undefined,
-          createdAt: (p as any).fecha_creacion ? String((p as any).fecha_creacion).slice(0, 10) : String(p.fecha_salida || ''),
+          createdAt: fechaCreacionRaw ? String(fechaCreacionRaw) : String(p.fecha_salida || ''),
+          createdAtMs: parseProgramacionCreatedMs(fechaCreacionRaw, p.id_programacion),
           createdBy: 'Backend',
           totalSeats,
           availableSeats,
@@ -1323,20 +1576,88 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       }
     }
 
+    const q = searchTerm.trim().toLowerCase();
+
     // Aplicar filtros
-    filtered = filtered.filter(prog => {
-      const matchesSearch = 
-        prog.programId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prog.guideName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        prog.routes.some(r => r.routeName.toLowerCase().includes(searchTerm.toLowerCase())) ||
-        prog.clients.some(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()));
-      
+    filtered = filtered.filter((prog) => {
+      const matchesSearch =
+        !q ||
+        prog.programId.toLowerCase().includes(q) ||
+        prog.guideName.toLowerCase().includes(q) ||
+        (prog.guideEmail || '').toLowerCase().includes(q) ||
+        (prog.guidePhone || '').toLowerCase().includes(q) ||
+        prog.routes.some((r) => r.routeName.toLowerCase().includes(q)) ||
+        prog.clients.some((c) => c.name.toLowerCase().includes(q));
+
       const matchesStatus = statusFilter === 'all' || prog.status === statusFilter;
-      
-      return matchesSearch && matchesStatus;
+
+      const isPers = normalizeEsPersonalizada(prog.isPersonalizada);
+      const matchesTipo =
+        tipoFilter === 'all' ||
+        (tipoFilter === 'personalizada' && isPers) ||
+        (tipoFilter === 'programada' && !isPers);
+
+      const matchesGuide = guideFilter === 'all' || String(prog.guideId) === guideFilter;
+
+      const matchesRoute =
+        routeFilter === 'all' || prog.routes.some((r) => String(r.routeId) === routeFilter);
+
+      const salidaDate = String(prog.routes[0]?.date || '').slice(0, 10);
+      const matchesDateFrom = !dateFrom || (salidaDate && salidaDate >= dateFrom);
+      const matchesDateTo = !dateTo || (salidaDate && salidaDate <= dateTo);
+
+      return (
+        matchesSearch &&
+        matchesStatus &&
+        matchesTipo &&
+        matchesGuide &&
+        matchesRoute &&
+        matchesDateFrom &&
+        matchesDateTo
+      );
     });
 
-    return filtered;
+    const sortByCreatedMs = (a: Programming, b: Programming) => {
+      const ma = a.createdAtMs ?? parseProgramacionCreatedMs(a.createdAt, a.id);
+      const mb = b.createdAtMs ?? parseProgramacionCreatedMs(b.createdAt, b.id);
+      return mb - ma;
+    };
+
+    const sorted = [...filtered].sort((a, b) => {
+      switch (sortFilter) {
+        case 'created-desc':
+          return sortByCreatedMs(a, b);
+        case 'created-asc': {
+          const ma = a.createdAtMs ?? parseProgramacionCreatedMs(a.createdAt, a.id);
+          const mb = b.createdAtMs ?? parseProgramacionCreatedMs(b.createdAt, b.id);
+          return ma - mb;
+        }
+        case 'date-desc': {
+          const da = a.routes[0]?.date || '';
+          const db = b.routes[0]?.date || '';
+          return db.localeCompare(da);
+        }
+        case 'date-asc': {
+          const da = a.routes[0]?.date || '';
+          const db = b.routes[0]?.date || '';
+          return da.localeCompare(db);
+        }
+        case 'time-desc': {
+          const ta = a.routes[0]?.startTime || '';
+          const tb = b.routes[0]?.startTime || '';
+          return tb.localeCompare(ta);
+        }
+        case 'time-asc': {
+          const ta = a.routes[0]?.startTime || '';
+          const tb = b.routes[0]?.startTime || '';
+          return ta.localeCompare(tb);
+        }
+        default:
+          return 0;
+      }
+    });
+
+    return sorted;
   };
 
   const filteredProgrammings = getFilteredProgrammings();
@@ -1350,6 +1671,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   // Handlers
   const closeCreateProgrammingPage = () => {
     setIsCreateModalOpen(false);
+    setStaffProgrammingCreatePage(false);
     setBackendCreateStep(1);
   };
 
@@ -1360,8 +1682,21 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     setBackendEditGuiaApoyoIds([]);
   };
 
+  const resetViewModalState = () => {
+    setBackendViewDetail(null);
+    setBackendViewError(null);
+    setBackendViewLoading(false);
+    setBackendViewReservas([]);
+    setBackendViewReservasLoading(false);
+    setBackendViewReservasError(null);
+    setViewModalRuta(null);
+    setViewModalRutaLoading(false);
+  };
+
   const handleView = async (programming: Programming) => {
     setSelectedProgramming(programming);
+    setStaffProgrammingCreatePage(false);
+    setBackendEditTargetId(null);
     setIsViewModalOpen(true);
 
     const routeId = Number(programming.routes[0]?.routeId);
@@ -1390,7 +1725,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       setViewModalRutaLoading(false);
     }
 
-    if (!canUseBackend) {
+    if (!canUseBackend && role !== 'client') {
       setBackendViewDetail(null);
       setBackendViewError(null);
       setBackendViewLoading(false);
@@ -1417,6 +1752,13 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       const detail = await programacionAPI.getById(id);
       setBackendViewDetail(detail);
       setBackendViewLoading(false);
+
+      if (!canUseBackend) {
+        setBackendViewReservas([]);
+        setBackendViewReservasLoading(false);
+        setBackendViewReservasError(null);
+        return;
+      }
 
       setBackendViewReservasLoading(true);
       setBackendViewReservasError(null);
@@ -1534,22 +1876,66 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     setBackendCreateRouteQuery('');
     setBackendCreateGuideQuery('');
     setBackendCreateStep(1);
+    setStaffProgrammingCreatePage(false);
+    setIsViewModalOpen(false);
     setIsCreateModalOpen(true);
   };
 
-  const openBackendEdit = (idProgramacion: number) => {
+  const openBackendEdit = (idProgramacion: number, tableRow?: Programming) => {
     if (!canEdit) {
       toast.error(programmingPerms.getErrorMessage('editar'));
       return;
     }
 
-    const p = backendProgramaciones.find((row) => row.id_programacion === idProgramacion);
-    if (!p) {
-      toast.error('No se encontró la programación');
+    const id = Number(idProgramacion);
+    if (!Number.isFinite(id) || id <= 0) {
+      toast.error('ID de programación inválido');
       return;
     }
 
-    setBackendEditTargetId(idProgramacion);
+    setIsViewModalOpen(false);
+    setStaffProgrammingCreatePage(false);
+
+    const p =
+      findBackendProgramacionById(id) ??
+      (tableRow
+        ? ({
+            id_programacion: id,
+            id_ruta: Number(tableRow.routes[0]?.routeId) || 0,
+            id_empleado: tableRow.guideId ? Number(tableRow.guideId) : null,
+            fecha_salida: tableRow.routes[0]?.date || '',
+            fecha_regreso: tableRow.routes[0]?.date || '',
+            hora_salida: tableRow.routes[0]?.startTime || '',
+            hora_regreso: tableRow.routes[0]?.endTime || '',
+            cupos_totales: tableRow.totalSeats ?? null,
+            cupos_disponibles: tableRow.availableSeats ?? null,
+            precio_programacion: null,
+            estado:
+              tableRow.status === 'cancelled'
+                ? 'Cancelado'
+                : tableRow.status === 'completed'
+                  ? 'Completado'
+                  : tableRow.status === 'in-progress'
+                    ? 'En Progreso'
+                    : 'Programado',
+            es_personalizada: tableRow.isPersonalizada ?? false,
+            lugar_encuentro: tableRow.notes?.replace(/^Punto de encuentro:\s*/i, '') || '',
+            ruta_nombre: tableRow.routes[0]?.routeName || null,
+          } as ProgramacionBackend)
+        : null);
+
+    if (!p) {
+      toast.error('No se encontró la programación', {
+        description: 'Actualiza el listado o verifica que la salida siga activa en el sistema.',
+      });
+      return;
+    }
+
+    if (tableRow) {
+      setSelectedProgramming(tableRow);
+    }
+
+    setBackendEditTargetId(id);
     setBackendEditCommittedSeats(Math.max(0, Number(p.cupos_totales ?? 0) - Number(p.cupos_disponibles ?? 0)));
 
     const apoyoDelBackend = (p as ProgramacionBackend).guias_apoyo;
@@ -1565,7 +1951,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       const solicitudVinculada =
         backendSolicitudes.find(
           (s) =>
-            Number(s.id_programacion) === idProgramacion ||
+            Number(s.id_programacion) === id ||
             (p.id_solicitud_personalizada != null &&
               Number(s.id_solicitud_personalizada) === Number(p.id_solicitud_personalizada)),
         ) ?? null;
@@ -1846,28 +2232,54 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const getGuideDisplayName = (guide?: Pick<EmpleadoBackend, 'nombre' | 'apellido'> | null) =>
     [guide?.nombre, guide?.apellido].filter(Boolean).join(' ').trim() || 'Sin asignar';
 
-  const formatDisplayDate = (value?: string | null) => {
-    if (!value) return 'Sin definir';
-    const raw = String(value).trim();
-    const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
-    // Evita desfase por zona horaria cuando el backend envía fecha-only.
-    const parsed = match ? new Date(`${match[1]}T00:00:00`) : new Date(raw);
-    if (Number.isNaN(parsed.getTime())) return String(value);
-    return parsed.toLocaleDateString('es-CO', {
-      weekday: 'short',
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    });
+  const renderProgrammingGuideCell = (prog: Programming) => {
+    if (!prog.guideName || prog.guideName === '—') {
+      return <span className="text-sm text-gray-400">Sin asignar</span>;
+    }
+    return (
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-gray-900 truncate">{prog.guideName}</p>
+        {prog.guideRoleLabel ? (
+          <p className="text-xs text-gray-500 truncate">{prog.guideRoleLabel}</p>
+        ) : null}
+        {prog.guidePhone ? <p className="text-xs text-gray-500 truncate">{prog.guidePhone}</p> : null}
+        {prog.guideEmail ? <p className="text-xs text-gray-500 truncate">{prog.guideEmail}</p> : null}
+      </div>
+    );
   };
 
-  const formatDisplayDateTime = (date?: string | null, time?: string | null) => {
-    const dateLabel = formatDisplayDate(date);
-    if (!time) return dateLabel;
-    const normalized = String(time).trim();
-    const match = normalized.match(/^(\d{2}:\d{2})/);
-    return `${dateLabel} · ${match ? match[1] : normalized}`;
-  };
+  const renderGuideContactFields = (opts: {
+    name: string;
+    roleLabel?: string;
+    email?: string;
+    phone?: string;
+    highlightSelf?: boolean;
+  }) => (
+    <>
+      <div className="flex items-center gap-3">
+        <div className="w-12 h-12 rounded-full bg-orange-200 flex items-center justify-center">
+          <User className="w-6 h-6 text-orange-700" />
+        </div>
+        <div>
+          <p className="font-semibold text-gray-900">{opts.name}</p>
+          {opts.highlightSelf ? (
+            <Badge className="bg-orange-600 text-white mt-1">TÚ</Badge>
+          ) : null}
+          {opts.roleLabel ? <p className="text-sm text-gray-600">{opts.roleLabel}</p> : null}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+        <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
+          <p className="text-xs text-gray-500">Correo</p>
+          <p className="font-medium text-gray-900 break-all">{opts.email || 'Sin correo registrado'}</p>
+        </div>
+        <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
+          <p className="text-xs text-gray-500">Teléfono</p>
+          <p className="font-medium text-gray-900">{opts.phone || 'Sin teléfono registrado'}</p>
+        </div>
+      </div>
+    </>
+  );
 
   const normalizeDateInputValue = (value?: string | null) => {
     if (!value) return '';
@@ -1886,6 +2298,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     if (match) return match[1];
     return '';
   };
+
+  const formatDisplayDate = (value?: string | null) =>
+    formatDateDisplay(value, { fallback: 'Sin definir' });
+
+  const formatDisplayDateTime = (date?: string | null, time?: string | null) =>
+    formatDateTimeDisplay(date, time, { dateFallback: 'Sin definir' });
 
   const renderGuideAssignmentCard = (
     guide: EmpleadoBackend | undefined,
@@ -1959,7 +2377,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl border border-green-100 bg-white p-3">
               <p className="text-xs text-gray-500">Salida</p>
-              <p className="font-medium text-gray-900">{formatDisplayDateTime(form.fecha_salida, form.hora_salida)}</p>
+              <p className="font-medium text-gray-900">{formatDateTimeDisplay(form.fecha_salida, form.hora_salida)}</p>
             </div>
             <div className="rounded-xl border border-green-100 bg-white p-3">
               <p className="text-xs text-gray-500">Regreso</p>
@@ -2062,6 +2480,61 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const solicitudHabilitadaParaPago = (status?: string | null) => {
     const normalized = String(status || '').trim().toLowerCase().replace(/\s+/g, '');
     return normalized.includes('aprobadaparapago') || normalized === 'cotizada';
+  };
+
+  const solicitudPuedeRechazarse = (s: SolicitudPersonalizada) => {
+    if (s.id_programacion) return false;
+    const normalized = String(s.estado || '').trim().toLowerCase().replace(/\s+/g, '');
+    if (
+      normalized.includes('rechaz') ||
+      normalized.includes('cancel') ||
+      normalized.includes('convert') ||
+      normalized.includes('programad')
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const confirmarRechazoSolicitud = async () => {
+    const s = solicitudRejectTarget;
+    if (!s) return;
+    const motivo = solicitudRejectMotivo.trim();
+    if (motivo.length < SOLICITUD_RECHAZO_MOTIVO_MIN) {
+      toast.error(`Indica el motivo del rechazo (mínimo ${SOLICITUD_RECHAZO_MOTIVO_MIN} caracteres).`);
+      return;
+    }
+    const id = Number(s.id_solicitud_personalizada);
+    if (!Number.isFinite(id) || id <= 0) return;
+    try {
+      setBackendSolicitudSavingId(id);
+      await solicitudesPersonalizadasAPI.cotizar(id, {
+        estado: 'Rechazada',
+        motivo_rechazo: motivo,
+      });
+      await refreshBackendSolicitudes(id);
+      removeSolicitudRevisionSessionDraft(id);
+      setBackendSolicitudEdits((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        persistSolicitudRevisionSessionDrafts(next);
+        return next;
+      });
+      toast.success('Solicitud rechazada', {
+        description: s.id_reserva
+          ? `La reserva #${s.id_reserva} quedó cancelada y ya no bloquea eliminar la ruta.`
+          : 'La solicitud quedó cerrada.',
+      });
+      setSolicitudRejectDialogOpen(false);
+      setSolicitudRejectTarget(null);
+      setSolicitudRejectMotivo('');
+    } catch (e: any) {
+      toast.error('No se pudo rechazar la solicitud', {
+        description: e?.message || 'Error desconocido',
+      });
+    } finally {
+      setBackendSolicitudSavingId(null);
+    }
   };
 
   const formatRequestedOptionalServices = (value: unknown) => {
@@ -2205,6 +2678,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           additionalServices: selectedServices,
           notes: formData.notes,
           createdAt: new Date().toISOString().split('T')[0],
+          createdAtMs: Date.now(),
           createdBy: userName || 'Sistema'
         };
         setProgrammings([newProgramming, ...programmings]);
@@ -2285,7 +2759,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <div className="flex-1">
                             <p className="font-medium text-sm">{route.routeName}</p>
                             <p className="text-xs text-gray-600">
-                              {new Date(route.date).toLocaleDateString('es-ES')} • {route.startTime} - {route.endTime}
+                              {formatDateDisplay(route.date, { style: 'numeric' })} · {formatTimeDisplay(route.startTime)} – {formatTimeDisplay(route.endTime)}
                             </p>
                           </div>
                           <Button
@@ -2448,6 +2922,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     const routeTexts = routeDetail;
     const txtParticipantes = String(routeTexts?.recomendaciones_participantes ?? '').trim();
     const txtBriefing = String(routeTexts?.briefing_operativo_equipo ?? '').trim();
+    const horaSalidaDetalle =
+      backendViewDetail?.hora_salida ?? selectedProgramming?.routes[0]?.startTime ?? null;
+    const horaRegresoDetalle =
+      backendViewDetail?.hora_regreso ?? selectedProgramming?.routes[0]?.endTime ?? null;
 
     return (
     <div className="space-y-6 min-w-0 w-full max-w-full overflow-x-hidden">
@@ -2474,29 +2952,39 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 {getStatusBadge(selectedProgramming.status)}
                                 <SalidaTipoProgramacionBadge esPersonalizada={esPersonalizadaPorProgramacion(backendViewDetail)} />
                               </div>
-                              <div>
-                                <h3 className="text-2xl font-semibold leading-snug text-gray-900">
-                                  {backendViewDetail.ruta_nombre || routeDetail?.nombre || 'Programación'}
-                                </h3>
-                                <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                                  {routeDetail?.descripcion ||
-                                    (backendViewDetail as any).ruta_descripcion ||
-                                    'Sin descripción registrada para esta ruta.'}
-                                </p>
-                              </div>
+                              <h3 className="text-2xl font-semibold leading-snug text-gray-900">
+                                {backendViewDetail.ruta_nombre || routeDetail?.nombre || 'Programación'}
+                              </h3>
+                              <p className="text-sm leading-relaxed text-gray-600">
+                                {routeDetail?.descripcion ||
+                                  (backendViewDetail as any).ruta_descripcion ||
+                                  'Sin descripción registrada para esta ruta.'}
+                              </p>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                               <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Salida</p>
+                                <p className="text-xs text-gray-500">Fecha de salida</p>
                                 <p className="font-medium text-gray-900 break-words">
-                                  {formatDisplayDateTime(backendViewDetail.fecha_salida, backendViewDetail.hora_salida)}
+                                  {formatDateDisplay(backendViewDetail.fecha_salida)}
                                 </p>
                               </div>
                               <div className="rounded-xl border border-green-100 bg-white p-3">
-                                <p className="text-xs text-gray-500">Regreso</p>
+                                <p className="text-xs text-gray-500">Hora de salida</p>
                                 <p className="font-medium text-gray-900 break-words">
-                                  {formatDisplayDateTime(backendViewDetail.fecha_regreso, backendViewDetail.hora_regreso)}
+                                  {formatTimeDisplay(horaSalidaDetalle, 'Por definir')}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Fecha de regreso</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {formatDateDisplay(backendViewDetail.fecha_regreso)}
+                                </p>
+                              </div>
+                              <div className="rounded-xl border border-green-100 bg-white p-3">
+                                <p className="text-xs text-gray-500">Hora de regreso</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {formatTimeDisplay(horaRegresoDetalle, 'Por definir')}
                                 </p>
                               </div>
                               <div className="rounded-xl border border-green-100 bg-white p-3">
@@ -2507,7 +2995,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               </div>
                               <div className="rounded-xl border border-green-100 bg-white p-3">
                                 <p className="text-xs text-gray-500">Precio</p>
-                                <p className="font-medium text-gray-900 break-words">{formatCurrency(backendViewDetail.precio_programacion)}</p>
+                                <p className="font-medium text-gray-900 break-words">
+                                  {formatCurrency(backendViewDetail.precio_programacion)}
+                                </p>
                               </div>
                             </div>
                           </div>
@@ -2541,13 +3031,25 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 </p>
                               </div>
                               <div>
+                                <Label className="text-gray-500">Hora de salida</Label>
+                                <p className="font-medium text-gray-900">
+                                  {formatTimeDisplay(horaSalidaDetalle, 'Sin definir')}
+                                </p>
+                              </div>
+                              <div>
+                                <Label className="text-gray-500">Hora de regreso</Label>
+                                <p className="font-medium text-gray-900">
+                                  {formatTimeDisplay(horaRegresoDetalle, 'Sin definir')}
+                                </p>
+                              </div>
+                              <div>
                                 <Label className="text-gray-500">Punto de encuentro</Label>
                                 <p className="font-medium text-gray-900">{backendViewDetail.lugar_encuentro || 'Sin definir'}</p>
                               </div>
                               <div>
                                 <Label className="text-gray-500">Creación</Label>
                                 <p className="font-medium text-gray-900">
-                                  {formatDisplayDate((backendViewDetail as any).fecha_creacion || selectedProgramming.createdAt)}
+                                  {formatDateDisplay((backendViewDetail as any).fecha_creacion || selectedProgramming.createdAt)}
                                 </p>
                               </div>
                             </div>
@@ -2592,27 +3094,19 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               </CardTitle>
                             </CardHeader>
                             <CardContent className="p-6 space-y-4">
-                              <div className="flex items-center gap-3">
-                                <div className="w-12 h-12 rounded-full bg-orange-200 flex items-center justify-center">
-                                  <User className="w-6 h-6 text-orange-700" />
-                                </div>
-                                <div>
-                                  <p className="font-semibold text-gray-900">{getGuideDisplayName(displayViewGuide)}</p>
-                                  <p className="text-sm text-gray-600">{displayViewGuide?.cargo || displayViewGuide?.rol_nombre || 'Guía turístico'}</p>
-                                </div>
-                              </div>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Correo</p>
-                                  <p className="font-medium text-gray-900 break-all">{displayViewGuide?.correo || 'Sin correo registrado'}</p>
-                                </div>
-                                <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
-                                  <p className="text-xs text-gray-500">Teléfono</p>
-                                  <p className="font-medium text-gray-900">
-                                    {displayViewGuide?.telefono || (backendViewDetail as any).empleado_telefono || 'Sin teléfono registrado'}
-                                  </p>
-                                </div>
-                              </div>
+                              {renderGuideContactFields({
+                                name: getGuideDisplayName(displayViewGuide),
+                                roleLabel:
+                                  displayViewGuide?.cargo ||
+                                  displayViewGuide?.rol_nombre ||
+                                  selectedProgramming?.guideRoleLabel ||
+                                  'Guía turístico',
+                                email: displayViewGuide?.correo || selectedProgramming?.guideEmail,
+                                phone:
+                                  displayViewGuide?.telefono ||
+                                  (backendViewDetail as any).empleado_telefono ||
+                                  selectedProgramming?.guidePhone,
+                              })}
                             </CardContent>
                           </Card>
 
@@ -2686,10 +3180,24 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
                       <Card className="border-teal-200">
                         <CardHeader className="bg-teal-50">
-                          <CardTitle className="text-lg flex items-center gap-2">
-                            <Users className="w-5 h-5" />
-                            Reservas de esta salida
-                          </CardTitle>
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              <Users className="w-5 h-5" />
+                              Reservas de esta salida
+                            </CardTitle>
+                            {backendViewReservas.length > 0 && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="border-teal-400 text-teal-800 hover:bg-teal-50 gap-1.5"
+                                onClick={exportParticipantesCSV}
+                              >
+                                <Download className="w-4 h-4" />
+                                Descargar lista (Excel)
+                              </Button>
+                            )}
+                          </div>
                         </CardHeader>
                         <CardContent className="p-6">
                           {backendViewReservasLoading ? (
@@ -2708,12 +3216,13 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                   <TableRow>
                                     <TableHead>Reserva</TableHead>
                                     <TableHead>Cliente</TableHead>
+                                    <TableHead className="min-w-[120px]">Documento</TableHead>
                                     <TableHead className="text-center">Personas</TableHead>
                                     <TableHead className="text-center w-[72px]">Acomp.</TableHead>
                                     <TableHead>Estado</TableHead>
                                     <TableHead>Pago</TableHead>
                                     <TableHead className="min-w-[140px]">Notas (resumen)</TableHead>
-                                    {role !== 'guide' ? <TableHead className="w-[120px] text-right">Acción</TableHead> : null}
+                                    <TableHead className="w-[120px] text-right">Acción</TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -2733,6 +3242,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             </div>
                                           ) : null}
                                         </TableCell>
+                                        <TableCell className="text-sm text-gray-800 whitespace-nowrap">
+                                          {getReservaDocumentoLabel(row)}
+                                        </TableCell>
                                         <TableCell className="text-center">
                                           {row.numero_participantes ?? '—'}
                                         </TableCell>
@@ -2746,7 +3258,6 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             {truncateResumenNotas(notas, 90)}
                                           </span>
                                         </TableCell>
-                                        {role !== 'guide' ? (
                                         <TableCell className="text-right">
                                           <Button
                                             type="button"
@@ -2754,12 +3265,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             variant="outline"
                                             className="border-teal-300 text-teal-800"
                                             disabled={rid == null}
-                                            onClick={() => rid != null && openReservaPreview(rid)}
+                                            onClick={() => rid != null && openReservaPreview(rid, row)}
                                           >
                                             Ver reserva
                                           </Button>
                                         </TableCell>
-                                        ) : null}
                                       </TableRow>
                                     );
                                   })}
@@ -2795,6 +3305,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     ) : null}
                                   </div>
                                   <div className="text-sm text-gray-600 grid gap-1 sm:grid-cols-2">
+                                    <span className="sm:col-span-2">
+                                      Documento (titular): {getReservaDocumentoLabel(row)}
+                                    </span>
                                     {row.cliente_email ? (
                                       <span className="break-all">Correo: {row.cliente_email}</span>
                                     ) : null}
@@ -2813,8 +3326,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                               {[ac.nombre, ac.apellido].filter(Boolean).join(' ').trim() ||
                                                 'Sin nombre'}
                                             </span>
-                                            {ac.numero_documento
-                                              ? ` · Doc.: ${String(ac.numero_documento)}`
+                                            {[ac.tipo_documento, ac.numero_documento].filter(Boolean).length > 0
+                                              ? ` · Doc.: ${[ac.tipo_documento, ac.numero_documento]
+                                                  .filter(Boolean)
+                                                  .join(' ')
+                                                  .trim()}`
                                               : ''}
                                             {ac.telefono ? ` · Tel.: ${String(ac.telefono)}` : ''}
                                           </li>
@@ -2845,6 +3361,803 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     );
   };
 
+
+  const renderStaffBackendCreateForm = () => (
+<form
+              className="flex flex-col gap-4 pb-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                try {
+                  if (!canCreate) {
+                    toast.error(programmingPerms.getErrorMessage('crear'));
+                    return;
+                  }
+                  if (backendCreateStep !== 2) {
+                    const idRutaStep = Number(backendCreateForm.id_ruta);
+                    if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
+                      toast.error('Selecciona una ruta para continuar');
+                      return;
+                    }
+                    setBackendCreateStep(2);
+                    return;
+                  }
+
+                  const idRuta = Number(backendCreateForm.id_ruta);
+                  if (!Number.isFinite(idRuta) || idRuta <= 0) {
+                    toast.error('Selecciona una ruta válida');
+                    return;
+                  }
+                  if (!backendCreateForm.fecha_salida || !backendCreateForm.fecha_regreso) {
+                    toast.error('Selecciona fechas de salida y regreso');
+                    return;
+                  }
+                  const cupos = Number(backendCreateForm.cupos_totales);
+                  if (!Number.isFinite(cupos) || cupos <= 0) {
+                    toast.error('Cupos totales inválidos');
+                    return;
+                  }
+
+                  const precio = backendCreateForm.precio_programacion.trim()
+                    ? Number(backendCreateForm.precio_programacion)
+                    : null;
+                  if (precio !== null && (!Number.isFinite(precio) || precio < 0)) {
+                    toast.error('Precio inválido');
+                    return;
+                  }
+
+                  const idEmpleado =
+                    backendCreateForm.id_empleado !== '__none__'
+                      ? Number(backendCreateForm.id_empleado)
+                      : null;
+
+                  setBackendCreateSaving(true);
+
+                  await programacionAPI.create({
+                    id_ruta: idRuta,
+                    fecha_salida: backendCreateForm.fecha_salida,
+                    fecha_regreso: backendCreateForm.fecha_regreso,
+                    hora_salida: backendCreateForm.hora_salida || null,
+                    hora_regreso: backendCreateForm.hora_regreso || null,
+                    cupos_totales: cupos,
+                    precio_programacion: precio,
+                    id_empleado: Number.isFinite(Number(idEmpleado)) ? idEmpleado : null,
+                    lugar_encuentro: backendCreateForm.lugar_encuentro?.trim() ? backendCreateForm.lugar_encuentro.trim() : null,
+                    es_personalizada: false,
+                  } as any);
+
+                  const refreshed = await programacionAPI.getAll();
+                  setBackendProgramaciones(refreshed);
+                  toast.success('Programación creada');
+                  closeCreateProgrammingPage();
+                } catch (err: any) {
+                  toast.error('No se pudo crear la programación', {
+                    description: err?.message || 'Error desconocido',
+                  });
+                } finally {
+                  setBackendCreateSaving(false);
+                }
+              }}
+            >
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
+                  <p className="text-sm text-gray-600">Selecciona una ruta y revisa sus servicios antes de crear la programación.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="border-green-300 text-green-700">
+                    Paso {backendCreateStep} de 2
+                  </Badge>
+                  <Badge variant="outline" className="border-green-300 text-green-700">
+                    {backendRutas.length} rutas activas
+                  </Badge>
+                  {backendCreateStep === 1 ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="bg-green-700 hover:bg-green-800"
+                      onClick={() => {
+                        const idRutaStep = Number(backendCreateForm.id_ruta);
+                        if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
+                          toast.error('Selecciona una ruta para continuar');
+                          return;
+                        }
+                        setBackendCreateStep(2);
+                      }}
+                      disabled={backendCreateSaving || !backendCreateForm.id_ruta}
+                    >
+                      Siguiente
+                    </Button>
+                  ) : (
+                    <Button type="button" size="sm" variant="outline" onClick={() => setBackendCreateStep(1)}>
+                      Atrás
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full bg-gradient-to-r from-green-500 to-emerald-600 transition-all ${
+                      backendCreateStep === 1 ? 'w-1/2' : 'w-full'
+                    }`}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs text-gray-500">
+                  <span>1. Ruta y guía</span>
+                  <span>2. Operación y confirmación</span>
+                </div>
+              </div>
+
+              <div ref={backendCreateScrollRef} className="space-y-5">
+                {backendCreateStep === 1 ? (
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                    <div className="space-y-3 min-w-0 flex flex-col min-h-0">
+                      <Input
+                        value={backendCreateRouteQuery}
+                        onChange={(e) => setBackendCreateRouteQuery(e.target.value)}
+                        placeholder="Buscar ruta, descripción o dificultad..."
+                      />
+
+                      {renderCompactRouteList(
+                        filteredCreateRoutes,
+                        backendCreateForm.id_ruta,
+                        (routeId) => setBackendCreateForm((prev) => ({ ...prev, id_ruta: routeId })),
+                        'No hay rutas que coincidan con la búsqueda.',
+                        'h-[48vh] max-h-none'
+                      )}
+                    </div>
+
+                    <div className="space-y-5 min-w-0 flex flex-col min-h-0">
+                      {selectedCreateRoute ? (
+                        renderRoutePreview(selectedCreateRoute)
+                      ) : (
+                        <Card className="border-dashed border-gray-200 bg-gray-50/40">
+                          <CardContent className="p-4 text-sm text-gray-700">
+                            Selecciona una ruta para ver su información y servicios.
+                          </CardContent>
+                        </Card>
+                      )}
+
+                      <div>
+                        <Label className="text-base font-semibold text-gray-900">Guía turístico</Label>
+                        <p className="text-sm text-gray-600">Asígnalo desde aquí mismo para dejar lista la operación.</p>
+                      </div>
+                      <Input
+                        value={backendCreateGuideQuery}
+                        onChange={(e) => setBackendCreateGuideQuery(e.target.value)}
+                        placeholder="Buscar guía por nombre, correo o cargo..."
+                      />
+
+                      {renderCompactGuideList(
+                        filteredCreateGuides,
+                        backendCreateForm.id_empleado,
+                        (guideId) => setBackendCreateForm((prev) => ({ ...prev, id_empleado: guideId })),
+                        'No hay guías que coincidan con la búsqueda.',
+                        'h-[32vh] max-h-none'
+                      )}
+
+                      {renderGuideAssignmentCard(selectedCreateGuide, backendCreateForm.id_empleado)}
+
+                      {renderOperationalSummaryCard({
+                        title: 'Resumen de creación',
+                        subtitle: 'Lo que selecciones aquí será la base de la nueva programación.',
+                        route: selectedCreateRoute,
+                        guide: selectedCreateGuide,
+                        form: backendCreateForm,
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                    <div className="space-y-5">
+                      <Card className="border-green-200 shadow-sm">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base text-green-900">Calendario de la salida</CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                              <Label>Fecha salida *</Label>
+                              <Input
+                                type="date"
+                                value={backendCreateForm.fecha_salida}
+                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_salida: e.target.value }))}
+                              />
+                            </div>
+
+                            <div>
+                              <Label>Fecha regreso *</Label>
+                              <Input
+                                type="date"
+                                value={backendCreateForm.fecha_regreso}
+                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))}
+                              />
+                            </div>
+
+                            <div>
+                              <Label>Hora salida</Label>
+                              <Input
+                                type="time"
+                                value={backendCreateForm.hora_salida}
+                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, hora_salida: e.target.value }))}
+                              />
+                            </div>
+
+                            <div>
+                              <Label>Hora regreso</Label>
+                              <Input
+                                type="time"
+                                value={backendCreateForm.hora_regreso}
+                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, hora_regreso: e.target.value }))}
+                              />
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="border-green-200 shadow-sm">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base text-green-900">Capacidad y valor comercial</CardTitle>
+                        </CardHeader>
+                        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <Label>Cupos totales *</Label>
+                            <Input
+                              type="number"
+                              value={backendCreateForm.cupos_totales}
+                              onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, cupos_totales: e.target.value }))}
+                              placeholder="Ej: 20"
+                            />
+                          </div>
+
+                          <div>
+                            <Label>Precio (opcional)</Label>
+                            <Input
+                              type="number"
+                              value={backendCreateForm.precio_programacion}
+                              onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, precio_programacion: e.target.value }))}
+                              placeholder="Ej: 120000"
+                            />
+                          </div>
+                        </CardContent>
+                      </Card>
+
+                      <Card className="border-green-200 shadow-sm">
+                        <CardHeader className="pb-3">
+                          <CardTitle className="text-base text-green-900">Logística de encuentro</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <Label>Punto de encuentro</Label>
+                          <Input
+                            value={backendCreateForm.lugar_encuentro}
+                            onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
+                            placeholder="Ej: Parque principal, entrada de la finca, terminal..."
+                          />
+
+                          <p className="mt-2 text-xs text-gray-500">
+                            Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
+                          </p>
+                        </CardContent>
+                      </Card>
+                    </div>
+
+                    <div className="space-y-5">
+                      {renderGuideAssignmentCard(
+                        selectedCreateGuide,
+                        backendCreateForm.id_empleado,
+                        'Asignarlo ahora ayuda a dejar lista la operación desde el momento de crear.'
+                      )}
+
+                      {renderOperationalSummaryCard({
+                        title: 'Confirmación final',
+                        subtitle: 'Revisa esta ficha antes de crear la programación.',
+                        route: selectedCreateRoute,
+                        guide: selectedCreateGuide,
+                        form: backendCreateForm,
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap justify-end gap-2 border-t border-gray-200 bg-slate-50/95 px-1 pt-4 backdrop-blur-sm">
+                <Button type="button" variant="outline" onClick={closeCreateProgrammingPage}>
+                  Cancelar
+                </Button>
+                {backendCreateStep === 1 ? (
+                  <Button
+                    type="button"
+                    className="bg-green-700 hover:bg-green-800"
+                    onClick={() => {
+                      const idRutaStep = Number(backendCreateForm.id_ruta);
+                      if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
+                        toast.error('Selecciona una ruta para continuar');
+                        return;
+                      }
+                      setBackendCreateStep(2);
+                    }}
+                    disabled={backendCreateSaving || !backendCreateForm.id_ruta}
+                  >
+                    Siguiente
+                  </Button>
+                ) : (
+                  <>
+                    <Button type="button" variant="outline" onClick={() => setBackendCreateStep(1)}>
+                      Atrás
+                    </Button>
+                    <Button type="submit" className="bg-green-700 hover:bg-green-800" disabled={backendCreateSaving}>
+                      {backendCreateSaving ? 'Creando…' : 'Crear'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            </form>
+  );
+
+  const renderStaffBackendEditForm = () => (
+<form
+                          className="flex flex-col gap-5 pb-2"
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            try {
+                              if (!canEdit) {
+                                toast.error(programmingPerms.getErrorMessage('editar'));
+                                return;
+                              }
+                              if (!backendEditTargetId) {
+                                toast.error('No hay programación seleccionada');
+                                return;
+                              }
+                              const idRuta = Number(backendEditForm.id_ruta);
+                              if (!Number.isFinite(idRuta) || idRuta <= 0) {
+                                toast.error('Ruta inválida');
+                                return;
+                              }
+                              const fechaSalidaEnvio =
+                                isBackendEditPersonalizada && backendEditContratoFechas
+                                  ? backendEditContratoFechas.fecha_salida
+                                  : backendEditForm.fecha_salida;
+                              const fechaRegresoEnvio =
+                                isBackendEditPersonalizada && backendEditContratoFechas
+                                  ? backendEditContratoFechas.fecha_regreso
+                                  : backendEditForm.fecha_regreso;
+
+                              if (!fechaSalidaEnvio || !fechaRegresoEnvio) {
+                                toast.error('Fechas incompletas');
+                                return;
+                              }
+
+                              const cuposTotales = backendEditForm.cupos_totales.trim() ? Number(backendEditForm.cupos_totales) : null;
+                              const cuposDisponibles = backendEditForm.cupos_disponibles.trim() ? Number(backendEditForm.cupos_disponibles) : null;
+                              if (cuposTotales !== null && (!Number.isFinite(cuposTotales) || cuposTotales < 0)) {
+                                toast.error('Cupos totales inválidos');
+                                return;
+                              }
+                              if (cuposDisponibles !== null && (!Number.isFinite(cuposDisponibles) || cuposDisponibles < 0)) {
+                                toast.error('Cupos disponibles inválidos');
+                                return;
+                              }
+
+                              const precio = backendEditForm.precio_programacion.trim()
+                                ? Number(backendEditForm.precio_programacion)
+                                : null;
+                              if (precio !== null && (!Number.isFinite(precio) || precio < 0)) {
+                                toast.error('Precio inválido');
+                                return;
+                              }
+
+                              const idEmpleado =
+                                backendEditForm.id_empleado !== '__none__'
+                                  ? Number(backendEditForm.id_empleado)
+                                  : null;
+
+                              const guiasApoyoPayload = backendEditGuiaApoyoIds
+                                .map((id) => Number(id))
+                                .filter((n) => Number.isFinite(n) && n > 0);
+
+                              setBackendEditSaving(true);
+                              await programacionAPI.update(backendEditTargetId, {
+                                id_ruta: idRuta,
+                                fecha_salida: fechaSalidaEnvio,
+                                fecha_regreso: fechaRegresoEnvio,
+                                hora_salida: backendEditForm.hora_salida || null,
+                                hora_regreso: backendEditForm.hora_regreso || null,
+                                cupos_totales: cuposTotales,
+                                cupos_disponibles: cuposDisponibles,
+                                precio_programacion: precio,
+                                estado: backendEditForm.estado,
+                                id_empleado: Number.isFinite(Number(idEmpleado)) ? idEmpleado : null,
+                                lugar_encuentro: backendEditForm.lugar_encuentro?.trim()
+                                  ? backendEditForm.lugar_encuentro.trim()
+                                  : null,
+                                guias_apoyo: guiasApoyoPayload,
+                              } as any);
+
+                              const refreshed = await programacionAPI.getAll();
+                              setBackendProgramaciones(refreshed);
+                              toast.success('Programación actualizada');
+                              closeEditProgrammingPage();
+                            } catch (err: any) {
+                              toast.error('No se pudo actualizar la programación', {
+                                description: err?.message || 'Error desconocido',
+                              });
+                            } finally {
+                              setBackendEditSaving(false);
+                            }
+                          }}
+                        >
+                            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                            <div className="space-y-5 min-w-0">
+                              {!isBackendEditPersonalizada ? (
+                                <div className="space-y-3">
+                                  <div className="flex items-end justify-between gap-4">
+                                    <div>
+                                      <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
+                                      <p className="text-sm text-gray-600">Edita la ruta y revisa nuevamente sus servicios.</p>
+                                    </div>
+                                    {selectedEditRoute && (
+                                      <Badge variant="outline" className="border-green-300 text-green-700">
+                                        Vista previa activa
+                                      </Badge>
+                                    )}
+                                  </div>
+
+                                  <Input
+                                    value={backendEditRouteQuery}
+                                    onChange={(e) => setBackendEditRouteQuery(e.target.value)}
+                                    placeholder="Buscar ruta, descripción o dificultad..."
+                                  />
+
+                                  {renderCompactRouteList(
+                                    filteredEditRoutes,
+                                    backendEditForm.id_ruta,
+                                    (routeId) => setBackendEditForm((prev) => ({ ...prev, id_ruta: routeId })),
+                                    'No hay rutas que coincidan con la búsqueda.'
+                                  )}
+
+                                  {renderRoutePreview(selectedEditRoute)}
+                                </div>
+                              ) : (
+                                <>
+                                  <Alert className="border-violet-200 bg-violet-50/80 text-violet-900 [&>svg]:text-violet-700">
+                                    <AlertTriangle />
+                                    <AlertTitle>Salida personalizada (grupo cerrado)</AlertTitle>
+                                    <AlertDescription className="text-violet-900/85">
+                                      No uses la lógica de cupos públicos de catálogo: la capacidad y el precio quedaron pactados con el cliente.
+                                      {backendEditContext?.idSolicitud != null
+                                        ? ` Esta programación proviene de la solicitud personalizada #${backendEditContext.idSolicitud}.`
+                                        : null}
+                                    </AlertDescription>
+                                  </Alert>
+
+                                  <div className="space-y-3">
+                                    <div>
+                                      <Label className="text-base font-semibold text-gray-900">Ruta</Label>
+                                      <p className="text-sm text-gray-600">
+                                        La ruta no se modifica desde esta pantalla; conservamos la misma para el envío al guardar.
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-green-200 bg-white p-4 shadow-sm">
+                                      <p className="text-xs uppercase tracking-wide text-gray-500">Ruta asignada</p>
+                                      <p className="text-lg font-semibold text-gray-900">
+                                        {selectedEditRoute?.nombre || backendEditContext?.rutaNombre || 'Ruta'}
+                                      </p>
+                                    </div>
+                                    {renderRoutePreview(selectedEditRoute)}
+                                  </div>
+                                </>
+                              )}
+
+                              <Card className="border-green-200 shadow-sm">
+                                <CardHeader className="pb-3">
+                                  <CardTitle className="text-base text-green-900">Calendario y operación</CardTitle>
+                                </CardHeader>
+                                <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {isBackendEditPersonalizada && personalizadaSalidaVigenteCliente ? (
+                                    <div className="md:col-span-2">
+                                      <Alert className="border-green-200 bg-green-50/90 text-green-900 [&>svg]:text-green-700">
+                                        <CheckCircle2 />
+                                        <AlertTitle>Itinerario confirmado con el cliente</AlertTitle>
+                                        <AlertDescription className="text-green-900/85">
+                                          La salida está vigente en operación: el cliente puede presentarse en las fechas acordadas
+                                          {backendEditForm.hora_salida?.trim()
+                                            ? ` (hora de encuentro/salida: ${formatTimeDisplay(backendEditForm.hora_salida)})`
+                                            : ''}
+                                          . Ajusta hora o punto de encuentro solo con coordinación previa con el cliente.
+                                        </AlertDescription>
+                                      </Alert>
+                                    </div>
+                                  ) : null}
+
+                                  {isBackendEditPersonalizada &&
+                                  backendEditForm.estado.toLowerCase().includes('cancel') ? (
+                                    <div className="md:col-span-2">
+                                      <Alert variant="destructive">
+                                        <AlertTriangle />
+                                        <AlertTitle>Salida cancelada</AlertTitle>
+                                        <AlertDescription>
+                                          Esta programación no está vigente; el cliente no debe asumir que el servicio se realizará.
+                                        </AlertDescription>
+                                      </Alert>
+                                    </div>
+                                  ) : null}
+
+                                  {isBackendEditPersonalizada && backendEditContratoFechas ? (
+                                    <>
+                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                        <Label>Fecha salida (pactada con el cliente)</Label>
+                                        <p className="font-semibold text-gray-900 mt-1">
+                                          {formatDisplayDate(backendEditContratoFechas.fecha_salida)}
+                                        </p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          No editable aquí: se mantiene igual que en la solicitud.
+                                        </p>
+                                      </div>
+                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                        <Label>Fecha regreso (pactada con el cliente)</Label>
+                                        <p className="font-semibold text-gray-900 mt-1">
+                                          {formatDisplayDate(backendEditContratoFechas.fecha_regreso)}
+                                        </p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          No editable aquí: se mantiene igual que en la solicitud (o la definida al convertir).
+                                        </p>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div>
+                                        <Label>Fecha salida *</Label>
+                                        <Input
+                                          type="date"
+                                          value={backendEditForm.fecha_salida}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, fecha_salida: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <Label>Fecha regreso *</Label>
+                                        <Input
+                                          type="date"
+                                          value={backendEditForm.fecha_regreso}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+                                    </>
+                                  )}
+
+                                  <div>
+                                    <Label>Hora salida</Label>
+                                    <Input
+                                      type="time"
+                                      value={backendEditForm.hora_salida}
+                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, hora_salida: e.target.value }))}
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <Label>Hora regreso</Label>
+                                    <Input
+                                      type="time"
+                                      value={backendEditForm.hora_regreso}
+                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, hora_regreso: e.target.value }))}
+                                    />
+                                  </div>
+
+                                  {!isBackendEditPersonalizada ? (
+                                    <>
+                                      <div>
+                                        <Label>Cupos totales</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.cupos_totales}
+                                          onChange={(e) => handleBackendEditCuposTotalesChange(e.target.value)}
+                                        />
+                                        <p className="mt-1 text-xs text-gray-500">
+                                          Si cambias este valor, los cupos disponibles se recalculan con base en{' '}
+                                          {backendEditCommittedSeats} cupos comprometidos.
+                                        </p>
+                                      </div>
+
+                                      <div>
+                                        <Label>Cupos disponibles</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.cupos_disponibles}
+                                          onChange={(e) => handleBackendEditCuposDisponiblesChange(e.target.value)}
+                                        />
+                                        <p className="mt-1 text-xs text-gray-500">
+                                          Máximo editable ahora:{' '}
+                                          {Math.max(0, Number(backendEditForm.cupos_totales || 0) - backendEditCommittedSeats)}.
+                                        </p>
+                                      </div>
+
+                                      <div>
+                                        <Label>Precio</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.precio_programacion}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, precio_programacion: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+                                    </>
+                                  ) : null}
+
+                                  <div>
+                                    <Label>Estado</Label>
+                                    <Select
+                                      value={backendEditForm.estado}
+                                      onValueChange={(value) => setBackendEditForm((prev) => ({ ...prev, estado: value }))}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="Programado">Programado</SelectItem>
+                                        <SelectItem value="En Progreso">En Progreso</SelectItem>
+                                        <SelectItem value="Completado">Completado</SelectItem>
+                                        <SelectItem value="Cancelado">Cancelado</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </CardContent>
+                              </Card>
+
+                              {isBackendEditPersonalizada ? (
+                                <Card className="border-violet-100 bg-violet-50/40 shadow-sm">
+                                  <CardHeader className="pb-3">
+                                    <CardTitle className="text-base text-violet-900">Cupo y tarifa acordados</CardTitle>
+                                  </CardHeader>
+                                  <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Cupos totales</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.cupos_totales.trim() || '—'}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Cupos disponibles</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.cupos_disponibles.trim() || '—'}
+                                      </p>
+                                      <p className="text-xs text-gray-500 mt-1">
+                                        Comprometidos en esta salida: {backendEditCommittedSeats}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Precio de la salida</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.precio_programacion.trim()
+                                          ? formatCurrency(backendEditForm.precio_programacion)
+                                          : '—'}
+                                      </p>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              ) : null}
+
+                              <Card className="border-green-200 shadow-sm">
+                                <CardHeader className="pb-3">
+                                  <CardTitle className="text-base text-green-900">Punto de encuentro</CardTitle>
+                                </CardHeader>
+                                <CardContent>
+                                  <Label>Punto de encuentro</Label>
+                                  <Input
+                                    value={backendEditForm.lugar_encuentro}
+                                    onChange={(e) => setBackendEditForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
+                                    placeholder="Ej: Parque principal / Entrada finca..."
+                                  />
+
+                                  <p className="mt-2 text-xs text-gray-500">
+                                    Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
+                                  </p>
+                                </CardContent>
+                              </Card>
+                            </div>
+
+                            <div className="space-y-5 min-w-0">
+                              <div>
+                                <Label className="text-base font-semibold text-gray-900">Guía turístico</Label>
+                                <p className="text-sm text-gray-600">
+                                  {isBackendEditPersonalizada
+                                    ? 'Reasigna el guía si la operación del grupo cerrado lo requiere.'
+                                    : 'Reasigna el guía desde el mismo flujo de edición.'}
+                                </p>
+                              </div>
+                              <Input
+                                value={backendEditGuideQuery}
+                                onChange={(e) => setBackendEditGuideQuery(e.target.value)}
+                                placeholder="Buscar guía por nombre, correo o cargo..."
+                              />
+
+                              {renderCompactGuideList(
+                                filteredEditGuides,
+                                backendEditForm.id_empleado,
+                                (guideId) => {
+                                  setBackendEditForm((prev) => ({ ...prev, id_empleado: guideId }));
+                                  setBackendEditGuiaApoyoIds((prev) => prev.filter((id) => id !== guideId));
+                                },
+                                'No hay guías que coincidan con la búsqueda.'
+                              )}
+
+                              {renderGuideAssignmentCard(
+                                selectedEditGuide,
+                                backendEditForm.id_empleado,
+                                'Si cambias el guía aquí, quedará actualizado directamente en la programación.'
+                              )}
+
+                              <Card className="border-blue-100 bg-blue-50/30 shadow-sm">
+                                <CardHeader className="pb-3">
+                                  <CardTitle className="text-base text-blue-900">Guías de apoyo (opcional)</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  <p className="text-sm text-gray-700">
+                                    Marca guías adicionales para refuerzo en campo. El guía principal sigue siendo el responsable en sistema.
+                                  </p>
+                                  <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
+                                    {filteredEditGuides
+                                      .filter((g) => String(g.id_empleado) !== String(backendEditForm.id_empleado))
+                                      .map((g) => {
+                                        const gid = String(g.id_empleado);
+                                        return (
+                                          <label
+                                            key={gid}
+                                            className="flex items-center gap-3 rounded-md border border-blue-100 bg-white px-3 py-2 text-sm cursor-pointer"
+                                          >
+                                            <Checkbox
+                                              checked={backendEditGuiaApoyoIds.includes(gid)}
+                                              onCheckedChange={(c) => {
+                                                setBackendEditGuiaApoyoIds((prev) =>
+                                                  c === true
+                                                    ? Array.from(new Set([...prev, gid]))
+                                                    : prev.filter((x) => x !== gid),
+                                                );
+                                              }}
+                                            />
+                                            <span className="font-medium text-gray-900">{getGuideDisplayName(g)}</span>
+                                          </label>
+                                        );
+                                      })}
+                                  </div>
+                                  {filteredEditGuides.filter(
+                                    (g) => String(g.id_empleado) !== String(backendEditForm.id_empleado),
+                                  ).length === 0 ? (
+                                    <p className="text-xs text-gray-500">No hay más guías en el listado filtrado.</p>
+                                  ) : null}
+                                </CardContent>
+                              </Card>
+
+                              {renderOperationalSummaryCard({
+                                title: isBackendEditPersonalizada ? 'Resumen (personalizada)' : 'Resumen de edición',
+                                subtitle: isBackendEditPersonalizada
+                                  ? 'Mismo criterio operativo: revisa fechas, encuentro y guía antes de guardar.'
+                                  : 'Verifica la operación completa antes de guardar cambios.',
+                                route: selectedEditRoute,
+                                guide: selectedEditGuide,
+                                form: backendEditForm,
+                                includeAvailability: true,
+                                status: backendEditForm.estado,
+                              })}
+                            </div>
+                            </div>
+
+                          <div className="sticky bottom-0 z-10 -mx-1 flex flex-wrap justify-end gap-2 border-t border-gray-200 bg-slate-50/95 px-1 pt-4 backdrop-blur-sm">
+                            <Button type="button" variant="outline" onClick={closeEditProgrammingPage}>
+                              Cancelar
+                            </Button>
+                            <Button type="submit" className="bg-green-700 hover:bg-green-800" disabled={backendEditSaving}>
+                              {backendEditSaving ? 'Guardando…' : 'Guardar'}
+                            </Button>
+                          </div>
+                        </form>
+  );
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -2865,11 +4178,19 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                role === 'client' ? 'Consulta tus programaciones, rutas, fechas y detalles de tu grupo' : 
                'Administra las programaciones de rutas turísticas'}
             </p>
-            {filteredProgrammings.length > 0 && (
+            {isStaffRole && staffActiveTab === 'solicitudes' ? (
               <p className="text-sm text-green-700 mt-2">
-                {filteredProgrammings.length} {filteredProgrammings.length === 1 ? 'programación encontrada' : 'programaciones encontradas'}
+                {backendSolicitudes.filter((s) => !s?.id_programacion).length}{' '}
+                {backendSolicitudes.filter((s) => !s?.id_programacion).length === 1
+                  ? 'solicitud pendiente'
+                  : 'solicitudes pendientes'}
               </p>
-            )}
+            ) : filteredProgrammings.length > 0 ? (
+              <p className="text-sm text-green-700 mt-2">
+                {filteredProgrammings.length}{' '}
+                {filteredProgrammings.length === 1 ? 'programación encontrada' : 'programaciones encontradas'}
+              </p>
+            ) : null}
           </div>
 
           {canCreate && (
@@ -2880,24 +4201,181 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           )}
         </div>
 
-        {/* Filtros */}
-        <div className="flex flex-col sm:flex-row gap-3 mt-6">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-green-700 w-4 h-4" />
-            <Input
-              placeholder="Buscar por ID, cliente, guía o ruta..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 border-green-300 focus:border-green-500"
-            />
+        {/* Búsqueda y filtros (solo programación operativa; solicitudes tiene los suyos en la pestaña) */}
+        {!(isStaffRole && staffActiveTab === 'solicitudes') ? (
+        <div className="mt-6 space-y-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform text-green-700" />
+              <Input
+                placeholder="Buscar por ID, guía, ruta o cliente..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="border-green-300 pl-10 focus:border-green-500"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 border-green-200 hover:border-green-400 hover:bg-green-50"
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              <Filter className="mr-2 h-4 w-4 text-green-600" />
+              <span className="text-green-700">Filtros</span>
+              {hasActiveProgrammingFilters ? (
+                <Badge variant="secondary" className="ml-2 bg-emerald-100 text-emerald-800">
+                  Activos
+                </Badge>
+              ) : null}
+            </Button>
           </div>
+
+          {filtersOpen ? (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="flex flex-col flex-wrap gap-3 rounded-lg border border-green-100 bg-green-50/50 p-4 sm:flex-row"
+            >
+              <div className="min-w-[140px] flex-1 space-y-1.5">
+                <Label className="text-xs text-green-800">Estado</Label>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todos</SelectItem>
+                    <SelectItem value="scheduled">Programado</SelectItem>
+                    <SelectItem value="in-progress">En progreso</SelectItem>
+                    <SelectItem value="completed">Completado</SelectItem>
+                    <SelectItem value="cancelled">Cancelado</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="min-w-[140px] flex-1 space-y-1.5">
+                <Label className="text-xs text-green-800">Tipo de salida</Label>
+                <Select
+                  value={tipoFilter}
+                  onValueChange={(v) => setTipoFilter(v as typeof tipoFilter)}
+                >
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas</SelectItem>
+                    <SelectItem value="programada">Programada</SelectItem>
+                    <SelectItem value="personalizada">Personalizada</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {isStaffRole && canUseBackend ? (
+                <>
+                  <div className="min-w-[160px] flex-1 space-y-1.5">
+                    <Label className="text-xs text-green-800">Guía</Label>
+                    <Select value={guideFilter} onValueChange={setGuideFilter}>
+                      <SelectTrigger className="border-green-200 bg-white">
+                        <SelectValue placeholder="Todos" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todos los guías</SelectItem>
+                        {programmingGuideOptions.map((g) => (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="min-w-[160px] flex-1 space-y-1.5">
+                    <Label className="text-xs text-green-800">Ruta</Label>
+                    <Select value={routeFilter} onValueChange={setRouteFilter}>
+                      <SelectTrigger className="border-green-200 bg-white">
+                        <SelectValue placeholder="Todas" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Todas las rutas</SelectItem>
+                        {programmingRouteOptions.map((r) => (
+                          <SelectItem key={r.id} value={r.id}>
+                            {r.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              ) : null}
+
+              <div className="min-w-[160px] flex-1 space-y-1.5">
+                <Label className="text-xs text-green-800">Ordenar por</Label>
+                <Select
+                  value={sortFilter}
+                  onValueChange={(v) => setSortFilter(v as ProgrammingsSortFilter)}
+                >
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="created-desc">Registro (más recientes primero)</SelectItem>
+                    <SelectItem value="created-asc">Registro (más antiguas)</SelectItem>
+                    <SelectItem value="date-asc">Fecha salida (próximas primero)</SelectItem>
+                    <SelectItem value="date-desc">Fecha salida (más lejanas)</SelectItem>
+                    <SelectItem value="time-asc">Hora salida (temprano)</SelectItem>
+                    <SelectItem value="time-desc">Hora salida (tarde)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="min-w-[140px] flex-1 space-y-1.5">
+                <Label className="text-xs text-green-800">Salida desde</Label>
+                <Input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="border-green-200 bg-white"
+                />
+              </div>
+
+              <div className="min-w-[140px] flex-1 space-y-1.5">
+                <Label className="text-xs text-green-800">Salida hasta</Label>
+                <Input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="border-green-200 bg-white"
+                />
+              </div>
+
+              <div className="flex w-full items-end sm:w-auto">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-green-800 hover:bg-green-100"
+                  disabled={!hasActiveProgrammingFilters && !searchTerm.trim()}
+                  onClick={() => {
+                    clearProgrammingFilters();
+                    setSearchTerm('');
+                  }}
+                >
+                  Limpiar búsqueda y filtros
+                </Button>
+              </div>
+            </motion.div>
+          ) : null}
         </div>
+        ) : null}
       </motion.div>
 
       {isStaffRole ? (
         <Tabs
           value={staffActiveTab}
-          onValueChange={(value) => setStaffActiveTab(value as 'programaciones' | 'solicitudes')}
+          onValueChange={(value) => {
+            setStaffActiveTab(value as 'programaciones' | 'solicitudes');
+            if (value === 'solicitudes') setFiltersOpen(false);
+          }}
           className="space-y-6"
         >
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -2963,14 +4441,18 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             </TableCell>
                             <TableCell>
                               {prog.routes.length > 0 && (
-                                <div className="text-sm">
-                                  {formatDisplayDate(prog.routes[0].date)}
+                                <div className="text-sm space-y-0.5">
+                                  <div>{formatDisplayDate(prog.routes[0].date)}</div>
+                                  <div className="text-xs text-gray-500">
+                                    Salida {formatTimeDisplay(prog.routes[0].startTime, '—')}
+                                    {prog.routes[0].endTime
+                                      ? ` · Regreso ${formatTimeDisplay(prog.routes[0].endTime, '—')}`
+                                      : ''}
+                                  </div>
                                 </div>
                               )}
                             </TableCell>
-                            <TableCell>
-                              <div className="text-sm truncate">{prog.guideName}</div>
-                            </TableCell>
+                            <TableCell>{renderProgrammingGuideCell(prog)}</TableCell>
                             <TableCell className="text-center">
                               <Badge variant="outline" className="text-xs">
                                 {prog.occupiedSeats ?? getTotalParticipants(prog.clients)}
@@ -3020,17 +4502,20 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 </Button>
                                 {canEdit && (
                                   <Button
+                                    type="button"
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => {
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
                                       const id = Number(prog.id);
                                       if (!Number.isFinite(id) || id <= 0) {
                                         toast.error('ID inválido');
                                         return;
                                       }
-                                      openBackendEdit(id);
+                                      openBackendEdit(id, prog);
                                     }}
-                                    className="h-8 w-8 p-0 hover:bg-green-50"
+                                    className="relative z-10 h-8 w-8 p-0 hover:bg-green-50"
                                     title="Editar"
                                   >
                                     <Edit className="w-4 h-4 text-green-600" />
@@ -3274,6 +4759,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               };
                             const solicitudAprobada = solicitudHabilitadaParaPago(s.estado);
                             const pagoAprobado = String(s.venta_estado_pago || '') === 'Pagado';
+                            const solicitudAbierta = solicitudPuedeRechazarse(s);
                             const isExpanded = expandedSolicitudId === id;
 
                             const validarPrecio = () => {
@@ -3384,7 +4870,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                       <Button
                                         size="sm"
                                         variant="outline"
-                                        disabled={backendSolicitudSavingId === id}
+                                        disabled={backendSolicitudSavingId === id || !solicitudAbierta}
                                         onClick={async () => {
                                           try {
                                             const precio = validarPrecio();
@@ -3415,8 +4901,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
                                       <Button
                                         size="sm"
-                                        className="bg-emerald-700 hover:bg-emerald-800"
-                                        disabled={backendSolicitudSavingId === id}
+                                        className="border border-green-700 bg-green-600 text-white shadow-sm hover:bg-green-700 hover:text-white"
+                                        disabled={backendSolicitudSavingId === id || !solicitudAbierta}
                                         onClick={async () => {
                                           try {
                                             const precio = validarPrecio();
@@ -3436,8 +4922,26 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                           }
                                         }}
                                       >
+                                        <CheckCircle2 className="mr-1 h-3.5 w-3.5 shrink-0" />
                                         Aprobar y habilitar pago
                                       </Button>
+
+                                      {solicitudAbierta && canEditProgramming && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="border-red-600 text-red-700 hover:bg-red-50"
+                                          disabled={backendSolicitudSavingId === id}
+                                          onClick={() => {
+                                            setSolicitudRejectTarget(s);
+                                            setSolicitudRejectMotivo('');
+                                            setSolicitudRejectDialogOpen(true);
+                                          }}
+                                        >
+                                          <Ban className="mr-1 h-3.5 w-3.5" />
+                                          Rechazar solicitud
+                                        </Button>
+                                      )}
 
                                       <Button
                                         size="sm"
@@ -3841,14 +5345,41 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         </Tabs>
       ) : (
         <>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.1 }}
+          <div
+            className={cn(
+              'gap-4',
+              role === 'guide' &&
+                'grid grid-cols-1 xl:grid-cols-[minmax(260px,300px)_1fr] xl:items-start',
+            )}
           >
-            <Card className="shadow-lg border-green-200">
-              <CardContent className="p-0">
-                <Table>
+            {role === 'guide' ? (
+              <Card className="border-emerald-200 shadow-sm xl:sticky xl:top-4">
+                <CardHeader className="py-3 px-4">
+                  <CardTitle className="text-base text-emerald-900">Mi disponibilidad</CardTitle>
+                </CardHeader>
+                <CardContent className="px-3 pb-4">
+                  <GuideAvailabilityCalendar
+                    compact
+                    programaciones={backendProgramaciones}
+                    loading={backendLoading}
+                    title="Días libres y ocupados"
+                    description="Salidas donde estás asignado como guía (salida → regreso)."
+                    occupiedLegend="Ocupado (salida asignada)"
+                    freeDayMessage="Día libre: no tienes salidas asignadas."
+                  />
+                </CardContent>
+              </Card>
+            ) : null}
+
+            <div className={cn(role === 'guide' && 'space-y-4 min-w-0')}>
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.1 }}
+              >
+                <Card className="shadow-lg border-green-200">
+                  <CardContent className="p-0">
+                    <Table>
                   <TableHeader>
                     <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
                       <TableHead className="w-24">ID</TableHead>
@@ -3890,9 +5421,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               </div>
                             )}
                           </TableCell>
-                          <TableCell>
-                            <div className="text-sm truncate">{prog.guideName}</div>
-                          </TableCell>
+                          <TableCell>{renderProgrammingGuideCell(prog)}</TableCell>
                           <TableCell className="text-center">
                             <Badge variant="outline" className="text-xs">
                               {prog.occupiedSeats ?? getTotalParticipants(prog.clients)}
@@ -4008,6 +5537,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               </Button>
             </motion.div>
           )}
+            </div>
+          </div>
         </>
       )}
 
@@ -4015,7 +5546,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         open={isCreateModalOpen}
         onOpenChange={(open) => {
           setIsCreateModalOpen(open);
-          if (open) setBackendCreateStep(1);
+          if (!open) {
+            setStaffProgrammingCreatePage(false);
+            setBackendCreateStep(1);
+          } else {
+            setBackendCreateStep(1);
+          }
         }}
       >
         <DialogContent className="max-w-7xl w-[96vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col min-h-0">
@@ -4025,369 +5561,44 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               Complete los datos paso a paso para crear una nueva programación de ruta turística
             </DialogDescription>
           </DialogHeader>
-          {isStaffRole ? (
-            <form
-              className="flex flex-col gap-4 flex-1 min-h-0 overflow-hidden"
-              onSubmit={async (e) => {
-                e.preventDefault();
-                try {
-                  if (!canCreate) {
-                    toast.error(programmingPerms.getErrorMessage('crear'));
-                    return;
-                  }
-                  if (backendCreateStep !== 2) {
-                    const idRutaStep = Number(backendCreateForm.id_ruta);
-                    if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
-                      toast.error('Selecciona una ruta para continuar');
-                      return;
-                    }
-                    setBackendCreateStep(2);
-                    return;
-                  }
+          {isStaffRole && canUseBackend ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden pr-1">
+                {renderStaffBackendCreateForm()}
+              </div>
+            </div>
+          ) : (
+            <ProgrammingFormImproved
+              onClose={closeCreateProgrammingPage}
+              availableRoutes={availableRoutes}
+              availableClients={availableClients}
+              availableGuides={availableGuides}
+              serviceOptions={serviceOptions}
+              onSubmit={(formData) => {
+                const selectedClients = availableClients.filter((c) => formData.clientIds.includes(c.id));
+                const selectedGuide = availableGuides.find((g) => g.id === formData.guideId);
+                const selectedServices = serviceOptions.filter((s) => formData.serviceIds.includes(s.id));
 
-                  const idRuta = Number(backendCreateForm.id_ruta);
-                  if (!Number.isFinite(idRuta) || idRuta <= 0) {
-                    toast.error('Selecciona una ruta válida');
-                    return;
-                  }
-                  if (!backendCreateForm.fecha_salida || !backendCreateForm.fecha_regreso) {
-                    toast.error('Selecciona fechas de salida y regreso');
-                    return;
-                  }
-                  const cupos = Number(backendCreateForm.cupos_totales);
-                  if (!Number.isFinite(cupos) || cupos <= 0) {
-                    toast.error('Cupos totales inválidos');
-                    return;
-                  }
-
-                  const precio = backendCreateForm.precio_programacion.trim()
-                    ? Number(backendCreateForm.precio_programacion)
-                    : null;
-                  if (precio !== null && (!Number.isFinite(precio) || precio < 0)) {
-                    toast.error('Precio inválido');
-                    return;
-                  }
-
-                  const idEmpleado =
-                    backendCreateForm.id_empleado !== '__none__'
-                      ? Number(backendCreateForm.id_empleado)
-                      : null;
-
-                  setBackendCreateSaving(true);
-
-                  await programacionAPI.create({
-                    id_ruta: idRuta,
-                    fecha_salida: backendCreateForm.fecha_salida,
-                    fecha_regreso: backendCreateForm.fecha_regreso,
-                    hora_salida: backendCreateForm.hora_salida || null,
-                    hora_regreso: backendCreateForm.hora_regreso || null,
-                    cupos_totales: cupos,
-                    precio_programacion: precio,
-                    id_empleado: Number.isFinite(Number(idEmpleado)) ? idEmpleado : null,
-                    lugar_encuentro: backendCreateForm.lugar_encuentro?.trim() ? backendCreateForm.lugar_encuentro.trim() : null,
-                    es_personalizada: false,
-                  } as any);
-
-                  const refreshed = await programacionAPI.getAll();
-                  setBackendProgramaciones(refreshed);
-                  toast.success('Programación creada');
-                  closeCreateProgrammingPage();
-                } catch (err: any) {
-                  toast.error('No se pudo crear la programación', {
-                    description: err?.message || 'Error desconocido',
-                  });
-                } finally {
-                  setBackendCreateSaving(false);
-                }
+                const newProgramming: Programming = {
+                  id: `prog-${Date.now()}`,
+                  programId: `PRG-${(programmings.length + 1).toString().padStart(3, '0')}`,
+                  routes: formData.routes,
+                  clients: selectedClients,
+                  guideId: formData.guideId,
+                  guideName: selectedGuide?.name || '',
+                  status: formData.status,
+                  additionalServices: selectedServices,
+                  notes: formData.notes,
+                  createdAt: new Date().toISOString().split('T')[0],
+                  createdBy: userName || 'Sistema',
+                };
+                setProgrammings([newProgramming, ...programmings]);
+                toast.success('Programación creada exitosamente');
+                closeCreateProgrammingPage();
               }}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
-                  <p className="text-sm text-gray-600">Selecciona una ruta y revisa sus servicios antes de crear la programación.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="border-green-300 text-green-700">
-                    Paso {backendCreateStep} de 2
-                  </Badge>
-                  <Badge variant="outline" className="border-green-300 text-green-700">
-                    {backendRutas.length} rutas activas
-                  </Badge>
-                  {backendCreateStep === 1 ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="bg-green-700 hover:bg-green-800"
-                      onClick={() => {
-                        const idRutaStep = Number(backendCreateForm.id_ruta);
-                        if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
-                          toast.error('Selecciona una ruta para continuar');
-                          return;
-                        }
-                        setBackendCreateStep(2);
-                      }}
-                      disabled={backendCreateSaving || !backendCreateForm.id_ruta}
-                    >
-                      Siguiente
-                    </Button>
-                  ) : (
-                    <Button type="button" size="sm" variant="outline" onClick={() => setBackendCreateStep(1)}>
-                      Atrás
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full bg-gradient-to-r from-green-500 to-emerald-600 transition-all ${
-                      backendCreateStep === 1 ? 'w-1/2' : 'w-full'
-                    }`}
-                  />
-                </div>
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>1. Ruta y guía</span>
-                  <span>2. Operación y confirmación</span>
-                </div>
-              </div>
-
-              <div ref={backendCreateScrollRef} className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-2 pb-2">
-                {backendCreateStep === 1 ? (
-                  <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5">
-                    <div className="space-y-3 min-w-0 flex flex-col min-h-0">
-                      <Input
-                        value={backendCreateRouteQuery}
-                        onChange={(e) => setBackendCreateRouteQuery(e.target.value)}
-                        placeholder="Buscar ruta, descripción o dificultad..."
-                      />
-
-                      {renderCompactRouteList(
-                        filteredCreateRoutes,
-                        backendCreateForm.id_ruta,
-                        (routeId) => setBackendCreateForm((prev) => ({ ...prev, id_ruta: routeId })),
-                        'No hay rutas que coincidan con la búsqueda.',
-                        'h-[48vh] max-h-none'
-                      )}
-                    </div>
-
-                    <div className="space-y-5 min-w-0 flex flex-col min-h-0">
-                      {selectedCreateRoute ? (
-                        renderRoutePreview(selectedCreateRoute)
-                      ) : (
-                        <Card className="border-dashed border-gray-200 bg-gray-50/40">
-                          <CardContent className="p-4 text-sm text-gray-700">
-                            Selecciona una ruta para ver su información y servicios.
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      <div>
-                        <Label className="text-base font-semibold text-gray-900">Guía turístico</Label>
-                        <p className="text-sm text-gray-600">Asígnalo desde aquí mismo para dejar lista la operación.</p>
-                      </div>
-                      <Input
-                        value={backendCreateGuideQuery}
-                        onChange={(e) => setBackendCreateGuideQuery(e.target.value)}
-                        placeholder="Buscar guía por nombre, correo o cargo..."
-                      />
-
-                      {renderCompactGuideList(
-                        filteredCreateGuides,
-                        backendCreateForm.id_empleado,
-                        (guideId) => setBackendCreateForm((prev) => ({ ...prev, id_empleado: guideId })),
-                        'No hay guías que coincidan con la búsqueda.',
-                        'h-[32vh] max-h-none'
-                      )}
-
-                      {renderGuideAssignmentCard(selectedCreateGuide, backendCreateForm.id_empleado)}
-
-                      {renderOperationalSummaryCard({
-                        title: 'Resumen de creación',
-                        subtitle: 'Lo que selecciones aquí será la base de la nueva programación.',
-                        route: selectedCreateRoute,
-                        guide: selectedCreateGuide,
-                        form: backendCreateForm,
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-5">
-                    <div className="space-y-5">
-                      <Card className="border-green-200 shadow-sm">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-base text-green-900">Calendario de la salida</CardTitle>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div>
-                              <Label>Fecha salida *</Label>
-                              <Input
-                                type="date"
-                                value={backendCreateForm.fecha_salida}
-                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_salida: e.target.value }))}
-                              />
-                            </div>
-
-                            <div>
-                              <Label>Fecha regreso *</Label>
-                              <Input
-                                type="date"
-                                value={backendCreateForm.fecha_regreso}
-                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))}
-                              />
-                            </div>
-
-                            <div>
-                              <Label>Hora salida</Label>
-                              <Input
-                                type="time"
-                                value={backendCreateForm.hora_salida}
-                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, hora_salida: e.target.value }))}
-                              />
-                            </div>
-
-                            <div>
-                              <Label>Hora regreso</Label>
-                              <Input
-                                type="time"
-                                value={backendCreateForm.hora_regreso}
-                                onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, hora_regreso: e.target.value }))}
-                              />
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <Card className="border-green-200 shadow-sm">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-base text-green-900">Capacidad y valor comercial</CardTitle>
-                        </CardHeader>
-                        <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div>
-                            <Label>Cupos totales *</Label>
-                            <Input
-                              type="number"
-                              value={backendCreateForm.cupos_totales}
-                              onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, cupos_totales: e.target.value }))}
-                              placeholder="Ej: 20"
-                            />
-                          </div>
-
-                          <div>
-                            <Label>Precio (opcional)</Label>
-                            <Input
-                              type="number"
-                              value={backendCreateForm.precio_programacion}
-                              onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, precio_programacion: e.target.value }))}
-                              placeholder="Ej: 120000"
-                            />
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <Card className="border-green-200 shadow-sm">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-base text-green-900">Logística de encuentro</CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                          <Label>Punto de encuentro</Label>
-                          <Input
-                            value={backendCreateForm.lugar_encuentro}
-                            onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
-                            placeholder="Ej: Parque principal, entrada de la finca, terminal..."
-                          />
-
-                          <p className="mt-2 text-xs text-gray-500">
-                            Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
-                          </p>
-                        </CardContent>
-                      </Card>
-                    </div>
-
-                    <div className="space-y-5">
-                      {renderGuideAssignmentCard(
-                        selectedCreateGuide,
-                        backendCreateForm.id_empleado,
-                        'Asignarlo ahora ayuda a dejar lista la operación desde el momento de crear.'
-                      )}
-
-                      {renderOperationalSummaryCard({
-                        title: 'Confirmación final',
-                        subtitle: 'Revisa esta ficha antes de crear la programación.',
-                        route: selectedCreateRoute,
-                        guide: selectedCreateGuide,
-                        form: backendCreateForm,
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-gray-200 shrink-0 bg-white">
-                <Button type="button" variant="outline" onClick={closeCreateProgrammingPage}>
-                  Cancelar
-                </Button>
-                {backendCreateStep === 1 ? (
-                  <Button
-                    type="button"
-                    className="bg-green-700 hover:bg-green-800"
-                    onClick={() => {
-                      const idRutaStep = Number(backendCreateForm.id_ruta);
-                      if (!Number.isFinite(idRutaStep) || idRutaStep <= 0) {
-                        toast.error('Selecciona una ruta para continuar');
-                        return;
-                      }
-                      setBackendCreateStep(2);
-                    }}
-                    disabled={backendCreateSaving || !backendCreateForm.id_ruta}
-                  >
-                    Siguiente
-                  </Button>
-                ) : (
-                  <>
-                    <Button type="button" variant="outline" onClick={() => setBackendCreateStep(1)}>
-                      Atrás
-                    </Button>
-                    <Button type="submit" className="bg-green-700 hover:bg-green-800" disabled={backendCreateSaving}>
-                      {backendCreateSaving ? 'Creando…' : 'Crear'}
-                    </Button>
-                  </>
-                )}
-              </div>
-            </form>
-                      ) : (
-                        <ProgrammingFormImproved
-                          onClose={closeCreateProgrammingPage}
-                          availableRoutes={availableRoutes}
-                          availableClients={availableClients}
-                          availableGuides={availableGuides}
-                          serviceOptions={serviceOptions}
-                          onSubmit={(formData) => {
-                            const selectedClients = availableClients.filter(c => formData.clientIds.includes(c.id));
-                            const selectedGuide = availableGuides.find(g => g.id === formData.guideId);
-                            const selectedServices = serviceOptions.filter(s => formData.serviceIds.includes(s.id));
-                
-                            const newProgramming: Programming = {
-                              id: `prog-${Date.now()}`,
-                              programId: `PRG-${(programmings.length + 1).toString().padStart(3, '0')}`,
-                              routes: formData.routes,
-                              clients: selectedClients,
-                              guideId: formData.guideId,
-                              guideName: selectedGuide?.name || '',
-                              status: formData.status,
-                              additionalServices: selectedServices,
-                              notes: formData.notes,
-                              createdAt: new Date().toISOString().split('T')[0],
-                              createdBy: userName || 'Sistema'
-                            };
-                            setProgrammings([newProgramming, ...programmings]);
-                            toast.success('Programación creada exitosamente');
-                            closeCreateProgrammingPage();
-                          }}
-                          userName={userName}
-                        />
-                      )}
+              userName={userName}
+            />
+          )}
         </DialogContent>
       </Dialog>
 
@@ -4402,8 +5613,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           }
         }}
       >
-        <DialogContent className="max-w-7xl w-[96vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col min-h-0">
-          <DialogHeader className="shrink-0">
+        <DialogContent className="flex max-h-[90vh] w-[min(96vw,72rem)] max-w-[min(96vw,72rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,72rem)]">
+          <DialogHeader className="shrink-0 border-b border-green-100 px-6 py-4 pr-12">
             <DialogTitle className="text-green-800">
               {isBackendEditPersonalizada ? 'Editar salida personalizada' : 'Editar Programación'}
             </DialogTitle>
@@ -4413,470 +5624,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                 : 'Modifique los datos de la programación paso a paso'}
             </DialogDescription>
           </DialogHeader>
-                      {isStaffRole ? (
-                        <form
-                          className="flex flex-col gap-5 flex-1 min-h-0 overflow-hidden"
-                          onSubmit={async (e) => {
-                            e.preventDefault();
-                            try {
-                              if (!canEdit) {
-                                toast.error(programmingPerms.getErrorMessage('editar'));
-                                return;
-                              }
-                              if (!backendEditTargetId) {
-                                toast.error('No hay programación seleccionada');
-                                return;
-                              }
-                              const idRuta = Number(backendEditForm.id_ruta);
-                              if (!Number.isFinite(idRuta) || idRuta <= 0) {
-                                toast.error('Ruta inválida');
-                                return;
-                              }
-                              const fechaSalidaEnvio =
-                                isBackendEditPersonalizada && backendEditContratoFechas
-                                  ? backendEditContratoFechas.fecha_salida
-                                  : backendEditForm.fecha_salida;
-                              const fechaRegresoEnvio =
-                                isBackendEditPersonalizada && backendEditContratoFechas
-                                  ? backendEditContratoFechas.fecha_regreso
-                                  : backendEditForm.fecha_regreso;
-
-                              if (!fechaSalidaEnvio || !fechaRegresoEnvio) {
-                                toast.error('Fechas incompletas');
-                                return;
-                              }
-
-                              const cuposTotales = backendEditForm.cupos_totales.trim() ? Number(backendEditForm.cupos_totales) : null;
-                              const cuposDisponibles = backendEditForm.cupos_disponibles.trim() ? Number(backendEditForm.cupos_disponibles) : null;
-                              if (cuposTotales !== null && (!Number.isFinite(cuposTotales) || cuposTotales < 0)) {
-                                toast.error('Cupos totales inválidos');
-                                return;
-                              }
-                              if (cuposDisponibles !== null && (!Number.isFinite(cuposDisponibles) || cuposDisponibles < 0)) {
-                                toast.error('Cupos disponibles inválidos');
-                                return;
-                              }
-
-                              const precio = backendEditForm.precio_programacion.trim()
-                                ? Number(backendEditForm.precio_programacion)
-                                : null;
-                              if (precio !== null && (!Number.isFinite(precio) || precio < 0)) {
-                                toast.error('Precio inválido');
-                                return;
-                              }
-
-                              const idEmpleado =
-                                backendEditForm.id_empleado !== '__none__'
-                                  ? Number(backendEditForm.id_empleado)
-                                  : null;
-
-                              const guiasApoyoPayload = backendEditGuiaApoyoIds
-                                .map((id) => Number(id))
-                                .filter((n) => Number.isFinite(n) && n > 0);
-
-                              setBackendEditSaving(true);
-                              await programacionAPI.update(backendEditTargetId, {
-                                id_ruta: idRuta,
-                                fecha_salida: fechaSalidaEnvio,
-                                fecha_regreso: fechaRegresoEnvio,
-                                hora_salida: backendEditForm.hora_salida || null,
-                                hora_regreso: backendEditForm.hora_regreso || null,
-                                cupos_totales: cuposTotales,
-                                cupos_disponibles: cuposDisponibles,
-                                precio_programacion: precio,
-                                estado: backendEditForm.estado,
-                                id_empleado: Number.isFinite(Number(idEmpleado)) ? idEmpleado : null,
-                                lugar_encuentro: backendEditForm.lugar_encuentro?.trim()
-                                  ? backendEditForm.lugar_encuentro.trim()
-                                  : null,
-                                guias_apoyo: guiasApoyoPayload,
-                              } as any);
-
-                              const refreshed = await programacionAPI.getAll();
-                              setBackendProgramaciones(refreshed);
-                              toast.success('Programación actualizada');
-                              closeEditProgrammingPage();
-                            } catch (err: any) {
-                              toast.error('No se pudo actualizar la programación', {
-                                description: err?.message || 'Error desconocido',
-                              });
-                            } finally {
-                              setBackendEditSaving(false);
-                            }
-                          }}
-                        >
-                          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-2 pb-2">
-                            <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5">
-                            <div className="space-y-5 min-w-0">
-                              {!isBackendEditPersonalizada ? (
-                                <div className="space-y-3">
-                                  <div className="flex items-end justify-between gap-4">
-                                    <div>
-                                      <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
-                                      <p className="text-sm text-gray-600">Edita la ruta y revisa nuevamente sus servicios.</p>
-                                    </div>
-                                    {selectedEditRoute && (
-                                      <Badge variant="outline" className="border-green-300 text-green-700">
-                                        Vista previa activa
-                                      </Badge>
-                                    )}
-                                  </div>
-
-                                  <Input
-                                    value={backendEditRouteQuery}
-                                    onChange={(e) => setBackendEditRouteQuery(e.target.value)}
-                                    placeholder="Buscar ruta, descripción o dificultad..."
-                                  />
-
-                                  {renderCompactRouteList(
-                                    filteredEditRoutes,
-                                    backendEditForm.id_ruta,
-                                    (routeId) => setBackendEditForm((prev) => ({ ...prev, id_ruta: routeId })),
-                                    'No hay rutas que coincidan con la búsqueda.'
-                                  )}
-
-                                  {renderRoutePreview(selectedEditRoute)}
-                                </div>
-                              ) : (
-                                <>
-                                  <Alert className="border-violet-200 bg-violet-50/80 text-violet-900 [&>svg]:text-violet-700">
-                                    <AlertTriangle />
-                                    <AlertTitle>Salida personalizada (grupo cerrado)</AlertTitle>
-                                    <AlertDescription className="text-violet-900/85">
-                                      No uses la lógica de cupos públicos de catálogo: la capacidad y el precio quedaron pactados con el cliente.
-                                      {backendEditContext?.idSolicitud != null
-                                        ? ` Esta programación proviene de la solicitud personalizada #${backendEditContext.idSolicitud}.`
-                                        : null}
-                                    </AlertDescription>
-                                  </Alert>
-
-                                  <div className="space-y-3">
-                                    <div>
-                                      <Label className="text-base font-semibold text-gray-900">Ruta</Label>
-                                      <p className="text-sm text-gray-600">
-                                        La ruta no se modifica desde esta pantalla; conservamos la misma para el envío al guardar.
-                                      </p>
-                                    </div>
-                                    <div className="rounded-lg border border-green-200 bg-white p-4 shadow-sm">
-                                      <p className="text-xs uppercase tracking-wide text-gray-500">Ruta asignada</p>
-                                      <p className="text-lg font-semibold text-gray-900">
-                                        {selectedEditRoute?.nombre || backendEditContext?.rutaNombre || 'Ruta'}
-                                      </p>
-                                    </div>
-                                    {renderRoutePreview(selectedEditRoute)}
-                                  </div>
-                                </>
-                              )}
-
-                              <Card className="border-green-200 shadow-sm">
-                                <CardHeader className="pb-3">
-                                  <CardTitle className="text-base text-green-900">Calendario y operación</CardTitle>
-                                </CardHeader>
-                                <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  {isBackendEditPersonalizada && personalizadaSalidaVigenteCliente ? (
-                                    <div className="md:col-span-2">
-                                      <Alert className="border-green-200 bg-green-50/90 text-green-900 [&>svg]:text-green-700">
-                                        <CheckCircle2 />
-                                        <AlertTitle>Itinerario confirmado con el cliente</AlertTitle>
-                                        <AlertDescription className="text-green-900/85">
-                                          La salida está vigente en operación: el cliente puede presentarse en las fechas acordadas
-                                          {backendEditForm.hora_salida?.trim()
-                                            ? ` (hora de encuentro/salida: ${String(backendEditForm.hora_salida).slice(0, 5)})`
-                                            : ''}
-                                          . Ajusta hora o punto de encuentro solo con coordinación previa con el cliente.
-                                        </AlertDescription>
-                                      </Alert>
-                                    </div>
-                                  ) : null}
-
-                                  {isBackendEditPersonalizada &&
-                                  backendEditForm.estado.toLowerCase().includes('cancel') ? (
-                                    <div className="md:col-span-2">
-                                      <Alert variant="destructive">
-                                        <AlertTriangle />
-                                        <AlertTitle>Salida cancelada</AlertTitle>
-                                        <AlertDescription>
-                                          Esta programación no está vigente; el cliente no debe asumir que el servicio se realizará.
-                                        </AlertDescription>
-                                      </Alert>
-                                    </div>
-                                  ) : null}
-
-                                  {isBackendEditPersonalizada && backendEditContratoFechas ? (
-                                    <>
-                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                        <Label>Fecha salida (pactada con el cliente)</Label>
-                                        <p className="font-semibold text-gray-900 mt-1">
-                                          {formatDisplayDate(backendEditContratoFechas.fecha_salida)}
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          No editable aquí: se mantiene igual que en la solicitud.
-                                        </p>
-                                      </div>
-                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                        <Label>Fecha regreso (pactada con el cliente)</Label>
-                                        <p className="font-semibold text-gray-900 mt-1">
-                                          {formatDisplayDate(backendEditContratoFechas.fecha_regreso)}
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          No editable aquí: se mantiene igual que en la solicitud (o la definida al convertir).
-                                        </p>
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <div>
-                                        <Label>Fecha salida *</Label>
-                                        <Input
-                                          type="date"
-                                          value={backendEditForm.fecha_salida}
-                                          onChange={(e) =>
-                                            setBackendEditForm((prev) => ({ ...prev, fecha_salida: e.target.value }))
-                                          }
-                                        />
-                                      </div>
-
-                                      <div>
-                                        <Label>Fecha regreso *</Label>
-                                        <Input
-                                          type="date"
-                                          value={backendEditForm.fecha_regreso}
-                                          onChange={(e) =>
-                                            setBackendEditForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))
-                                          }
-                                        />
-                                      </div>
-                                    </>
-                                  )}
-
-                                  <div>
-                                    <Label>Hora salida</Label>
-                                    <Input
-                                      type="time"
-                                      value={backendEditForm.hora_salida}
-                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, hora_salida: e.target.value }))}
-                                    />
-                                  </div>
-
-                                  <div>
-                                    <Label>Hora regreso</Label>
-                                    <Input
-                                      type="time"
-                                      value={backendEditForm.hora_regreso}
-                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, hora_regreso: e.target.value }))}
-                                    />
-                                  </div>
-
-                                  {!isBackendEditPersonalizada ? (
-                                    <>
-                                      <div>
-                                        <Label>Cupos totales</Label>
-                                        <Input
-                                          type="number"
-                                          value={backendEditForm.cupos_totales}
-                                          onChange={(e) => handleBackendEditCuposTotalesChange(e.target.value)}
-                                        />
-                                        <p className="mt-1 text-xs text-gray-500">
-                                          Si cambias este valor, los cupos disponibles se recalculan con base en{' '}
-                                          {backendEditCommittedSeats} cupos comprometidos.
-                                        </p>
-                                      </div>
-
-                                      <div>
-                                        <Label>Cupos disponibles</Label>
-                                        <Input
-                                          type="number"
-                                          value={backendEditForm.cupos_disponibles}
-                                          onChange={(e) => handleBackendEditCuposDisponiblesChange(e.target.value)}
-                                        />
-                                        <p className="mt-1 text-xs text-gray-500">
-                                          Máximo editable ahora:{' '}
-                                          {Math.max(0, Number(backendEditForm.cupos_totales || 0) - backendEditCommittedSeats)}.
-                                        </p>
-                                      </div>
-
-                                      <div>
-                                        <Label>Precio</Label>
-                                        <Input
-                                          type="number"
-                                          value={backendEditForm.precio_programacion}
-                                          onChange={(e) =>
-                                            setBackendEditForm((prev) => ({ ...prev, precio_programacion: e.target.value }))
-                                          }
-                                        />
-                                      </div>
-                                    </>
-                                  ) : null}
-
-                                  <div>
-                                    <Label>Estado</Label>
-                                    <Select
-                                      value={backendEditForm.estado}
-                                      onValueChange={(value) => setBackendEditForm((prev) => ({ ...prev, estado: value }))}
-                                    >
-                                      <SelectTrigger>
-                                        <SelectValue />
-                                      </SelectTrigger>
-                                      <SelectContent>
-                                        <SelectItem value="Programado">Programado</SelectItem>
-                                        <SelectItem value="En Progreso">En Progreso</SelectItem>
-                                        <SelectItem value="Completado">Completado</SelectItem>
-                                        <SelectItem value="Cancelado">Cancelado</SelectItem>
-                                      </SelectContent>
-                                    </Select>
-                                  </div>
-                                </CardContent>
-                              </Card>
-
-                              {isBackendEditPersonalizada ? (
-                                <Card className="border-violet-100 bg-violet-50/40 shadow-sm">
-                                  <CardHeader className="pb-3">
-                                    <CardTitle className="text-base text-violet-900">Cupo y tarifa acordados</CardTitle>
-                                  </CardHeader>
-                                  <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Cupos totales</p>
-                                      <p className="font-semibold text-gray-900">
-                                        {backendEditForm.cupos_totales.trim() || '—'}
-                                      </p>
-                                    </div>
-                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Cupos disponibles</p>
-                                      <p className="font-semibold text-gray-900">
-                                        {backendEditForm.cupos_disponibles.trim() || '—'}
-                                      </p>
-                                      <p className="text-xs text-gray-500 mt-1">
-                                        Comprometidos en esta salida: {backendEditCommittedSeats}
-                                      </p>
-                                    </div>
-                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
-                                      <p className="text-xs text-gray-500">Precio de la salida</p>
-                                      <p className="font-semibold text-gray-900">
-                                        {backendEditForm.precio_programacion.trim()
-                                          ? formatCurrency(backendEditForm.precio_programacion)
-                                          : '—'}
-                                      </p>
-                                    </div>
-                                  </CardContent>
-                                </Card>
-                              ) : null}
-
-                              <Card className="border-green-200 shadow-sm">
-                                <CardHeader className="pb-3">
-                                  <CardTitle className="text-base text-green-900">Punto de encuentro</CardTitle>
-                                </CardHeader>
-                                <CardContent>
-                                  <Label>Punto de encuentro</Label>
-                                  <Input
-                                    value={backendEditForm.lugar_encuentro}
-                                    onChange={(e) => setBackendEditForm((prev) => ({ ...prev, lugar_encuentro: e.target.value }))}
-                                    placeholder="Ej: Parque principal / Entrada finca..."
-                                  />
-
-                                  <p className="mt-2 text-xs text-gray-500">
-                                    Texto libre para operación y clientes (dirección o referencia). Opcional pero recomendado.
-                                  </p>
-                                </CardContent>
-                              </Card>
-                            </div>
-
-                            <div className="space-y-5 min-w-0">
-                              <div>
-                                <Label className="text-base font-semibold text-gray-900">Guía turístico</Label>
-                                <p className="text-sm text-gray-600">
-                                  {isBackendEditPersonalizada
-                                    ? 'Reasigna el guía si la operación del grupo cerrado lo requiere.'
-                                    : 'Reasigna el guía desde el mismo flujo de edición.'}
-                                </p>
-                              </div>
-                              <Input
-                                value={backendEditGuideQuery}
-                                onChange={(e) => setBackendEditGuideQuery(e.target.value)}
-                                placeholder="Buscar guía por nombre, correo o cargo..."
-                              />
-
-                              {renderCompactGuideList(
-                                filteredEditGuides,
-                                backendEditForm.id_empleado,
-                                (guideId) => {
-                                  setBackendEditForm((prev) => ({ ...prev, id_empleado: guideId }));
-                                  setBackendEditGuiaApoyoIds((prev) => prev.filter((id) => id !== guideId));
-                                },
-                                'No hay guías que coincidan con la búsqueda.'
-                              )}
-
-                              {renderGuideAssignmentCard(
-                                selectedEditGuide,
-                                backendEditForm.id_empleado,
-                                'Si cambias el guía aquí, quedará actualizado directamente en la programación.'
-                              )}
-
-                              <Card className="border-blue-100 bg-blue-50/30 shadow-sm">
-                                <CardHeader className="pb-3">
-                                  <CardTitle className="text-base text-blue-900">Guías de apoyo (opcional)</CardTitle>
-                                </CardHeader>
-                                <CardContent className="space-y-3">
-                                  <p className="text-sm text-gray-700">
-                                    Marca guías adicionales para refuerzo en campo. El guía principal sigue siendo el responsable en sistema.
-                                  </p>
-                                  <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
-                                    {filteredEditGuides
-                                      .filter((g) => String(g.id_empleado) !== String(backendEditForm.id_empleado))
-                                      .map((g) => {
-                                        const gid = String(g.id_empleado);
-                                        return (
-                                          <label
-                                            key={gid}
-                                            className="flex items-center gap-3 rounded-md border border-blue-100 bg-white px-3 py-2 text-sm cursor-pointer"
-                                          >
-                                            <Checkbox
-                                              checked={backendEditGuiaApoyoIds.includes(gid)}
-                                              onCheckedChange={(c) => {
-                                                setBackendEditGuiaApoyoIds((prev) =>
-                                                  c === true
-                                                    ? Array.from(new Set([...prev, gid]))
-                                                    : prev.filter((x) => x !== gid),
-                                                );
-                                              }}
-                                            />
-                                            <span className="font-medium text-gray-900">{getGuideDisplayName(g)}</span>
-                                          </label>
-                                        );
-                                      })}
-                                  </div>
-                                  {filteredEditGuides.filter(
-                                    (g) => String(g.id_empleado) !== String(backendEditForm.id_empleado),
-                                  ).length === 0 ? (
-                                    <p className="text-xs text-gray-500">No hay más guías en el listado filtrado.</p>
-                                  ) : null}
-                                </CardContent>
-                              </Card>
-
-                              {renderOperationalSummaryCard({
-                                title: isBackendEditPersonalizada ? 'Resumen (personalizada)' : 'Resumen de edición',
-                                subtitle: isBackendEditPersonalizada
-                                  ? 'Mismo criterio operativo: revisa fechas, encuentro y guía antes de guardar.'
-                                  : 'Verifica la operación completa antes de guardar cambios.',
-                                route: selectedEditRoute,
-                                guide: selectedEditGuide,
-                                form: backendEditForm,
-                                includeAvailability: true,
-                                status: backendEditForm.estado,
-                              })}
-                            </div>
-                            </div>
-                          </div>
-
-                          <div className="flex justify-end gap-2 pt-2">
-                            <Button type="button" variant="outline" onClick={closeEditProgrammingPage}>
-                              Cancelar
-                            </Button>
-                            <Button type="submit" className="bg-green-700 hover:bg-green-800" disabled={backendEditSaving}>
-                              {backendEditSaving ? 'Guardando…' : 'Guardar'}
-                            </Button>
-                          </div>
-                        </form>
-                      ) : selectedProgramming ? (
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-4 [scrollbar-gutter:stable]">
+          {isStaffRole && backendEditTargetId ? (
+            renderStaffBackendEditForm()
+          ) : selectedProgramming ? (
                         <ProgrammingFormImproved
                           programming={selectedProgramming}
                           onClose={closeEditProgrammingPage}
@@ -4908,7 +5659,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           }}
                           userName={userName}
                         />
-                      ) : null}
+          ) : null}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -4917,49 +5669,48 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         open={isViewModalOpen}
         onOpenChange={(open) => {
           setIsViewModalOpen(open);
-          if (!open) {
-            setBackendViewDetail(null);
-            setBackendViewError(null);
-            setBackendViewLoading(false);
-            setBackendViewReservas([]);
-            setBackendViewReservasLoading(false);
-            setBackendViewReservasError(null);
-            setViewModalRuta(null);
-            setViewModalRutaLoading(false);
-          }
+          if (!open) resetViewModalState();
         }}
       >
-        <DialogContent
-          className={cn(
-            '!flex max-h-[92vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]',
-            isStaffRole || (role === 'guide' && canUseBackend)
-              ? 'w-[min(96vw,1280px)] max-w-[calc(100vw-2rem)]'
-              : 'max-w-5xl',
-          )}
-        >
-          <div className="shrink-0 space-y-2 border-b px-6 py-4 pr-12">
-            <DialogHeader className="text-left">
-              <DialogTitle>
-                {role === 'guide' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
-                 role === 'client' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` : 
-                 `Detalles de la Programación - ${selectedProgramming?.programId}`}
-              </DialogTitle>
-              <DialogDescription>
-                {role === 'guide' ? 'Información completa de la programación donde estás asignado como guía' : 
-                 role === 'client' ? 'Información completa de tu programación, grupo y ruta asignada' : 
-                 'Información completa de la programación'}
-              </DialogDescription>
-            </DialogHeader>
-          </div>
+        <DialogContent className="flex max-h-[90vh] w-[min(96vw,72rem)] max-w-[min(96vw,72rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,72rem)]">
+          <DialogHeader className="shrink-0 border-b border-green-100 px-6 py-4 pr-12">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <DialogTitle className="text-green-800">
+                  {role === 'guide' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` :
+                   role === 'client' ? `Detalles de tu Programación - ${selectedProgramming?.programId}` :
+                   `Detalles de la Programación - ${selectedProgramming?.programId}`}
+                </DialogTitle>
+                <DialogDescription>
+                  {role === 'guide' ? 'Información completa de la programación donde estás asignado como guía' :
+                   role === 'client' ? 'Información completa de tu programación, grupo y ruta asignada' :
+                   'Información completa de la programación'}
+                </DialogDescription>
+              </div>
+              {canEdit && isStaffRole && selectedProgramming ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="shrink-0 bg-green-700 hover:bg-green-800"
+                  onClick={() => {
+                    const id = Number(selectedProgramming.id);
+                    if (!Number.isFinite(id) || id <= 0) {
+                      toast.error('ID inválido');
+                      return;
+                    }
+                    openBackendEdit(id, selectedProgramming);
+                  }}
+                >
+                  <Edit className="mr-2 h-4 w-4" />
+                  Editar
+                </Button>
+              ) : null}
+            </div>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-4 [scrollbar-gutter:stable]">
           {selectedProgramming && (
-            <div
-              className="min-h-0 w-full flex-1 overflow-y-scroll overflow-x-hidden px-6 pb-6 pt-2 [scrollbar-gutter:stable]"
-              style={{ maxHeight: 'calc(92vh - 7.5rem)' }}
-            >
-              {(isStaffRole || (role === 'guide' && canUseBackend)) ? (
-                <div className="min-w-0 max-w-full pr-2">
-                  {renderStaffOperativeDetailBody()}
-                </div>
+              (isStaffRole || (role === 'guide' && canUseBackend)) ? (
+                renderStaffOperativeDetailBody()
               ) : (
                 <div className="space-y-6">
                 {/* Resumen Rápido para Cliente/Guía */}
@@ -4980,19 +5731,33 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               <p className="font-medium text-green-900">{selectedProgramming.routes[0].routeName}</p>
                             </div>
                             <div>
-                              <Label className="text-green-700">Fecha y Hora</Label>
+                              <Label className="text-green-700">Salida</Label>
                               <p className="font-medium text-green-900">
-                                {new Date(selectedProgramming.routes[0].date).toLocaleDateString('es-ES', { 
-                                  day: '2-digit', 
-                                  month: 'short', 
-                                  year: 'numeric' 
-                                })} - {selectedProgramming.routes[0].startTime}
+                                {formatDateDisplay(selectedProgramming.routes[0].date)}
+                              </p>
+                              <p className="text-xs text-green-800 mt-0.5">
+                                Hora: {formatTimeDisplay(selectedProgramming.routes[0].startTime, 'Por definir')}
+                              </p>
+                            </div>
+                            <div>
+                              <Label className="text-green-700">Hora de regreso</Label>
+                              <p className="font-medium text-green-900">
+                                {formatTimeDisplay(
+                                  backendViewDetail?.hora_regreso ?? selectedProgramming.routes[0].endTime,
+                                  'Por definir',
+                                )}
                               </p>
                             </div>
                             {role === 'client' && (
                               <div>
                                 <Label className="text-green-700">Guía</Label>
                                 <p className="font-medium text-green-900">{selectedProgramming.guideName}</p>
+                                {selectedProgramming.guidePhone ? (
+                                  <p className="text-xs text-green-800 mt-0.5">{selectedProgramming.guidePhone}</p>
+                                ) : null}
+                                {selectedProgramming.guideEmail ? (
+                                  <p className="text-xs text-green-800 truncate">{selectedProgramming.guideEmail}</p>
+                                ) : null}
                               </div>
                             )}
                             <div>
@@ -5069,12 +5834,16 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               </p>
                             </div>
                             <div>
-                              <Label className="text-gray-500">Hora de Encuentro</Label>
-                              <p className="font-medium text-green-700">{route.startTime}</p>
+                              <Label className="text-gray-500">Hora de salida</Label>
+                              <p className="font-medium text-green-700">
+                                {formatTimeDisplay(route.startTime, 'Por definir')}
+                              </p>
                             </div>
                             <div>
-                              <Label className="text-gray-500">Hora de Finalización</Label>
-                              <p className="font-medium">{route.endTime}</p>
+                              <Label className="text-gray-500">Hora de regreso</Label>
+                              <p className="font-medium">
+                                {formatTimeDisplay(route.endTime, 'Por definir')}
+                              </p>
                             </div>
                           </div>
                         </div>
@@ -5273,18 +6042,20 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                       {role === 'client' ? 'Tu Guía Asignado' : role === 'guide' ? 'Información del Guía (Tú)' : 'Guía Asignado'}
                     </CardTitle>
                   </CardHeader>
-                  <CardContent className="p-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-12 h-12 rounded-full bg-orange-200 flex items-center justify-center">
-                        <User className="w-6 h-6 text-orange-700" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-lg">{selectedProgramming.guideName}</p>
-                        {role === 'guide' && selectedProgramming.guideName === userName && (
-                          <Badge className="bg-orange-600 text-white mt-1">TÚ</Badge>
-                        )}
-                      </div>
-                    </div>
+                  <CardContent className="p-6 space-y-4">
+                    {renderGuideContactFields({
+                      name: selectedProgramming.guideName,
+                      roleLabel: selectedProgramming.guideRoleLabel || 'Guía turístico',
+                      email:
+                        displayViewGuide?.correo ||
+                        selectedProgramming.guideEmail ||
+                        (backendViewDetail as any)?.empleado_correo,
+                      phone:
+                        displayViewGuide?.telefono ||
+                        selectedProgramming.guidePhone ||
+                        (backendViewDetail as any)?.empleado_telefono,
+                      highlightSelf: role === 'guide' && selectedProgramming.guideName === userName,
+                    })}
                   </CardContent>
                 </Card>
 
@@ -5327,9 +6098,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                   </Card>
                 )}
                 </div>
-              )}
-            </div>
+              )
           )}
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -5357,6 +6128,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               <div>
                 <Label className="text-gray-500">Cliente</Label>
                 <p className="font-medium text-gray-900">{getReservaClienteLabel(reservaPreview)}</p>
+                <p className="mt-1 text-sm text-gray-700">
+                  Documento: {getReservaDocumentoLabel(reservaPreview)}
+                </p>
               </div>
               {(reservaPreview.cliente_email || reservaPreview.cliente_telefono) && (
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -5381,7 +6155,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                 </div>
                 <div>
                   <Label className="text-gray-500">Fecha reserva</Label>
-                  <p className="font-medium text-gray-900">{reservaPreview.fecha_reserva ?? '—'}</p>
+                  <p className="font-medium text-gray-900">
+                    {formatDateDisplay(reservaPreview.fecha_reserva)}
+                  </p>
                 </div>
                 <div>
                   <Label className="text-gray-500">Estado</Label>
@@ -5444,6 +6220,183 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={reservaPreviewOpen}
+        onOpenChange={(open) => {
+          setReservaPreviewOpen(open);
+          if (!open) setReservaPreview(null);
+        }}
+      >
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {(() => {
+                const id = reservaPreview ? getReservaRowId(reservaPreview) : null;
+                return id != null ? `Reserva #${id}` : 'Reserva';
+              })()}
+            </DialogTitle>
+            <DialogDescription>Información completa de esta reserva.</DialogDescription>
+          </DialogHeader>
+          {reservaPreviewLoading ? (
+            <p className="text-sm text-gray-600 py-8 text-center">Cargando…</p>
+          ) : reservaPreview ? (
+            <div className="space-y-4 text-sm">
+              <div>
+                <Label className="text-gray-500">Cliente</Label>
+                <p className="font-medium text-gray-900">{getReservaClienteLabel(reservaPreview)}</p>
+              </div>
+              {(reservaPreview.cliente_email || reservaPreview.cliente_telefono) && (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  { !!reservaPreview.cliente_email && (
+                    <div>
+                      <Label className="text-gray-500">Correo</Label>
+                      <p className="break-all text-gray-900">{reservaPreview.cliente_email}</p>
+                    </div>
+                  )}
+                  { !!reservaPreview.cliente_telefono && (
+                    <div>
+                      <Label className="text-gray-500">Teléfono</Label>
+                      <p className="text-gray-900">{reservaPreview.cliente_telefono}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-gray-500">Participantes</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.numero_participantes ?? '—'}</p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Fecha reserva</Label>
+                  <p className="font-medium text-gray-900">
+                    {formatDateDisplay(reservaPreview.fecha_reserva)}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Estado</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.estado ?? '—'}</p>
+                </div>
+                <div>
+                  <Label className="text-gray-500">Pago</Label>
+                  <p className="font-medium text-gray-900">{reservaPreview.estado_pago ?? '—'}</p>
+                </div>
+              </div>
+              <div className="rounded-lg border border-purple-200 bg-purple-50/40 p-4">
+                <Label className="flex items-center gap-2 text-gray-800">
+                  <Users className="h-4 w-4 text-purple-700" />
+                  Acompañantes ({getReservaAcompanantes(reservaPreview).length})
+                </Label>
+                {getReservaAcompanantes(reservaPreview).length > 0 ? (
+                  <div className="mt-3 overflow-x-auto rounded-md border border-purple-100 bg-white">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="hover:bg-muted/0">
+                          <TableHead>Nombre</TableHead>
+                          <TableHead>Documento</TableHead>
+                          <TableHead>Teléfono</TableHead>
+                          <TableHead className="whitespace-nowrap">F. nacimiento</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {getReservaAcompanantes(reservaPreview).map((acompanante, aidx) => (
+                          <TableRow key={acompanante.id_detalle_reserva_acompanante ?? `ac-${aidx}`}>
+                            <TableCell className="font-medium text-gray-900">
+                              {`${acompanante.nombre || ''} ${acompanante.apellido || ''}`.trim() || '—'}
+                            </TableCell>
+                            <TableCell>
+                              {[acompanante.tipo_documento, acompanante.numero_documento].filter(Boolean).join(' ').trim() || '—'}
+                            </TableCell>
+                            <TableCell>{acompanante.telefono?.trim() || '—'}</TableCell>
+                            <TableCell className="whitespace-nowrap">
+                              {acompanante.fecha_nacimiento
+                                ? formatDisplayDate(acompanante.fecha_nacimiento)
+                                : '—'}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-gray-600">
+                    Esta reserva no tiene acompañantes registrados en el sistema.
+                  </p>
+                )}
+              </div>
+              <div>
+                <Label className="text-gray-500">Notas / observaciones</Label>
+                <p className="mt-1 whitespace-pre-wrap rounded-md border bg-gray-50 p-3 text-gray-800">
+                  {getReservaNotasResumen(reservaPreview) || 'Sin notas registradas.'}
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={solicitudRejectDialogOpen}
+        onOpenChange={(open) => {
+          setSolicitudRejectDialogOpen(open);
+          if (!open) {
+            setSolicitudRejectTarget(null);
+            setSolicitudRejectMotivo('');
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-700">Rechazar solicitud personalizada</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  La solicitud #{solicitudRejectTarget?.id_solicitud_personalizada} pasará a estado{' '}
+                  <strong>Rechazada</strong>.
+                  {solicitudRejectTarget?.id_reserva ? (
+                    <>
+                      {' '}
+                      La reserva #{solicitudRejectTarget.id_reserva} se cancelará y dejará de bloquear eliminar la
+                      ruta.
+                    </>
+                  ) : (
+                    ' No hay reserva vinculada.'
+                  )}
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="solicitud-rechazo-motivo">
+                    Motivo del rechazo *{' '}
+                    <span className="font-normal text-gray-500">(mín. {SOLICITUD_RECHAZO_MOTIVO_MIN} caracteres)</span>
+                  </Label>
+                  <Textarea
+                    id="solicitud-rechazo-motivo"
+                    value={solicitudRejectMotivo}
+                    onChange={(e) => setSolicitudRejectMotivo(e.target.value)}
+                    placeholder="Ej.: No hay disponibilidad de guías en la fecha solicitada."
+                    rows={3}
+                  />
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={backendSolicitudSavingId != null}>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={
+                backendSolicitudSavingId != null ||
+                solicitudRejectMotivo.trim().length < SOLICITUD_RECHAZO_MOTIVO_MIN
+              }
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmarRechazoSolicitud();
+              }}
+            >
+              {backendSolicitudSavingId != null ? 'Rechazando…' : 'Rechazar solicitud'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Dialog Eliminar */}
       <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>

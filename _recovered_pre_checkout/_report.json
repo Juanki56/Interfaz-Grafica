@@ -1,0 +1,11 @@
+{
+  "transcriptLines": 5074,
+  "stoppedAtLine": 4766,
+  "filesRecovered": 72,
+  "strReplace": 1626,
+  "strOk": 682,
+  "strFail": 944,
+  "writes": 40,
+  "patches": 0,
+  "stoppedAt": 4766
+}

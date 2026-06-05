@@ -13,7 +13,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { useAuth } from '../App';
+import { useAuth } from '../context/AuthContext';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -22,6 +22,12 @@ import { Input } from './ui/input';
 import { Separator } from './ui/separator';
 import { pagosAPI, reservasAPI } from '../services/api';
 import { clienteProgramacionPrecioFila } from '../utils/programacionLinePricing';
+import {
+  clientPaymentFlowLabel,
+  resolveClientPaymentFlowKind,
+  type ClientPaymentFlowKind,
+} from '../utils/clientPaymentFlow';
+import { formatDateDisplay, formatTimeDisplay } from '../utils/dateTimeDisplay';
 import {
   clientPaymentFlowLabel,
   resolveClientPaymentFlowKind,
@@ -76,10 +82,7 @@ type ClientProgrammingItem = {
 const formatCurrency = (value?: number | string | null) =>
   `$${Number(value || 0).toLocaleString('es-CO')}`;
 
-const formatDate = (value?: string | null) => {
-  if (!value) return '—';
-  return String(value).split('T')[0] || '—';
-};
+const formatDate = (value?: string | null) => formatDateDisplay(value);
 
 const resolveServiceType = (value?: string | null) => {
   const normalized = String(value || '').toLowerCase();
@@ -172,7 +175,6 @@ function useClientSalesData() {
 function useClientPaymentsData() {
   const { user } = useAuth();
   const [payments, setPayments] = useState<ClientPaymentItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const loadPayments = async () => {
@@ -235,7 +237,6 @@ function useClientPaymentsData() {
 function useClientProgrammingsData() {
   const { user } = useAuth();
   const [programmings, setProgrammings] = useState<ClientProgrammingItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => {
     const loadProgrammings = async () => {
@@ -282,7 +283,7 @@ function useClientProgrammingsData() {
               reservationId: reservaId,
               routeName: item.ruta_nombre || `Programación #${programacionId}`,
               date: formatDate(item.fecha_salida),
-              time: String(item.hora_salida || '').slice(0, 5) || '—',
+              time: formatTimeDisplay(item.hora_salida) || '—',
               people: Number(item.cantidad_personas ?? detail.numero_participantes ?? 1),
               meetingPoint: item.lugar_encuentro || 'Por confirmar',
               subtotal: clienteProgramacionPrecioFila(
@@ -453,7 +454,6 @@ export function ClientSalesTab() {
 }
 
 export function ClientPaymentsTab() {
-  const [searchTerm, setSearchTerm] = useState('');
   const [selectedPayment, setSelectedPayment] = useState<ClientPaymentItem | null>(null);
   const { payments, isLoading } = useClientPaymentsData();
 
@@ -651,7 +651,6 @@ export function ClientPaymentsTab() {
 }
 
 export function ClientProgrammingsTab() {
-  const [searchTerm, setSearchTerm] = useState('');
   const [selectedProgramming, setSelectedProgramming] = useState<ClientProgrammingItem | null>(null);
   const { programmings, isLoading } = useClientProgrammingsData();
 

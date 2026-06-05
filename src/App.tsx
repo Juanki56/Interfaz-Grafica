@@ -1,4 +1,7 @@
-import { Suspense, lazy, useState, createContext, useContext, useEffect } from 'react';
+import { Suspense, lazy, useState, useEffect } from 'react';
+import { AuthContext, type AuthContextType, type LoginResult } from './context/AuthContext';
+
+export { useAuth } from './context/AuthContext';
 import { Mountain } from 'lucide-react';
 import { LoginForm } from './components/LoginForm';
 import { RegisterForm } from './components/RegisterForm';
@@ -12,6 +15,7 @@ import { WhatsAppButton } from './components/WhatsAppButton';
 import { ServicesProvider } from './hooks/ServicesProvider';
 import { buildApiUrl, getAuthHeaders, API_CONFIG } from './config/api.config';
 import { decodeJWT, debugToken } from './utils/jwtDecoder';
+import { clearResolvedClientIdCache } from './utils/resolveClientId';
 
 const Navigation = lazy(() => import('./components/Navigation').then((m) => ({ default: m.Navigation })));
 
@@ -317,56 +321,6 @@ mockAuth.init();
 (window as any).mockAuth = mockAuth; // For debugging purposes
 import { Toaster } from './components/ui/sonner';
 
-// Context for authentication and user management
-type LoginResult =
-  | { success: true }
-  | {
-      success: false;
-      code?: 'INVALID_CREDENTIALS' | 'EMAIL_NOT_VERIFIED' | 'SERVER_ERROR';
-      message?: string;
-    };
-
-interface AuthContextType {
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    role: 'admin' | 'advisor' | 'guide' | 'client';
-    phone?: string;
-    status?: string;
-  } | null;
-  login: (email: string, password: string) => Promise<LoginResult>;
-  register: (name: string, email: string, password: string, role: string) => Promise<{ success: boolean; error?: string }>;
-  registerPending: (payload: { nombre: string; apellido: string; email: string; password: string }) => Promise<{ success: boolean; error?: string }>;
-  verifyEmail: (payload: { email: string; code: string }) => Promise<{ success: boolean; error?: string }>;
-  resendVerification: (email: string) => Promise<{ success: boolean; error?: string }>;
-  requestPasswordRecovery: (email: string) => Promise<{ success: boolean; error?: string }>;
-  resetPassword: (payload: { email: string; token: string; newPassword: string }) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
-  refreshProfile: () => Promise<void>;
-  updateCurrentUser: (updates: Partial<NonNullable<AuthContextType['user']>>) => void;
-  authFlags: {
-    useEmailVerificationFlow: boolean;
-  };
-  currentView: string;
-  setCurrentView: (view: string) => void;
-  loading: boolean;
-  getAllUsers: () => any[];
-  updateUserRole: (email: string, newRole: string) => Promise<{ success: boolean; error?: string }>;
-  adminActiveTab: string;
-  setAdminActiveTab: (tab: string) => void;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
-
 export default function App() {
   const hasBackendToken = Boolean(localStorage.getItem('token'));
   const [user, setUser] = useState<AuthContextType['user']>(null);
@@ -379,6 +333,7 @@ export default function App() {
   const [showVerifyEmail, setShowVerifyEmail] = useState(false);
   const [showResetPassword, setShowResetPassword] = useState(false);
   const [authEmailDraft, setAuthEmailDraft] = useState('');
+  const [pendingRegisterPassword, setPendingRegisterPassword] = useState('');
   const [resetTokenDraft, setResetTokenDraft] = useState('');
   const [adminActiveTab, setAdminActiveTab] = useState('dashboard');
 
@@ -519,6 +474,150 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const establishSession = async (
+    token: string,
+    email: string,
+    authPayload?: { usuario?: Record<string, unknown> },
+  ): Promise<LoginResult> => {
+    if (!token) {
+      return {
+        success: false,
+        code: 'SERVER_ERROR',
+        message: 'No se recibió token de sesión',
+      };
+    }
+
+    localStorage.setItem('token', token);
+    setSessionExpiry(SESSION_TIMEOUT_MINUTES);
+    debugToken();
+
+    const tokenPayload = decodeJWT(token);
+    const usuario = authPayload?.usuario;
+
+    let mappedUser: AuthContextType['user'] = null;
+    let frontendRole: 'admin' | 'advisor' | 'guide' | 'client' = 'client';
+
+    try {
+      const profileResponse = await fetch(buildApiUrl(API_CONFIG.AUTH.PROFILE), {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+
+      if (profileResponse.ok) {
+        const profileData = await profileResponse.json();
+        if (profileData.success && profileData.perfil) {
+          const nombreCompletoPerfil = profileData.perfil.apellido
+            ? `${profileData.perfil.nombre} ${profileData.perfil.apellido}`
+            : profileData.perfil.nombre || '';
+
+          const backendRoleSource =
+            profileData.perfil.rol_nombre ||
+            profileData.perfil.rol ||
+            profileData.perfil.role ||
+            tokenPayload?.rol_nombre ||
+            tokenPayload?.rol ||
+            tokenPayload?.role ||
+            profileData.perfil.tipo_usuario;
+
+          const backendRoleIdSources = [
+            profileData.perfil.id_roles,
+            profileData.perfil.id_rol,
+            profileData.perfil.rol_id,
+            tokenPayload?.id_roles,
+            tokenPayload?.id_rol,
+            tokenPayload?.rol_id,
+          ];
+
+          frontendRole = enforceForcedAdminRole(
+            profileData.perfil.correo || tokenPayload?.correo || tokenPayload?.email || email,
+            await resolveRoleFromBackend([backendRoleSource], backendRoleIdSources),
+          );
+
+          const idClientePerfil = profileData.perfil.id_cliente;
+          mappedUser = {
+            id:
+              idClientePerfil?.toString() ||
+              profileData.perfil.id_empleado?.toString() ||
+              profileData.perfil.id_usuarios?.toString() ||
+              '',
+            clientId:
+              idClientePerfil != null && Number(idClientePerfil) > 0
+                ? String(idClientePerfil)
+                : undefined,
+            name: nombreCompletoPerfil,
+            email: profileData.perfil.correo || email,
+            role: frontendRole,
+            phone: profileData.perfil.telefono || '',
+            status: profileData.perfil.estado ? 'Activo' : 'Inactivo',
+            tipo_documento:
+              profileData.perfil.tipo_documento || profileData.perfil.tipoDocumento || '',
+            numero_documento:
+              profileData.perfil.numero_documento || profileData.perfil.numeroDocumento || '',
+          };
+        }
+      }
+    } catch (profileError) {
+      console.warn('⚠️ No se pudo hidratar perfil desde /profile', profileError);
+    }
+
+    if (!mappedUser && usuario) {
+      const u = usuario as Record<string, unknown>;
+      const nombreCompleto = u.apellido
+        ? `${u.nombre || ''} ${u.apellido}`.trim()
+        : String(u.nombre || '');
+
+      const backendRoleSource =
+        u.rol_nombre || u.rol || u.role || tokenPayload?.rol_nombre || tokenPayload?.rol;
+
+      frontendRole = enforceForcedAdminRole(
+        String(u.correo || u.email || email),
+        await resolveRoleFromBackend([backendRoleSource], [
+          u.id_roles,
+          u.id_rol,
+          tokenPayload?.id_roles,
+          tokenPayload?.id_rol,
+        ]),
+      );
+
+      mappedUser = {
+        id: String(u.id ?? u.id_usuarios ?? u.id_cliente ?? ''),
+        name: nombreCompleto,
+        email: String(u.correo || u.email || email),
+        role: frontendRole,
+        phone: String(u.telefono || ''),
+        status: u.estado ? 'Activo' : 'Inactivo',
+      };
+    }
+
+    if (!mappedUser) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('session_expiry');
+      return {
+        success: false,
+        code: 'SERVER_ERROR',
+        message: 'No se pudo cargar el perfil del usuario',
+      };
+    }
+
+    setUser(mappedUser);
+    setShowLogin(false);
+    setShowRegister(false);
+    setShowVerifyEmail(false);
+    setShowForgotPassword(false);
+    setPendingRegisterPassword('');
+
+    if (frontendRole === 'client') {
+      setAdminActiveTab('bookings');
+      setCurrentView('dashboard');
+    } else if (frontendRole === 'admin' || frontendRole === 'guide' || frontendRole === 'advisor') {
+      setCurrentView('dashboard');
+    } else {
+      setCurrentView('profile');
+    }
+
+    return { success: true };
   };
 
   // Backend authentication function
@@ -687,8 +786,10 @@ export default function App() {
       setShowLogin(false);
       setShowRegister(false);
       
-      // Set default view based on role (ahora usando roles en inglés)
-      if (frontendRole === 'admin' || frontendRole === 'guide') {
+      if (frontendRole === 'client') {
+        setAdminActiveTab('bookings');
+        setCurrentView('dashboard');
+      } else if (frontendRole === 'admin' || frontendRole === 'guide' || frontendRole === 'advisor') {
         setCurrentView('dashboard');
       } else {
         setCurrentView('profile');
@@ -709,51 +810,96 @@ export default function App() {
   };
 
   // Backend registration function
-  const register = async (name: string, email: string, password: string, role: string): Promise<{ success: boolean; error?: string }> => {
+  const register = async (
+    nombre: string,
+    apellido: string,
+    email: string,
+    password: string,
+    role: string,
+    telefono?: string,
+    options?: { autoLogin?: boolean },
+  ): Promise<{ success: boolean; error?: string }> => {
     try {
+      const payload: Record<string, string> = {
+        nombre: String(nombre || '').trim(),
+        apellido: String(apellido || '').trim(),
+        correo: email,
+        contrasena: password,
+        rol: role,
+      };
+      const telefonoTrim = String(telefono || '').trim();
+      if (telefonoTrim) payload.telefono = telefonoTrim;
+
       const response = await fetch(buildApiUrl(API_CONFIG.AUTH.REGISTER), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          nombre: name,
-          correo: email,
-          contrasena: password,
-          rol: role
-        })
+        body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       
       if (!response.ok) {
-        return { success: false, error: data.mensaje || data.error || 'Error al crear la cuenta' };
+        return { success: false, error: data.mensaje || data.message || data.error || 'Error al crear la cuenta' };
       }
 
-      return { success: true };
+      const shouldAutoLogin = options?.autoLogin !== false;
+      if (!shouldAutoLogin) {
+        return { success: true };
+      }
+
+      if (data?.token) {
+        const sessionResult = await establishSession(data.token, email, { usuario: data.usuario });
+        if (sessionResult.success) return { success: true };
+        return {
+          success: false,
+          error: sessionResult.message || 'Cuenta creada, pero no se pudo iniciar sesión automáticamente',
+        };
+      }
+
+      const loginResult = await login(email, password);
+      if (loginResult.success) return { success: true };
+
+      return {
+        success: false,
+        error:
+          loginResult.message ||
+          'Cuenta creada. Si no entras automáticamente, inicia sesión con tu correo y contraseña.',
+      };
     } catch (error) {
       console.error('Registration error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
     }
   };
 
-  const registerPending: AuthContextType['registerPending'] = async ({ nombre, apellido, email, password }) => {
+  const registerPending: AuthContextType['registerPending'] = async ({
+    nombre,
+    apellido,
+    email,
+    password,
+    telefono,
+  }) => {
     try {
       if (!String(nombre || '').trim() || !String(apellido || '').trim()) {
         return { success: false, error: 'Ingresa tu nombre y apellido' };
       }
+
+      const payload: Record<string, string> = {
+        nombre,
+        apellido,
+        correo: email,
+        contrasena: password,
+      };
+      const telefonoTrim = String(telefono || '').trim();
+      if (telefonoTrim) payload.telefono = telefonoTrim;
 
       const response = await fetch(buildApiUrl(API_CONFIG.AUTH.REGISTER_PENDING), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({
-          nombre,
-          apellido,
-          correo: email,
-          contrasena: password
-        })
+        body: JSON.stringify(payload),
       });
 
       const data = await response.json().catch(() => null);
@@ -781,7 +927,7 @@ export default function App() {
         body: JSON.stringify({ correo: email, codigo: code })
       });
 
-      const data = await response.json().catch(() => null);
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
         return {
           success: false,
@@ -789,7 +935,32 @@ export default function App() {
         };
       }
 
-      return { success: true };
+      if (data?.token) {
+        const sessionResult = await establishSession(data.token, email, { usuario: data.usuario });
+        if (sessionResult.success) return { success: true };
+        return {
+          success: false,
+          error: sessionResult.message || 'Correo verificado, pero no se pudo iniciar sesión',
+        };
+      }
+
+      const passwordForLogin = pendingRegisterPassword;
+      if (passwordForLogin) {
+        setPendingRegisterPassword('');
+        const loginResult = await login(email, passwordForLogin);
+        if (loginResult.success) return { success: true };
+        return {
+          success: false,
+          error:
+            loginResult.message ||
+            'Correo verificado. Inicia sesión con tu correo y contraseña.',
+        };
+      }
+
+      return {
+        success: false,
+        error: 'Correo verificado. Inicia sesión con tu correo y contraseña.',
+      };
     } catch (error) {
       console.error('verifyEmail error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
@@ -831,13 +1002,21 @@ export default function App() {
         body: JSON.stringify({ correo: email })
       });
 
-      // El backend responde success incluso si no existe el correo.
+      const data = await response.json().catch(() => null);
+
       if (!response.ok) {
-        const data = await response.json().catch(() => null);
-        return { success: false, error: data?.message || data?.error || 'No se pudo solicitar recuperación' };
+        return {
+          success: false,
+          error:
+            data?.message ||
+            data?.error ||
+            (response.status === 404
+              ? 'No encontramos una cuenta con ese correo. Revisa el texto o regístrate.'
+              : 'No se pudo solicitar la recuperación. Intenta nuevamente.'),
+        };
       }
 
-      return { success: true };
+      return { success: true, message: data?.message };
     } catch (error) {
       console.error('requestPasswordRecovery error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
@@ -856,10 +1035,15 @@ export default function App() {
 
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        return { success: false, error: data?.message || data?.error || 'No se pudo restablecer la contraseña' };
+        return {
+          success: false,
+          error: data?.message || data?.error || 'No se pudo restablecer la contraseña',
+          code: data?.code,
+          message: data?.message,
+        };
       }
 
-      return { success: true };
+      return { success: true, message: data?.message };
     } catch (error) {
       console.error('resetPassword error:', error);
       return { success: false, error: 'Error del servidor. Intenta nuevamente.' };
@@ -871,6 +1055,7 @@ export default function App() {
       // Limpiar token y sesión
       localStorage.removeItem('token');
       localStorage.removeItem('session_expiry');
+      clearResolvedClientIdCache();
       setUser(null);
       setCurrentView('home');
       setShowLogin(false);
@@ -935,14 +1120,34 @@ export default function App() {
 
       setSessionExpiry(SESSION_TIMEOUT_MINUTES);
 
-      setUser({
-        id: data.perfil.id_cliente?.toString() || data.perfil.id_empleado?.toString() || data.perfil.id_usuarios?.toString() || '',
-        name: nombreCompleto,
-        email: data.perfil.correo || '',
+      const idClientePerfil = data.perfil.id_cliente;
+      setUser((prev) => ({
+        id:
+          idClientePerfil?.toString() ||
+          data.perfil.id_empleado?.toString() ||
+          data.perfil.id_usuarios?.toString() ||
+          prev?.id ||
+          '',
+        clientId:
+          idClientePerfil != null && Number(idClientePerfil) > 0
+            ? String(idClientePerfil)
+            : prev?.clientId,
+        name: nombreCompleto || prev?.name || '',
+        email: data.perfil.correo || prev?.email || '',
         role: frontendRole,
-        phone: data.perfil.telefono || '',
-        status: data.perfil.estado ? 'Activo' : 'Inactivo'
-      });
+        phone: data.perfil.telefono || prev?.phone || '',
+        status: data.perfil.estado ? 'Activo' : 'Inactivo',
+        tipo_documento:
+          data.perfil.tipo_documento ||
+          data.perfil.tipoDocumento ||
+          prev?.tipo_documento ||
+          '',
+        numero_documento:
+          data.perfil.numero_documento ||
+          data.perfil.numeroDocumento ||
+          prev?.numero_documento ||
+          '',
+      }));
     } catch (error) {
       console.error('refreshProfile error:', error);
     }
@@ -1098,6 +1303,19 @@ export default function App() {
                   // ignore
                 }
               }}
+              onRequestNewRecovery={() => {
+                setShowResetPassword(false);
+                setShowForgotPassword(true);
+                setResetTokenDraft('');
+                try {
+                  const url = new URL(window.location.href);
+                  url.searchParams.delete('token');
+                  url.searchParams.delete('email');
+                  window.history.replaceState({}, '', url.toString());
+                } catch {
+                  // ignore
+                }
+              }}
             />
           ) : showVerifyEmail ? (
             <VerifyEmailForm
@@ -1113,8 +1331,9 @@ export default function App() {
                 setShowRegister(false);
                 setShowLogin(true);
               }}
-              onShowVerifyEmail={(email) => {
+              onShowVerifyEmail={(email, password) => {
                 setAuthEmailDraft(email);
+                setPendingRegisterPassword(password || '');
                 setShowRegister(false);
                 setShowVerifyEmail(true);
               }}
@@ -1138,6 +1357,7 @@ export default function App() {
               }}
               onShowVerifyEmail={(email) => {
                 setAuthEmailDraft(email);
+                setPendingRegisterPassword('');
                 setShowLogin(false);
                 setShowVerifyEmail(true);
               }}
@@ -1158,18 +1378,19 @@ export default function App() {
   }
 
   const renderDashboard = () => {
-    const normalizedRole = normalizeRole(user?.role || '');
+    if (!user) return null;
+    const normalizedRole = normalizeRole(user.role);
     console.log('🎭 Rol del usuario:', { original: user?.role, normalizado: normalizedRole, usuario: user });
 
     switch (normalizedRole) {
       case 'admin':
-        return <AdminDashboard />;
+        return <AdminDashboard key="dash-admin" />;
       case 'advisor':
-        return <AdvisorDashboard />;
+        return <AdvisorDashboard key="dash-advisor" />;
       case 'guide':
-        return <GuideDashboard />;
+        return <GuideDashboard key="dash-guide" />;
       case 'client':
-        return <ClientDashboard />;
+        return <ClientDashboard key="dash-client" />;
       default:
         console.error('❌ Rol no reconocido:', normalizedRole);
         return (
@@ -1225,7 +1446,7 @@ export default function App() {
             }
           >
             <Navigation />
-            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen">
+            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
               {currentView === 'dashboard' ? renderDashboard() : 
                currentView === 'programming' ? (
                  <div className="p-6">
@@ -1264,7 +1485,7 @@ export default function App() {
               onViewChange={handleViewChange}
               onLogin={handleShowLogin}
             />
-            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen">
+            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
               <Suspense
                 fallback={
                   <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>

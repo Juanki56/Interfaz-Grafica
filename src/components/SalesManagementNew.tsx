@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { 
   Plus,
   Search,
@@ -49,8 +49,30 @@ import { Textarea } from './ui/textarea';
 import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
-import { clientesAPI, fincasAPI, pagosAPI, reservasAPI, rutasAPI, serviciosAPI, ventasAPI, type PagoCliente, type Reserva, type Venta } from '../services/api';
+import {
+  clientesAPI,
+  fincasAPI,
+  pagosAPI,
+  reservasAPI,
+  rutasAPI,
+  serviciosAPI,
+  ventasAPI,
+  type Cliente,
+  type PagoCliente,
+  type Reserva,
+  type Ruta,
+  type RutaServicioOpcional,
+  type RutaServicioPredefinido,
+  type Servicio,
+  type Venta,
+} from '../services/api';
+import { buildReservaSummaryFromVenta } from '../utils/reservaProductoDisplay';
+import { downloadSalePdf, saleToPdfInput } from '../utils/salePdf';
+import { formatDocumentoClienteDisplay } from '../utils/documentIdentityValidation';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import { inferirServicioAplicacion, servicioVisibleEnContexto } from '../utils/servicioAplicacion';
+import { isFincaActiva } from '../utils/fincaActiva';
+import { isServicioCatalogoActivo } from '../utils/catalogoActivo';
 import { ReceiptProofViewerDialog } from './ReceiptProofViewerDialog';
 
 // ===========================
@@ -65,12 +87,31 @@ interface Client {
   email: string;
 }
 
+interface RouteObligatoryLine {
+  id_servicio: number;
+  name: string;
+  description: string;
+  price: number;
+  cantidad: number;
+  requerido: boolean;
+}
+
+interface RouteOptionalLine {
+  id_servicio: number;
+  name: string;
+  description: string;
+  price: number;
+  cantidad_default: number;
+}
+
 interface Route {
   id: string;
   name: string;
   distance: string;
   difficulty: string;
   price: number;
+  obligatoryServices: RouteObligatoryLine[];
+  optionalServices: RouteOptionalLine[];
 }
 
 interface Farm {
@@ -131,6 +172,49 @@ interface CancelledSale extends Sale {
 
 type ViewMode = 'list' | 'create' | 'detail';
 
+function mapServicioRowToService(raw: Servicio | RutaServicioPredefinido | RutaServicioOpcional): Service {
+  const nested = (raw as RutaServicioPredefinido).servicio;
+  const s = (nested ?? raw) as Servicio;
+  return {
+    id: String(s.id_servicio),
+    name: String(s.nombre || `Servicio #${s.id_servicio}`),
+    price: Number(s.precio ?? 0),
+    category: String((s as Servicio).categoria || 'Servicio'),
+    description: String(s.descripcion || 'Sin descripción'),
+  };
+}
+
+function mapRouteFromApi(route: Ruta): Route {
+  const predef = Array.isArray(route.servicios_predefinidos) ? route.servicios_predefinidos : [];
+  const opc = Array.isArray(route.servicios_opcionales) ? route.servicios_opcionales : [];
+  return {
+    id: String(route.id_ruta),
+    name: String(route.nombre),
+    distance: formatRutaDuracionHoras(route.duracion_dias),
+    difficulty: String(route.dificultad || 'Por definir'),
+    price: Number(route.precio_base || 0),
+    obligatoryServices: predef.map((sp) => ({
+      id_servicio: Number(sp.id_servicio),
+      name: sp.servicio?.nombre ?? `Servicio #${sp.id_servicio}`,
+      description: sp.servicio?.descripcion ?? 'Incluido en la ruta',
+      price: Number(sp.servicio?.precio ?? 0),
+      cantidad: Math.max(1, Number(sp.cantidad_default ?? 1)),
+      requerido: Boolean(sp.requerido),
+    })),
+    optionalServices: opc.map((so) => ({
+      id_servicio: Number(so.id_servicio),
+      name: so.servicio?.nombre ?? `Servicio #${so.id_servicio}`,
+      description: so.servicio?.descripcion ?? 'Servicio opcional',
+      price: Number(so.servicio?.precio ?? 0),
+      cantidad_default: Math.max(1, Number(so.cantidad_default ?? 1)),
+    })),
+  };
+}
+
+function isRutaActiva(route: Ruta): boolean {
+  return route.estado === true;
+}
+
 function normalizeSaleStatus(status?: string | null): Sale['status'] {
   const normalized = String(status || '').trim().toLowerCase();
   if (normalized === 'pagado') return 'Pagado';
@@ -175,10 +259,35 @@ function mapPagoToSalePayment(pago: PagoCliente): SalePayment {
   };
 }
 
-function mapVentaToSale(venta: Venta, reserva?: Reserva | null): Sale {
-  const programacion = reserva?.programaciones?.[0] as any;
-  const finca = (reserva as any)?.fincas?.[0];
-  const servicios = (reserva?.servicios || []).map((servicio: any, index: number) => ({
+function mapClienteFromBackend(cliente: Cliente): Client {
+  return {
+    id: String(cliente.id_cliente),
+    name: `${String(cliente.nombre || '').trim()} ${String(cliente.apellido || '').trim()}`.trim() || 'Cliente',
+    document: formatDocumentoClienteDisplay({
+      cliente: cliente as unknown as Record<string, unknown>,
+    }),
+    phone: String(cliente.telefono || '—'),
+    email: String(cliente.correo || '—'),
+  };
+}
+
+function mergeSaleClient(base: Client, catalog?: Client): Client {
+  if (!catalog) return base;
+  return {
+    ...base,
+    name: catalog.name || base.name,
+    document:
+      catalog.document !== 'Documento no disponible' ? catalog.document : base.document,
+    phone: catalog.phone !== '—' ? catalog.phone : base.phone,
+    email: catalog.email !== '—' ? catalog.email : base.email,
+  };
+}
+
+function mapVentaToSale(venta: Venta, reserva?: Reserva | null, clientFromCatalog?: Client): Sale {
+  const reservaCtx = reserva ?? buildReservaSummaryFromVenta(venta);
+  const programacion = reservaCtx?.programaciones?.[0] as any;
+  const finca = (reservaCtx as any)?.fincas?.[0];
+  const servicios = (reservaCtx?.servicios || []).map((servicio: any, index: number) => ({
     id: String(servicio.id_servicio || servicio.id_detalle_reserva_servicio || index),
     name: String(servicio.servicio_nombre || `Servicio #${servicio.id_servicio || index + 1}`),
     price: Number(servicio.subtotal ?? servicio.precio_unitario ?? 0),
@@ -214,13 +323,24 @@ function mapVentaToSale(venta: Venta, reserva?: Reserva | null): Sale {
     id: `V-${String(venta.id_venta).padStart(3, '0')}`,
     backendId: Number(venta.id_venta),
     reservationId: Number(venta.id_reserva),
-    client: {
-      id: String(venta.id_cliente || venta.id_reserva || venta.id_venta),
-      name: `${String(venta.cliente_nombre || '').trim()} ${String(venta.cliente_apellido || '').trim()}`.trim() || 'Cliente',
-      document: String(venta.numero_documento || 'Documento no disponible'),
-      phone: String(venta.cliente_telefono || '—'),
-      email: String(venta.email || '—'),
-    },
+    client: mergeSaleClient(
+      {
+        id: String(venta.id_cliente || venta.id_reserva || venta.id_venta),
+        name:
+          `${String(venta.cliente_nombre || '').trim()} ${String(venta.cliente_apellido || '').trim()}`.trim() ||
+          'Cliente',
+        document: formatDocumentoClienteDisplay({
+          tipo: venta.tipo_documento,
+          numero: venta.numero_documento,
+          cliente:
+            (venta as { cliente?: Record<string, unknown> }).cliente ??
+            (reservaCtx as { cliente?: Record<string, unknown> })?.cliente,
+        }),
+        phone: String(venta.cliente_telefono || '—'),
+        email: String(venta.email || '—'),
+      },
+      clientFromCatalog,
+    ),
     saleType,
     amount: Number(venta.monto_total || 0),
     paidAmount: Number(venta.monto_pagado || 0),
@@ -250,9 +370,33 @@ const mockClients: Client[] = [
 ];
 
 const mockRoutes: Route[] = [
-  { id: '1', name: 'Cascada El Paraíso', distance: '12 km', difficulty: 'Moderada', price: 85000 },
-  { id: '2', name: 'Montaña Verde', distance: '8 km', difficulty: 'Fácil', price: 65000 },
-  { id: '3', name: 'Sendero del Cóndor', distance: '15 km', difficulty: 'Difícil', price: 120000 },
+  {
+    id: '1',
+    name: 'Cascada El Paraíso',
+    distance: '12 km',
+    difficulty: 'Moderada',
+    price: 85000,
+    obligatoryServices: [],
+    optionalServices: [],
+  },
+  {
+    id: '2',
+    name: 'Montaña Verde',
+    distance: '8 km',
+    difficulty: 'Fácil',
+    price: 65000,
+    obligatoryServices: [],
+    optionalServices: [],
+  },
+  {
+    id: '3',
+    name: 'Sendero del Cóndor',
+    distance: '15 km',
+    difficulty: 'Difícil',
+    price: 120000,
+    obligatoryServices: [],
+    optionalServices: [],
+  },
 ];
 
 const mockFarms: Farm[] = [
@@ -585,10 +729,11 @@ export function SalesManagement() {
   const [cancelledSales, setCancelledSales] = useState<CancelledSale[]>([]);
   const [loadingSales, setLoadingSales] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [downloadingPdfId, setDownloadingPdfId] = useState<string | null>(null);
   const [createClients, setCreateClients] = useState<Client[]>(mockClients);
   const [createRoutes, setCreateRoutes] = useState<Route[]>(mockRoutes);
   const [createFarms, setCreateFarms] = useState<Farm[]>(mockFarms);
-  const [createServices, setCreateServices] = useState<Service[]>(mockServices);
+  const [createFarmServices, setCreateFarmServices] = useState<Service[]>(mockServices);
   
   // Filtros
   const [searchTerm, setSearchTerm] = useState('');
@@ -610,8 +755,25 @@ export function SalesManagement() {
     const loadSales = async () => {
       try {
         setLoadingSales(true);
-        const data = await ventasAPI.getAll();
-        setSales((data || []).map((venta) => mapVentaToSale(venta)));
+        const [ventasData, clientesData] = await Promise.all([
+          ventasAPI.getAll(),
+          clientesAPI.getAll().catch(() => []),
+        ]);
+        const clientMap = new Map<string, Client>();
+        (clientesData || []).forEach((cliente) => {
+          const mapped = mapClienteFromBackend(cliente);
+          clientMap.set(mapped.id, mapped);
+        });
+        setSales(
+          (ventasData || []).map((venta) => {
+            const clienteId = venta.id_cliente != null ? String(venta.id_cliente) : '';
+            return mapVentaToSale(
+              venta,
+              buildReservaSummaryFromVenta(venta),
+              clienteId ? clientMap.get(clienteId) : undefined,
+            );
+          }),
+        );
       } catch (error: any) {
         toast.error(error?.message || 'No se pudieron cargar las ventas');
         setSales([]);
@@ -628,35 +790,25 @@ export function SalesManagement() {
 
     const loadCreateData = async () => {
       try {
-        const [clients, routes, farms, services] = await Promise.all([
+        const [clients, routes, farms, farmServicesRaw] = await Promise.all([
           clientesAPI.getAll(),
-          rutasAPI.getAll(),
-          fincasAPI.getAll(),
-          serviciosAPI.getAll(),
+          rutasAPI.getActivas().catch(() => rutasAPI.getAll()),
+          fincasAPI.getActivas(),
+          serviciosAPI.getDisponibles({ aplica_a: 'finca' }).catch(() => serviciosAPI.getAll()),
         ]);
 
-        setCreateClients(
-          (clients || []).map((client) => ({
-            id: String(client.id_cliente),
-            name: `${String(client.nombre || '').trim()} ${String(client.apellido || '').trim()}`.trim(),
-            document: String(client.numero_documento || 'Sin documento'),
-            phone: String(client.telefono || '—'),
-            email: String((client as any).correo || '—'),
-          }))
-        );
+        setCreateClients((clients || []).map((client) => mapClienteFromBackend(client)));
 
         setCreateRoutes(
-          (routes || []).map((route) => ({
-            id: String(route.id_ruta),
-            name: String(route.nombre),
-            distance: formatRutaDuracionHoras(route.duracion_dias),
-            difficulty: String(route.dificultad || 'Por definir'),
-            price: Number(route.precio_base || 0),
-          }))
+          (routes || [])
+            .filter(isRutaActiva)
+            .map((route) => mapRouteFromApi(route)),
         );
 
         setCreateFarms(
-          (farms || []).map((farm) => ({
+          (farms || [])
+            .filter(isFincaActiva)
+            .map((farm) => ({
             id: String(farm.id_finca),
             name: String(farm.nombre),
             capacity: Number(farm.capacidad_personas || 0),
@@ -666,14 +818,16 @@ export function SalesManagement() {
           }))
         );
 
-        setCreateServices(
-          (services || []).map((service) => ({
-            id: String(service.id_servicio),
-            name: String(service.nombre),
-            price: Number(service.precio || 0),
-            category: String(service.categoria || 'Servicio'),
-            description: String(service.descripcion || 'Sin descripción'),
-          }))
+        setCreateFarmServices(
+          (farmServicesRaw || [])
+            .filter((service) => {
+              if (!isServicioCatalogoActivo(service)) return false;
+              return servicioVisibleEnContexto(
+                inferirServicioAplicacion(service as unknown as Record<string, unknown>),
+                'finca',
+              );
+            })
+            .map((service) => mapServicioRowToService(service)),
         );
       } catch {
         // Si algo falla, mantener la UI con los datos mock existentes.
@@ -704,7 +858,18 @@ export function SalesManagement() {
         reservaDetallePromise,
         pagosDetallePromise,
       ]);
-      const mapped = ventaDetalle ? mapVentaToSale(ventaDetalle, reservaDetalle) : sale;
+      let catalogClient: Client | undefined;
+      const clienteId = Number(ventaDetalle?.id_cliente ?? reservaDetalle?.id_cliente ?? 0);
+      if (clienteId > 0) {
+        try {
+          catalogClient = mapClienteFromBackend(await clientesAPI.getById(clienteId));
+        } catch {
+          catalogClient = createClients.find((c) => c.id === String(clienteId));
+        }
+      }
+      const mapped = ventaDetalle
+        ? mapVentaToSale(ventaDetalle, reservaDetalle, catalogClient)
+        : sale;
       setSelectedSale({
         ...mapped,
         paymentHistory: (pagosDetalle || []).map(mapPagoToSalePayment),
@@ -714,6 +879,52 @@ export function SalesManagement() {
       toast.error(error?.message || 'No se pudo cargar el detalle de la venta');
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const handleDownloadSalePdf = async (sale: Sale) => {
+    try {
+      setDownloadingPdfId(sale.id);
+      let enriched: Sale = sale;
+
+      if (sale.backendId) {
+        const [pagosDetalle, ventaDetalle, reservaDetalle] = await Promise.all([
+          pagosAPI.getByVenta(sale.backendId).catch(() => []),
+          ventasAPI.getById(sale.backendId).catch(() => null),
+          sale.reservationId
+            ? reservasAPI.getById(sale.reservationId).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+
+        if (ventaDetalle) {
+          let catalogClient: Client | undefined;
+          const clienteId = Number(ventaDetalle.id_cliente ?? reservaDetalle?.id_cliente ?? 0);
+          if (clienteId > 0) {
+            try {
+              catalogClient = mapClienteFromBackend(await clientesAPI.getById(clienteId));
+            } catch {
+              catalogClient = createClients.find((c) => c.id === String(clienteId));
+            }
+          }
+          enriched = {
+            ...mapVentaToSale(ventaDetalle, reservaDetalle, catalogClient),
+            paymentHistory: (pagosDetalle || []).map(mapPagoToSalePayment),
+          };
+        } else if (pagosDetalle?.length) {
+          enriched = {
+            ...sale,
+            paymentHistory: pagosDetalle.map(mapPagoToSalePayment),
+          };
+        }
+      }
+
+      downloadSalePdf(saleToPdfInput(enriched));
+      toast.success('PDF descargado correctamente');
+    } catch (error: any) {
+      console.error('Error al generar PDF de venta:', error);
+      toast.error(error?.message || 'No se pudo generar el PDF');
+    } finally {
+      setDownloadingPdfId(null);
     }
   };
 
@@ -815,6 +1026,8 @@ export function SalesManagement() {
             }}
             onViewDetail={handleViewDetail}
             onCancelSale={handleInitiateCancellation}
+            onDownloadPdf={handleDownloadSalePdf}
+            downloadingPdfId={downloadingPdfId}
           />
         )}
         
@@ -826,7 +1039,7 @@ export function SalesManagement() {
             clients={createClients}
             routes={createRoutes}
             farms={createFarms}
-            services={createServices}
+            farmServices={createFarmServices}
             canCreateVenta={canCreateVenta}
           />
         )}
@@ -837,6 +1050,8 @@ export function SalesManagement() {
             sale={selectedSale}
             onBack={() => setViewMode('list')}
             onCancel={handleInitiateCancellation}
+            onDownloadPdf={() => handleDownloadSalePdf(selectedSale)}
+            downloadingPdf={downloadingPdfId === selectedSale.id}
             canEditVenta={canEditVenta}
           />
         )}
@@ -929,6 +1144,8 @@ interface SalesListViewProps {
   onCreateNew: () => void;
   onViewDetail: (sale: Sale) => void;
   onCancelSale: (saleId: string) => void;
+  onDownloadPdf: (sale: Sale) => void;
+  downloadingPdfId: string | null;
 }
 
 function SalesListView({
@@ -948,9 +1165,17 @@ function SalesListView({
   canEditVenta,
   onCreateNew,
   onViewDetail,
-  onCancelSale
+  onCancelSale,
+  onDownloadPdf,
+  downloadingPdfId,
 }: SalesListViewProps) {
-  
+  const [receiptDialog, setReceiptDialog] = useState<{
+    open: boolean;
+    url?: string;
+    name?: string;
+    mime?: string;
+  }>({ open: false });
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
       style: 'currency',
@@ -985,7 +1210,7 @@ function SalesListView({
   const paginatedSales = filteredSales.slice(startIndex, startIndex + itemsPerPage);
 
   const handleGeneratePDF = (sale: Sale) => {
-    alert(`Generando PDF para la venta ${sale.id}...`);
+    void onDownloadPdf(sale);
   };
 
   return (
@@ -995,6 +1220,13 @@ function SalesListView({
       exit={{ opacity: 0, y: -20 }}
       className="space-y-6"
     >
+      <ReceiptProofViewerDialog
+        open={receiptDialog.open}
+        onOpenChange={(open) => setReceiptDialog((d) => ({ ...d, open }))}
+        url={receiptDialog.url}
+        fileName={receiptDialog.name}
+        mimeType={receiptDialog.mime}
+      />
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-green-800">Gestión de Ventas</h1>
@@ -1078,7 +1310,17 @@ function SalesListView({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-gray-700">{sale.saleType}</span>
+                      <div>
+                        <p className="font-medium text-gray-900">
+                          {sale.mainService?.name || sale.saleType}
+                        </p>
+                        {sale.mainService?.name && sale.saleType !== 'Reserva' ? (
+                          <p className="text-xs text-gray-500">{sale.saleType}</p>
+                        ) : null}
+                        {sale.reservationId ? (
+                          <p className="text-xs text-gray-500">Reserva #{sale.reservationId}</p>
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="font-medium text-gray-900">
                       {formatCurrency(sale.amount)}
@@ -1102,10 +1344,15 @@ function SalesListView({
                           variant="ghost"
                           size="sm"
                           onClick={() => handleGeneratePDF(sale)}
+                          disabled={downloadingPdfId === sale.id}
                           className="text-blue-600 hover:text-blue-700 hover:bg-blue-50"
-                          title="Generar PDF"
+                          title="Descargar PDF"
                         >
-                          <FileText className="w-4 h-4" />
+                          {downloadingPdfId === sale.id ? (
+                            <span className="text-xs">...</span>
+                          ) : (
+                            <FileText className="w-4 h-4" />
+                          )}
                         </Button>
 
                         {sale.status !== 'Anulado' && canEditVenta && (
@@ -1173,17 +1420,53 @@ interface CreateSaleViewProps {
   clients: Client[];
   routes: Route[];
   farms: Farm[];
-  services: Service[];
+  farmServices: Service[];
   canCreateVenta: boolean;
 }
 
-function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, canCreateVenta }: CreateSaleViewProps) {
+function CreateSaleSearchBox({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <div className="relative">
+      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="pl-10 border-gray-200 focus:border-green-500"
+      />
+    </div>
+  );
+}
+
+function CreateSaleView({
+  onBack,
+  onCreate,
+  clients,
+  routes,
+  farms,
+  farmServices,
+  canCreateVenta,
+}: CreateSaleViewProps) {
   const [selectedClient, setSelectedClient] = useState<string>('');
   const [saleType, setSaleType] = useState<'route' | 'farm' | null>(null);
   const [selectedRoute, setSelectedRoute] = useState<string>('');
   const [selectedFarm, setSelectedFarm] = useState<string>('');
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<string>('transferencia');
+  const [clientSearch, setClientSearch] = useState('');
+  const [routeSearch, setRouteSearch] = useState('');
+  const [farmSearch, setFarmSearch] = useState('');
+  const [serviceSearch, setServiceSearch] = useState('');
+  const [routeDetail, setRouteDetail] = useState<Route | null>(null);
+  const [loadingRouteDetail, setLoadingRouteDetail] = useState(false);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('es-CO', {
@@ -1193,31 +1476,134 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
     }).format(amount);
   };
 
-  // Calcular totales
-  const calculateTotal = () => {
-    let mainServicePrice = 0;
-    
-    if (saleType === 'route' && selectedRoute) {
-      const route = routes.find(r => r.id === selectedRoute);
-      mainServicePrice = route?.price || 0;
-    } else if (saleType === 'farm' && selectedFarm) {
-      const farm = farms.find(f => f.id === selectedFarm);
-      mainServicePrice = farm?.price || 0;
-    }
+  const filteredClients = useMemo(() => {
+    const q = clientSearch.trim().toLowerCase();
+    if (!q) return clients;
+    return clients.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.document.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        c.phone.toLowerCase().includes(q),
+    );
+  }, [clients, clientSearch]);
 
+  const filteredRoutes = useMemo(() => {
+    const q = routeSearch.trim().toLowerCase();
+    if (!q) return routes;
+    return routes.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.difficulty.toLowerCase().includes(q) ||
+        r.distance.toLowerCase().includes(q),
+    );
+  }, [routes, routeSearch]);
+
+  const filteredFarms = useMemo(() => {
+    const q = farmSearch.trim().toLowerCase();
+    if (!q) return farms;
+    return farms.filter(
+      (f) =>
+        f.name.toLowerCase().includes(q) ||
+        f.location.toLowerCase().includes(q),
+    );
+  }, [farms, farmSearch]);
+
+  const activeRoute = useMemo(() => {
+    if (!selectedRoute) return null;
+    if (routeDetail?.id === selectedRoute) return routeDetail;
+    return routes.find((r) => r.id === selectedRoute) || null;
+  }, [selectedRoute, routeDetail, routes]);
+
+  const routeOptionalAsServices = useMemo((): Service[] => {
+    if (!activeRoute) return [];
+    return activeRoute.optionalServices.map((line) => ({
+      id: String(line.id_servicio),
+      name: line.name,
+      price: line.price,
+      category: 'Opcional ruta',
+      description: line.description,
+    }));
+  }, [activeRoute]);
+
+  const selectableServices = useMemo((): Service[] => {
+    if (saleType === 'route') return routeOptionalAsServices;
+    if (saleType === 'farm') return farmServices;
+    return [];
+  }, [saleType, routeOptionalAsServices, farmServices]);
+
+  const filteredSelectableServices = useMemo(() => {
+    const q = serviceSearch.trim().toLowerCase();
+    const base = selectableServices.filter((s) => !selectedServices.includes(s.id));
+    if (!q) return base;
+    return base.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.category.toLowerCase().includes(q),
+    );
+  }, [selectableServices, selectedServices, serviceSearch]);
+
+  useEffect(() => {
+    if (!selectedRoute) {
+      setRouteDetail(null);
+      return;
+    }
+    const fromList = routes.find((r) => r.id === selectedRoute);
+    if (
+      fromList &&
+      (fromList.obligatoryServices.length > 0 || fromList.optionalServices.length > 0)
+    ) {
+      setRouteDetail(fromList);
+      return;
+    }
+    let cancelled = false;
+    setLoadingRouteDetail(true);
+    void rutasAPI
+      .getById(Number(selectedRoute))
+      .then((detalle) => {
+        if (cancelled) return;
+        setRouteDetail(mapRouteFromApi(detalle));
+      })
+      .catch(() => {
+        if (!cancelled) setRouteDetail(fromList || null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRouteDetail(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRoute, routes]);
+
+  useEffect(() => {
+    if (saleType !== 'route' || !activeRoute) return;
+    const allowed = new Set(activeRoute.optionalServices.map((o) => String(o.id_servicio)));
+    setSelectedServices((prev) => prev.filter((id) => allowed.has(id)));
+  }, [saleType, activeRoute?.id, activeRoute?.optionalServices]);
+
+  const { mainServicePrice, servicesPrice, total } = useMemo(() => {
+    let mainServicePrice = 0;
+    if (saleType === 'route' && activeRoute) {
+      mainServicePrice = activeRoute.price;
+    } else if (saleType === 'farm' && selectedFarm) {
+      mainServicePrice = farms.find((f) => f.id === selectedFarm)?.price || 0;
+    }
+    const catalog = saleType === 'route' ? routeOptionalAsServices : farmServices;
     const servicesPrice = selectedServices.reduce((sum, serviceId) => {
-      const service = services.find(s => s.id === serviceId);
+      const service = catalog.find((s) => s.id === serviceId);
       return sum + (service?.price || 0);
     }, 0);
-
-    return {
-      mainServicePrice,
-      servicesPrice,
-      total: mainServicePrice + servicesPrice
-    };
-  };
-
-  const { mainServicePrice, servicesPrice, total } = calculateTotal();
+    return { mainServicePrice, servicesPrice, total: mainServicePrice + servicesPrice };
+  }, [
+    saleType,
+    activeRoute,
+    selectedFarm,
+    farms,
+    selectedServices,
+    routeOptionalAsServices,
+    farmServices,
+  ]);
 
   const handleSubmit = () => {
     if (!canCreateVenta) {
@@ -1257,9 +1643,10 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
       saleTypeName = selectedServices.length > 0 ? 'Finca + Servicios' : 'Finca';
     }
 
-    const additionalServices = selectedServices.map(id => 
-      services.find(s => s.id === id)!
-    );
+    const catalog = saleType === 'route' ? routeOptionalAsServices : farmServices;
+    const additionalServices = selectedServices
+      .map((id) => catalog.find((s) => s.id === id))
+      .filter((s): s is Service => Boolean(s));
 
     const newSale: Sale = {
       id: `V-${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`,
@@ -1288,6 +1675,25 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
     setSelectedServices(prev => prev.filter(id => id !== serviceId));
   };
 
+  const selectedServiceCatalog = saleType === 'route' ? routeOptionalAsServices : farmServices;
+
+  const pickClient = (clientId: string) => {
+    setSelectedClient(clientId);
+    setClientSearch('');
+  };
+
+  const pickRoute = (routeId: string) => {
+    setSelectedRoute(routeId);
+    setSelectedServices([]);
+    setRouteSearch('');
+  };
+
+  const pickFarm = (farmId: string) => {
+    setSelectedFarm(farmId);
+    setSelectedServices([]);
+    setFarmSearch('');
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -1313,21 +1719,61 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
             <CardContent className="p-6">
               <h2 className="text-green-800 mb-4">Sección 1: Seleccionar Cliente</h2>
               <div className="space-y-4">
-                <div>
-                  <Label>Cliente *</Label>
-                  <Select value={selectedClient} onValueChange={setSelectedClient}>
-                    <SelectTrigger className="mt-2 border-gray-200 focus:border-green-500">
-                      <SelectValue placeholder="Selecciona un cliente..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients.map(client => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {client.name} — {client.document}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {selectedClient ? (
+                  <div className="rounded-lg border-2 border-green-500 bg-green-50 p-4">
+                    {(() => {
+                      const client = clients.find((c) => c.id === selectedClient);
+                      if (!client) return null;
+                      return (
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium text-gray-900">{client.name}</p>
+                            <p className="text-sm text-gray-600 mt-1">Documento: {client.document}</p>
+                            <p className="text-sm text-gray-600">{client.phone} · {client.email}</p>
+                            <p className="text-sm text-green-700 mt-1">✓ Cliente seleccionado</p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="border-red-300 text-red-700 shrink-0"
+                            onClick={() => setSelectedClient('')}
+                          >
+                            Cambiar
+                          </Button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <>
+                    <Label>Buscar cliente *</Label>
+                    <CreateSaleSearchBox
+                      value={clientSearch}
+                      onChange={setClientSearch}
+                      placeholder="Nombre, documento, correo o teléfono..."
+                    />
+                    <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {filteredClients.length === 0 ? (
+                        <p className="p-4 text-sm text-gray-500 text-center">No hay clientes que coincidan.</p>
+                      ) : (
+                        filteredClients.map((client) => (
+                          <button
+                            key={client.id}
+                            type="button"
+                            onClick={() => pickClient(client.id)}
+                            className="w-full text-left p-3 hover:bg-green-50 transition-colors"
+                          >
+                            <p className="font-medium text-gray-900">{client.name}</p>
+                            <p className="text-xs text-gray-500 mt-0.5">
+                              {client.document} · {client.phone}
+                            </p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1348,6 +1794,8 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                   onClick={() => {
                     setSaleType('route');
                     setSelectedFarm('');
+                    setSelectedServices([]);
+                    setServiceSearch('');
                   }}
                   className={`
                     p-6 rounded-lg border-2 cursor-pointer transition-all
@@ -1380,6 +1828,9 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                   onClick={() => {
                     setSaleType('farm');
                     setSelectedRoute('');
+                    setRouteDetail(null);
+                    setSelectedServices([]);
+                    setServiceSearch('');
                   }}
                   className={`
                     p-6 rounded-lg border-2 cursor-pointer transition-all
@@ -1427,61 +1878,116 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                   )}
                 </div>
                 
-                {selectedRoute ? (
+                {selectedRoute && activeRoute ? (
                   <motion.div
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
-                    className="p-5 rounded-lg border-2 border-green-500 bg-green-50"
+                    className="space-y-4"
                   >
-                    {(() => {
-                      const route = routes.find(r => r.id === selectedRoute);
-                      return route ? (
-                        <div>
-                          <div className="flex items-start justify-between mb-3">
-                            <div className="flex items-center gap-3">
-                              <div className="p-3 bg-green-100 rounded-full">
-                                <Mountain className="w-6 h-6 text-green-600" />
-                              </div>
-                              <div>
-                                <h3 className="font-medium text-gray-900">{route.name}</h3>
-                                <p className="text-sm text-green-700 mt-1">✓ Ruta Seleccionada</p>
-                              </div>
-                            </div>
-                            <p className="font-semibold text-green-700">{formatCurrency(route.price)}</p>
+                    <div className="p-5 rounded-lg border-2 border-green-500 bg-green-50">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="p-3 bg-green-100 rounded-full">
+                            <Mountain className="w-6 h-6 text-green-600" />
                           </div>
-                          <div className="flex gap-4 text-sm text-gray-600 bg-white rounded-lg p-3">
-                            <span>⏱ Duración: {route.distance}</span>
-                            <span>🏔️ Dificultad: {route.difficulty}</span>
+                          <div>
+                            <h3 className="font-medium text-gray-900">{activeRoute.name}</h3>
+                            <p className="text-sm text-green-700 mt-1">✓ Ruta seleccionada</p>
                           </div>
                         </div>
-                      ) : null;
-                    })()}
+                        <p className="font-semibold text-green-700">{formatCurrency(activeRoute.price)}</p>
+                      </div>
+                      <div className="flex flex-wrap gap-4 text-sm text-gray-600 bg-white rounded-lg p-3">
+                        <span>⏱ Duración: {activeRoute.distance}</span>
+                        <span>🏔️ Dificultad: {activeRoute.difficulty}</span>
+                      </div>
+                    </div>
+
+                    {loadingRouteDetail ? (
+                      <p className="text-sm text-gray-500">Cargando servicios de la ruta…</p>
+                    ) : activeRoute.obligatoryServices.length > 0 ? (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-4">
+                        <p className="text-sm font-semibold text-blue-900 mb-2">
+                          Servicios obligatorios / predefinidos de la ruta
+                        </p>
+                        <div className="space-y-2">
+                          {activeRoute.obligatoryServices.map((line) => (
+                            <div
+                              key={`obl-${line.id_servicio}`}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-blue-100 bg-white px-3 py-2 text-sm"
+                            >
+                              <div>
+                                <p className="font-medium text-gray-900">{line.name}</p>
+                                <p className="text-xs text-gray-500">{line.description}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge variant="secondary" className="bg-blue-100 text-blue-800">
+                                  Cant. {line.cantidad}
+                                </Badge>
+                                <Badge
+                                  variant="secondary"
+                                  className={
+                                    line.requerido
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-gray-100 text-gray-700'
+                                  }
+                                >
+                                  {line.requerido ? 'Obligatorio' : 'Predefinido'}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-gray-500">
+                        Esta ruta no tiene servicios obligatorios configurados en catálogo.
+                      </p>
+                    )}
                   </motion.div>
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-sm text-gray-600 mb-3">Haz clic en una ruta para seleccionarla:</p>
-                    {routes.map(route => (
-                      <motion.div
-                        key={route.id}
-                        whileHover={{ scale: 1.01 }}
-                        onClick={() => setSelectedRoute(route.id)}
-                        className="p-4 rounded-lg border-2 border-gray-200 hover:border-green-300 cursor-pointer transition-all"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <h3 className="font-medium text-gray-900">{route.name}</h3>
-                            <div className="flex gap-4 mt-2 text-sm text-gray-600">
-                              <span>⏱ Duración: {route.distance}</span>
-                              <span>🏔️ Dificultad: {route.difficulty}</span>
+                    <Label>Buscar ruta activa</Label>
+                    <CreateSaleSearchBox
+                      value={routeSearch}
+                      onChange={setRouteSearch}
+                      placeholder="Nombre, dificultad o duración..."
+                    />
+                    <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {filteredRoutes.length === 0 ? (
+                        <p className="p-4 text-sm text-gray-500 text-center">
+                          No hay rutas activas que coincidan.
+                        </p>
+                      ) : (
+                        filteredRoutes.map((route) => (
+                          <button
+                            key={route.id}
+                            type="button"
+                            onClick={() => pickRoute(route.id)}
+                            className="w-full text-left p-4 hover:bg-green-50 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <h3 className="font-medium text-gray-900">{route.name}</h3>
+                                <div className="flex flex-wrap gap-3 mt-1 text-sm text-gray-600">
+                                  <span>⏱ {route.distance}</span>
+                                  <span>🏔️ {route.difficulty}</span>
+                                  {route.obligatoryServices.length > 0 ? (
+                                    <span>{route.obligatoryServices.length} obligatorio(s)</span>
+                                  ) : null}
+                                  {route.optionalServices.length > 0 ? (
+                                    <span>{route.optionalServices.length} opcional(es)</span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <p className="font-medium text-green-700 shrink-0">
+                                {formatCurrency(route.price)}
+                              </p>
                             </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-medium text-green-700">{formatCurrency(route.price)}</p>
-                            <p className="text-xs text-gray-500 mt-1">Precio</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
+                          </button>
+                        ))
+                      )}
+                    </div>
                   </div>
                 )}
               </CardContent>
@@ -1551,53 +2057,63 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                   </motion.div>
                 ) : (
                   <div className="space-y-3">
-                    <p className="text-sm text-gray-600 mb-3">Haz clic en una finca para seleccionarla:</p>
-                    {farms.map(farm => (
-                      <motion.div
-                        key={farm.id}
-                        whileHover={{ scale: 1.01 }}
-                        onClick={() => setSelectedFarm(farm.id)}
-                        className="p-4 rounded-lg border-2 border-gray-200 hover:border-green-300 cursor-pointer transition-all"
-                      >
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <h3 className="font-medium text-gray-900">{farm.name}</h3>
-                            <div className="flex gap-4 mt-2 text-sm text-gray-600">
-                              <span>📍 Ubicación: {farm.location}</span>
-                              <span>👥 Capacidad: {farm.capacity} personas</span>
-                            </div>
-                            <div className="mt-2">
-                              <p className="text-xs text-gray-500 mb-1">Servicios incluidos:</p>
-                              <div className="flex flex-wrap gap-1">
-                                {farm.includedServices.map((service, idx) => (
-                                  <Badge key={idx} variant="secondary" className="bg-green-100 text-green-700 text-xs">
-                                    {service}
-                                  </Badge>
-                                ))}
+                    <Label>Buscar finca activa</Label>
+                    <CreateSaleSearchBox
+                      value={farmSearch}
+                      onChange={setFarmSearch}
+                      placeholder="Nombre o ubicación..."
+                    />
+                    <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-200 divide-y divide-gray-100">
+                      {filteredFarms.length === 0 ? (
+                        <p className="p-4 text-sm text-gray-500 text-center">
+                          No hay fincas activas que coincidan.
+                        </p>
+                      ) : (
+                        filteredFarms.map((farm) => (
+                          <button
+                            key={farm.id}
+                            type="button"
+                            onClick={() => pickFarm(farm.id)}
+                            className="w-full text-left p-4 hover:bg-green-50 transition-colors"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex-1 min-w-0">
+                                <h3 className="font-medium text-gray-900">{farm.name}</h3>
+                                <div className="flex flex-wrap gap-3 mt-1 text-sm text-gray-600">
+                                  <span>📍 {farm.location}</span>
+                                  <span>👥 {farm.capacity} personas</span>
+                                </div>
                               </div>
+                              <p className="font-medium text-green-700 shrink-0">
+                                {formatCurrency(farm.price)}
+                              </p>
                             </div>
-                          </div>
-                          <div className="text-right ml-4">
-                            <p className="font-medium text-green-700">{formatCurrency(farm.price)}</p>
-                            <p className="text-xs text-gray-500 mt-1">Precio base</p>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
+                          </button>
+                        ))
+                      )}
+                    </div>
                   </div>
                 )}
               </CardContent>
             </Card>
           )}
 
-          {/* SECCIÓN 5: SERVICIOS ADICIONALES (Opcional) */}
+          {/* SECCIÓN 5: SERVICIOS OPCIONALES / ADICIONALES */}
+          {saleType && (saleType === 'farm' || (saleType === 'route' && selectedRoute)) ? (
           <Card className="border-green-100 shadow-sm">
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-green-800">Sección 5: Servicios Adicionales (Opcional)</h2>
+                  <h2 className="text-green-800">
+                    Sección 5:{' '}
+                    {saleType === 'route'
+                      ? 'Servicios opcionales de la ruta'
+                      : 'Servicios adicionales para finca'}
+                  </h2>
                   <p className="text-sm text-gray-600 mt-1">
-                    Selecciona servicios adicionales para la venta
+                    {saleType === 'route'
+                      ? 'Solo se listan los servicios opcionales configurados para la ruta seleccionada.'
+                      : 'Servicios del catálogo disponibles para reservas de finca.'}
                   </p>
                 </div>
                 {selectedServices.length > 0 && (
@@ -1615,7 +2131,7 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
                   </div>
                   <div className="space-y-2">
                     {selectedServices.map(serviceId => {
-                      const service = services.find(s => s.id === serviceId);
+                      const service = selectedServiceCatalog.find((s) => s.id === serviceId);
                       return service ? (
                         <motion.div
                           key={serviceId}
@@ -1660,37 +2176,49 @@ function CreateSaleView({ onBack, onCreate, clients, routes, farms, services, ca
 
               {/* Servicios disponibles para agregar */}
               <div>
-                <p className="text-sm font-medium text-gray-900 mb-3">
-                  {selectedServices.length > 0 ? 'Agregar Más Servicios:' : 'Servicios Disponibles:'}
+                <p className="text-sm font-medium text-gray-900 mb-2">
+                  {selectedServices.length > 0 ? 'Agregar más servicios' : 'Servicios disponibles'}
                 </p>
-                <div className="space-y-2">
-                  {services
-                    .filter(service => !selectedServices.includes(service.id))
-                    .map(service => (
-                      <motion.div
-                        key={service.id}
-                        whileHover={{ scale: 1.01 }}
-                        onClick={() => handleServiceToggle(service.id)}
-                        className="p-3 rounded-lg border-2 border-gray-200 hover:border-green-300 cursor-pointer transition-all"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex-1">
-                            <p className="font-medium text-gray-900">{service.name}</p>
-                            <p className="text-sm text-gray-600">{service.description}</p>
-                          </div>
-                          <p className="font-medium text-gray-700">{formatCurrency(service.price)}</p>
+                <CreateSaleSearchBox
+                  value={serviceSearch}
+                  onChange={setServiceSearch}
+                  placeholder="Buscar servicio por nombre o descripción..."
+                />
+                <div className="mt-3 space-y-2 max-h-64 overflow-y-auto">
+                  {filteredSelectableServices.map((service) => (
+                    <motion.div
+                      key={service.id}
+                      whileHover={{ scale: 1.01 }}
+                      onClick={() => handleServiceToggle(service.id)}
+                      className="p-3 rounded-lg border-2 border-gray-200 hover:border-green-300 cursor-pointer transition-all"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium text-gray-900">{service.name}</p>
+                          <p className="text-sm text-gray-600 truncate">{service.description}</p>
                         </div>
-                      </motion.div>
-                    ))}
+                        <p className="font-medium text-gray-700 shrink-0">{formatCurrency(service.price)}</p>
+                      </div>
+                    </motion.div>
+                  ))}
                 </div>
-                {services.filter(s => !selectedServices.includes(s.id)).length === 0 && (
-                  <p className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg">
-                    ✓ Todos los servicios han sido seleccionados
+                {selectableServices.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg mt-3">
+                    {saleType === 'route'
+                      ? 'Esta ruta no tiene servicios opcionales configurados.'
+                      : 'No hay servicios de finca disponibles en catálogo.'}
                   </p>
-                )}
+                ) : filteredSelectableServices.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4 bg-gray-50 rounded-lg mt-3">
+                    {selectedServices.length === selectableServices.length
+                      ? '✓ Todos los servicios disponibles ya fueron seleccionados.'
+                      : 'No hay servicios que coincidan con la búsqueda.'}
+                  </p>
+                ) : null}
               </div>
             </CardContent>
           </Card>
+          ) : null}
         </div>
 
         {/* Panel lateral derecho: Resumen de la Venta */}
@@ -1808,10 +2336,19 @@ interface SaleDetailViewProps {
   sale: Sale;
   onBack: () => void;
   onCancel: (saleId: string) => void;
+  onDownloadPdf: () => void;
+  downloadingPdf: boolean;
   canEditVenta: boolean;
 }
 
-function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailViewProps) {
+function SaleDetailView({
+  sale,
+  onBack,
+  onCancel,
+  onDownloadPdf,
+  downloadingPdf,
+  canEditVenta,
+}: SaleDetailViewProps) {
   const paymentHistory = sale.paymentHistory || [];
   const [receiptDialog, setReceiptDialog] = useState<{
     open: boolean;
@@ -1849,7 +2386,7 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
   };
 
   const handlePrintPDF = () => {
-    alert(`Generando PDF de la venta ${sale.id}...`);
+    void onDownloadPdf();
   };
 
   const handleOpenReceipt = (payment: SalePayment) => {
@@ -2139,10 +2676,11 @@ function SaleDetailView({ sale, onBack, onCancel, canEditVenta }: SaleDetailView
                 
                 <Button 
                   onClick={handlePrintPDF}
+                  disabled={downloadingPdf}
                   className="w-full bg-green-600 hover:bg-green-700 text-white"
                 >
                   <Printer className="w-4 h-4 mr-2" />
-                  Generar PDF
+                  {downloadingPdf ? 'Generando PDF…' : 'Descargar PDF'}
                 </Button>
                 
                 {sale.status !== 'Anulado' && canEditVenta && (

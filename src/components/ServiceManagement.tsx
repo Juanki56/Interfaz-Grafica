@@ -165,6 +165,9 @@ function ServicioFormFields({
   );
 }
 
+
+/** Fuera del padre: si se define como componente interno y se usa `<Inner />`, React desmonta el árbol en cada render y se pierde el foco de los inputs. */
+
 export function ServiceManagement() {
   const permisos = usePermissions();
   const servicePerms = createModulePermissions(permisos, 'Servicios');
