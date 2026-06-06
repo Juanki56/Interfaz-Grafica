@@ -278,3 +278,160 @@ export function validateClientFormForEdit(data: ClientFormValidationInput): stri
 
   return validateOptionalFields(data);
 }
+
+// =============================================
+// VALIDACIÓN EN TIEMPO REAL POR CAMPO
+// =============================================
+
+export type ClientFieldName =
+  | 'name'
+  | 'email'
+  | 'phone'
+  | 'documentType'
+  | 'documentNumber'
+  | 'birthDate'
+  | 'location'
+  | 'preferences'
+  | 'notes'
+  | 'password'
+  | 'confirmPassword';
+
+/**
+ * Valida un campo individual en tiempo real para el formulario de CREACIÓN.
+ * Retorna mensaje de error o null si es válido.
+ */
+export function validateClientField(
+  field: ClientFieldName,
+  data: ClientFormValidationInput,
+): string | null {
+  switch (field) {
+    case 'name': {
+      if (!data.name?.trim()) return 'El nombre completo es obligatorio.';
+      if (!isValidClientFullName(data.name))
+        return 'Ingresa nombre y apellido (mínimo 2 palabras, sin solo números).';
+      return null;
+    }
+    case 'email': {
+      if (!data.email?.trim()) return 'El correo electrónico es obligatorio.';
+      if (!isValidClientEmail(data.email))
+        return 'Formato inválido. Ej: usuario@dominio.com';
+      return null;
+    }
+    case 'phone': {
+      if (!data.phone?.trim()) return 'El teléfono es obligatorio.';
+      if (!isValidClientPhone(data.phone))
+        return 'Debe tener entre 7 y 15 dígitos, sin signos negativos.';
+      return null;
+    }
+    case 'documentType': {
+      if (!data.documentType?.trim()) return 'Selecciona el tipo de documento.';
+      return null;
+    }
+    case 'documentNumber': {
+      if (!data.documentNumber?.trim()) return 'El número de documento es obligatorio.';
+      if (data.documentType?.trim() && !isValidClientDocumentPair(data.documentType, data.documentNumber))
+        return 'Documento inválido (mín. 6 caracteres, no negativo).';
+      return null;
+    }
+    case 'birthDate': {
+      if (data.birthDate && !isValidOptionalBirthDate(data.birthDate))
+        return 'Fecha inválida (no puede ser futura ni anterior a 1900).';
+      return null;
+    }
+    case 'location': {
+      if (!isValidOptionalText(data.address || '', 200))
+        return 'La dirección no puede superar 200 caracteres.';
+      return null;
+    }
+    case 'preferences': {
+      if (!isValidOptionalText(data.preferences || '', 500))
+        return 'Las preferencias no pueden superar 500 caracteres.';
+      return null;
+    }
+    case 'notes': {
+      if (!isValidOptionalText(data.notes || '', 1000))
+        return 'Las notas no pueden superar 1000 caracteres.';
+      return null;
+    }
+    case 'password': {
+      if (!data.password?.trim()) return 'La contraseña es obligatoria.';
+      if (!isStrongClientPassword(data.password))
+        return 'Debe tener 8-64 caracteres, mayúscula, minúscula, número y símbolo.';
+      return null;
+    }
+    case 'confirmPassword': {
+      if (!data.confirmPassword?.trim()) return 'Confirma la contraseña.';
+      if (data.password !== data.confirmPassword) return 'Las contraseñas no coinciden.';
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Valida un campo individual en tiempo real para el formulario de EDICIÓN.
+ * Retorna mensaje de error o null si es válido.
+ */
+export function validateClientFieldForEdit(
+  field: ClientFieldName,
+  data: ClientFormValidationInput,
+): string | null {
+  switch (field) {
+    case 'name': {
+      if (!data.name?.trim()) return 'El nombre completo es obligatorio.';
+      if (!isValidClientFullName(data.name))
+        return 'Ingresa nombre y apellido (mínimo 2 palabras, sin solo números).';
+      return null;
+    }
+    case 'email': {
+      if (!data.email?.trim()) return 'El correo electrónico es obligatorio.';
+      if (!isValidClientEmail(data.email))
+        return 'Formato inválido. Ej: usuario@dominio.com';
+      return null;
+    }
+    case 'phone': {
+      if (!data.phone?.trim()) return 'El teléfono es obligatorio.';
+      if (!isValidClientPhone(data.phone))
+        return 'Debe tener entre 7 y 15 dígitos, sin signos negativos.';
+      return null;
+    }
+    case 'documentType': {
+      const hasNum = Boolean(data.documentNumber?.trim());
+      if (hasNum && !data.documentType?.trim())
+        return 'Selecciona el tipo de documento.';
+      return null;
+    }
+    case 'documentNumber': {
+      const hasType = Boolean(data.documentType?.trim());
+      if (hasType && !data.documentNumber?.trim())
+        return 'Ingresa el número de documento.';
+      if (hasType && data.documentNumber?.trim() && !isValidClientDocumentPair(data.documentType, data.documentNumber))
+        return 'Documento inválido (mín. 6 caracteres, no negativo).';
+      return null;
+    }
+    case 'birthDate': {
+      if (data.birthDate && !isValidOptionalBirthDate(data.birthDate))
+        return 'Fecha inválida (no puede ser futura ni anterior a 1900).';
+      return null;
+    }
+    case 'location': {
+      if (!isValidOptionalText(data.address || '', 200))
+        return 'La dirección no puede superar 200 caracteres.';
+      return null;
+    }
+    case 'preferences': {
+      if (!isValidOptionalText(data.preferences || '', 500))
+        return 'Las preferencias no pueden superar 500 caracteres.';
+      return null;
+    }
+    case 'notes': {
+      if (!isValidOptionalText(data.notes || '', 1000))
+        return 'Las notas no pueden superar 1000 caracteres.';
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+

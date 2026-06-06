@@ -64,7 +64,10 @@ import {
   sanitizePhoneInput,
   validateClientFormForCreate,
   validateClientFormForEdit,
+  validateClientField,
+  validateClientFieldForEdit,
   type ClientFormValidationInput,
+  type ClientFieldName,
 } from '../utils/clientFormValidation';
 import { formatCurrencyCOP as formatCurrency } from '../utils/currencyDisplay';
 import { formatDateDisplay } from '../utils/dateTimeDisplay';
@@ -435,6 +438,89 @@ export function ClientsManagement() {
   };
 
   const [formData, setFormData] = useState<ClientFormState>({ ...EMPTY_CLIENT_FORM });
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [touchedFields, setTouchedFields] = useState<Record<string, boolean>>({});
+
+  // Componente inline para mostrar error de campo
+  const FieldError = ({ field }: { field: string }) => {
+    const msg = formErrors[field];
+    if (!msg) return null;
+    return (
+      <p className="flex items-start gap-1 mt-1 text-xs text-red-600">
+        <span className="mt-0.5 shrink-0">⚠</span>
+        <span>{msg}</span>
+      </p>
+    );
+  };
+
+  // Clase del input según si tiene error
+  const inputCls = (field: string) =>
+    formErrors[field]
+      ? 'border-red-400 focus:border-red-500 focus:ring-red-200'
+      : 'border-green-200 focus:border-green-500';
+
+  // Valida un campo y actualiza el estado de errores
+  const touchField = (field: ClientFieldName, mode: 'create' | 'edit') => {
+    const input = toValidationInput(formData);
+    const error =
+      mode === 'create'
+        ? validateClientField(field, input)
+        : validateClientFieldForEdit(field, input);
+    setFormErrors((prev) => {
+      const next = { ...prev };
+      if (error) next[field] = error;
+      else delete next[field];
+      return next;
+    });
+  };
+
+  // Actualiza un campo y revalida si ya fue tocado
+  const updateField = (field: keyof ClientFormState, value: string, mode: 'create' | 'edit') => {
+    const next = { ...formData, [field]: value };
+    setFormData(next);
+    if (touchedFields[field]) {
+      const input = toValidationInput(next);
+      const error =
+        mode === 'create'
+          ? validateClientField(field as ClientFieldName, input)
+          : validateClientFieldForEdit(field as ClientFieldName, input);
+      setFormErrors((prev) => {
+        const updated = { ...prev };
+        if (error) updated[field] = error;
+        else delete updated[field];
+        return updated;
+      });
+      // Revalida confirmPassword cuando cambia password
+      if (field === 'password' && touchedFields['confirmPassword']) {
+        const confError = validateClientField('confirmPassword', input);
+        setFormErrors((prev) => {
+          const u = { ...prev };
+          if (confError) u['confirmPassword'] = confError;
+          else delete u['confirmPassword'];
+          return u;
+        });
+      }
+    }
+  };
+
+  const markTouched = (field: string) =>
+    setTouchedFields((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
+
+  // Valida todos los campos al enviar
+  const validateAllFields = (mode: 'create' | 'edit'): boolean => {
+    const input = toValidationInput(formData);
+    const fields: ClientFieldName[] = mode === 'create'
+      ? ['name', 'email', 'phone', 'documentType', 'documentNumber', 'birthDate', 'location', 'preferences', 'notes', 'password', 'confirmPassword']
+      : ['name', 'email', 'phone', 'documentType', 'documentNumber', 'birthDate', 'location', 'preferences', 'notes'];
+    const errors: Record<string, string> = {};
+    for (const f of fields) {
+      const err = mode === 'create' ? validateClientField(f, input) : validateClientFieldForEdit(f, input);
+      if (err) errors[f] = err;
+    }
+    setFormErrors(errors);
+    setTouchedFields(Object.fromEntries(fields.map((f) => [f, true])));
+    return Object.keys(errors).length === 0;
+  };
 
   const passwordRequirementChecks = useMemo(
     () => getClientPasswordRequirementChecks(formData.password),
@@ -653,6 +739,11 @@ export function ClientsManagement() {
       return;
     }
 
+    if (!validateAllFields('create')) {
+      toast.error('Corrige los errores del formulario antes de continuar.');
+      return;
+    }
+
     const validationError = validateClientFormForCreate(toValidationInput(formData));
     if (validationError) {
       toast.error(validationError);
@@ -686,6 +777,8 @@ export function ClientsManagement() {
       );
       setIsCreateModalOpen(false);
       setFormData({ ...EMPTY_CLIENT_FORM });
+      setFormErrors({});
+      setTouchedFields({});
       await cargarClientes();
     } catch (error: unknown) {
       console.error('Error al crear cliente:', error);
@@ -709,6 +802,8 @@ export function ClientsManagement() {
     }
 
     setSelectedClient(client);
+    setFormErrors({});
+    setTouchedFields({});
     setFormData({
       ...EMPTY_CLIENT_FORM,
       name: client.name || '',
@@ -727,6 +822,11 @@ export function ClientsManagement() {
   const handleUpdateClient = async () => {
     if (!canEditClient) {
       toast.error('No tienes permiso para editar clientes');
+      return;
+    }
+
+    if (!validateAllFields('edit')) {
+      toast.error('Corrige los errores del formulario antes de continuar.');
       return;
     }
 
@@ -763,6 +863,8 @@ export function ClientsManagement() {
       setIsEditModalOpen(false);
       setSelectedClient(null);
       setFormData({ ...EMPTY_CLIENT_FORM });
+      setFormErrors({});
+      setTouchedFields({});
       
       // Recargar clientes del servidor
       await cargarClientes();
@@ -1231,7 +1333,10 @@ export function ClientsManagement() {
             </Card>
 
       {/* Modal Crear Cliente */}
-      <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+      <Dialog open={isCreateModalOpen} onOpenChange={(open) => {
+        setIsCreateModalOpen(open);
+        if (!open) { setFormErrors({}); setTouchedFields({}); }
+      }}>
         <DialogContent className={FORM_MODAL_CLASS} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
           <DialogHeader>
             <DialogTitle className="text-green-800">Registrar Nuevo Cliente</DialogTitle>
@@ -1241,184 +1346,221 @@ export function ClientsManagement() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            <p className="text-xs text-gray-500">Los campos marcados con * son obligatorios.</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+              {/* Nombre */}
               <div>
-                <Label htmlFor="name">Nombre Completo *</Label>
+                <Label htmlFor="c-name">Nombre Completo *</Label>
                 <Input
-                  id="name"
+                  id="c-name"
                   placeholder="Juan Pérez"
                   maxLength={120}
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className={inputCls('name')}
+                  onChange={(e) => updateField('name', e.target.value, 'create')}
+                  onBlur={() => { markTouched('name'); touchField('name', 'create'); }}
                 />
+                <FieldError field="name" />
               </div>
+
+              {/* Correo */}
               <div>
-                <Label htmlFor="email">Correo Electrónico *</Label>
+                <Label htmlFor="c-email">Correo Electrónico *</Label>
                 <Input
-                  id="email"
+                  id="c-email"
                   type="email"
                   placeholder="juan@email.com"
                   maxLength={254}
                   value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className={inputCls('email')}
+                  onChange={(e) => updateField('email', e.target.value, 'create')}
+                  onBlur={() => {
+                    markTouched('email');
+                    setFormData((prev) => ({ ...prev, email: normalizeClientEmail(prev.email) }));
+                    touchField('email', 'create');
+                  }}
                 />
+                <FieldError field="email" />
               </div>
+
+              {/* Teléfono */}
               <div>
-                <Label htmlFor="phone">Teléfono *</Label>
+                <Label htmlFor="c-phone">Teléfono *</Label>
                 <Input
-                  id="phone"
+                  id="c-phone"
                   type="tel"
                   inputMode="tel"
                   placeholder="+57 300 000 0000"
                   maxLength={20}
                   value={formData.phone}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phone: sanitizePhoneInput(e.target.value) })
-                  }
+                  className={inputCls('phone')}
+                  onChange={(e) => updateField('phone', sanitizePhoneInput(e.target.value), 'create')}
+                  onBlur={() => { markTouched('phone'); touchField('phone', 'create'); }}
                 />
+                <FieldError field="phone" />
               </div>
+
+              {/* Tipo documento */}
               <div>
-                <Label htmlFor="createDocumentType">Tipo de Documento *</Label>
+                <Label htmlFor="c-docType">Tipo de Documento *</Label>
                 <Select
                   value={formData.documentType || '__empty__'}
-                  onValueChange={(value) =>
-                    setFormData({
-                      ...formData,
-                      documentType: value === '__empty__' ? '' : value,
-                    })
-                  }
+                  onValueChange={(value) => {
+                    const v = value === '__empty__' ? '' : value;
+                    updateField('documentType', v, 'create');
+                    markTouched('documentType');
+                    setTimeout(() => touchField('documentType', 'create'), 0);
+                  }}
                 >
-                  <SelectTrigger className="w-full" id="createDocumentType">
+                  <SelectTrigger
+                    id="c-docType"
+                    className={`w-full ${inputCls('documentType')}`}
+                  >
                     <SelectValue placeholder="Selecciona tipo de documento" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__empty__">Selecciona…</SelectItem>
-                    <SelectItem value="CC">CC</SelectItem>
-                    <SelectItem value="CE">CE</SelectItem>
-                    <SelectItem value="TI">TI</SelectItem>
+                    <SelectItem value="CC">CC - Cédula de Ciudadanía</SelectItem>
+                    <SelectItem value="CE">CE - Cédula de Extranjería</SelectItem>
+                    <SelectItem value="TI">TI - Tarjeta de Identidad</SelectItem>
                     <SelectItem value="PASAPORTE">Pasaporte</SelectItem>
                     <SelectItem value="PEP">PEP</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError field="documentType" />
               </div>
+
+              {/* Número documento */}
               <div>
-                <Label htmlFor="createDocumentNumber">Número de Documento *</Label>
+                <Label htmlFor="c-docNum">Número de Documento *</Label>
                 <Input
-                  id="createDocumentNumber"
+                  id="c-docNum"
                   placeholder="Ej: 1098765432"
                   maxLength={20}
                   value={formData.documentNumber}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      documentNumber: sanitizeDocumentInput(e.target.value),
-                    })
-                  }
+                  className={inputCls('documentNumber')}
+                  onChange={(e) => updateField('documentNumber', sanitizeDocumentInput(e.target.value), 'create')}
+                  onBlur={() => { markTouched('documentNumber'); touchField('documentNumber', 'create'); }}
                 />
+                <FieldError field="documentNumber" />
               </div>
+
+              {/* Fecha nacimiento */}
               <div>
-                <Label htmlFor="createBirthDate">Fecha de Nacimiento</Label>
+                <Label htmlFor="c-birth">Fecha de Nacimiento</Label>
                 <Input
-                  id="createBirthDate"
+                  id="c-birth"
                   type="date"
                   max={MAX_BIRTH_DATE}
                   min="1900-01-01"
                   value={formData.birthDate}
-                  onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })}
+                  className={inputCls('birthDate')}
+                  onChange={(e) => updateField('birthDate', e.target.value, 'create')}
+                  onBlur={() => { markTouched('birthDate'); touchField('birthDate', 'create'); }}
                 />
+                <FieldError field="birthDate" />
               </div>
+
+              {/* Ubicación */}
               <div>
-                <Label htmlFor="location">Ubicación / Dirección</Label>
+                <Label htmlFor="c-location">Ubicación / Dirección</Label>
                 <Input
-                  id="location"
+                  id="c-location"
                   placeholder="Ciudad o dirección"
                   maxLength={200}
                   value={formData.location}
-                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                  className={inputCls('location')}
+                  onChange={(e) => updateField('location', e.target.value, 'create')}
+                  onBlur={() => { markTouched('location'); touchField('location', 'create'); }}
                 />
+                <FieldError field="location" />
               </div>
+
+              {/* Contraseña */}
               <div className="md:col-span-2 space-y-2">
-                <Label htmlFor="password">Contraseña de acceso *</Label>
+                <Label>Contraseña de acceso *</Label>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Contraseña segura"
-                    maxLength={64}
-                    autoComplete="new-password"
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  />
-                  <Input
-                    id="confirmPassword"
-                    type="password"
-                    placeholder="Repite la contraseña"
-                    maxLength={64}
-                    autoComplete="new-password"
-                    value={formData.confirmPassword}
-                    onChange={(e) =>
-                      setFormData({ ...formData, confirmPassword: e.target.value })
-                    }
-                  />
+                  <div>
+                    <Input
+                      id="c-password"
+                      type="password"
+                      placeholder="Contraseña segura"
+                      maxLength={64}
+                      autoComplete="new-password"
+                      value={formData.password}
+                      className={inputCls('password')}
+                      onChange={(e) => updateField('password', e.target.value, 'create')}
+                      onBlur={() => { markTouched('password'); touchField('password', 'create'); }}
+                    />
+                    <FieldError field="password" />
+                  </div>
+                  <div>
+                    <Input
+                      id="c-confirm"
+                      type="password"
+                      placeholder="Repite la contraseña"
+                      maxLength={64}
+                      autoComplete="new-password"
+                      value={formData.confirmPassword}
+                      className={inputCls('confirmPassword')}
+                      onChange={(e) => updateField('confirmPassword', e.target.value, 'create')}
+                      onBlur={() => { markTouched('confirmPassword'); touchField('confirmPassword', 'create'); }}
+                    />
+                    <FieldError field="confirmPassword" />
+                  </div>
                 </div>
                 {formData.password.length > 0 && (
                   <ul className="rounded-md border border-green-100 bg-green-50/60 p-3 space-y-1">
                     {passwordRequirementChecks.map((req) => (
-                      <li
-                        key={req.id}
-                        className={`text-xs ${req.met ? 'text-green-700' : 'text-gray-600'}`}
-                      >
-                        {req.met ? '✓' : '○'} {req.label}
+                      <li key={req.id} className={`text-xs flex items-center gap-1.5 ${req.met ? 'text-green-700' : 'text-gray-500'}`}>
+                        <span className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                          req.met ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-500'
+                        }`}>{req.met ? '✓' : '○'}</span>
+                        {req.label}
                       </li>
                     ))}
                   </ul>
                 )}
-                {formData.confirmPassword.length > 0 && (
-                  <p
-                    className={`text-xs ${
-                      createPasswordsMatch ? 'text-green-700' : 'text-red-600'
-                    }`}
-                  >
-                    {createPasswordsMatch
-                      ? '✓ Las contraseñas coinciden'
-                      : '○ La confirmación no coincide'}
-                  </p>
-                )}
               </div>
             </div>
+
+            {/* Preferencias */}
             <div>
-              <Label htmlFor="preferences">Preferencias</Label>
+              <Label htmlFor="c-prefs">Preferencias</Label>
               <Input
-                id="preferences"
+                id="c-prefs"
                 placeholder="Ej: Rural, Gastronómica, Aventura"
                 maxLength={500}
                 value={formData.preferences}
-                onChange={(e) => setFormData({ ...formData, preferences: e.target.value })}
+                className={inputCls('preferences')}
+                onChange={(e) => updateField('preferences', e.target.value, 'create')}
+                onBlur={() => { markTouched('preferences'); touchField('preferences', 'create'); }}
               />
+              <FieldError field="preferences" />
             </div>
+
+            {/* Notas */}
             <div>
-              <Label htmlFor="notes">Notas</Label>
+              <Label htmlFor="c-notes">Notas</Label>
               <Textarea
-                id="notes"
+                id="c-notes"
                 placeholder="Información adicional sobre el cliente..."
                 maxLength={1000}
                 value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                className={inputCls('notes')}
+                onChange={(e) => updateField('notes', e.target.value, 'create')}
+                onBlur={() => { markTouched('notes'); touchField('notes', 'create'); }}
                 rows={3}
               />
+              <FieldError field="notes" />
             </div>
+
             <div className="flex justify-end space-x-2 pt-4 border-t">
-              <Button
-                variant="outline"
-                onClick={() => setIsCreateModalOpen(false)}
-              >
+              <Button variant="outline" onClick={() => { setIsCreateModalOpen(false); setFormErrors({}); setTouchedFields({}); }}>
                 Cancelar
               </Button>
-              <Button
-                onClick={handleCreateClient}
-                disabled={isLoading}
-                className="bg-green-600 hover:bg-green-700"
-              >
+              <Button onClick={handleCreateClient} disabled={isLoading} className="bg-green-600 hover:bg-green-700">
                 {isLoading ? 'Registrando...' : 'Registrar Cliente'}
               </Button>
             </div>
@@ -1427,142 +1569,185 @@ export function ClientsManagement() {
       </Dialog>
 
       {/* Modal Editar Cliente */}
-      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+      <Dialog open={isEditModalOpen} onOpenChange={(open) => {
+        setIsEditModalOpen(open);
+        if (!open) { setFormErrors({}); setTouchedFields({}); }
+      }}>
         <DialogContent className={FORM_MODAL_CLASS} style={{ maxHeight: '90vh', overflowY: 'auto' }}>
           <DialogHeader>
             <DialogTitle className="text-green-800">Editar Cliente</DialogTitle>
             <DialogDescription>
-              Complete el formulario para actualizar la información del cliente
+              Actualiza la información del cliente. Los campos con * son obligatorios.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+              {/* Nombre */}
               <div>
-                <Label htmlFor="name">Nombre Completo *</Label>
+                <Label htmlFor="e-name">Nombre Completo *</Label>
                 <Input
-                  id="name"
+                  id="e-name"
                   placeholder="Juan Pérez"
+                  maxLength={120}
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className={inputCls('name')}
+                  onChange={(e) => updateField('name', e.target.value, 'edit')}
+                  onBlur={() => { markTouched('name'); touchField('name', 'edit'); }}
                 />
+                <FieldError field="name" />
               </div>
+
+              {/* Correo */}
               <div>
-                <Label htmlFor="email">Correo Electrónico *</Label>
+                <Label htmlFor="e-email">Correo Electrónico *</Label>
                 <Input
-                  id="email"
+                  id="e-email"
                   type="email"
                   placeholder="juan@email.com"
+                  maxLength={254}
                   value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  className={inputCls('email')}
+                  onChange={(e) => updateField('email', e.target.value, 'edit')}
+                  onBlur={() => {
+                    markTouched('email');
+                    setFormData((prev) => ({ ...prev, email: normalizeClientEmail(prev.email) }));
+                    touchField('email', 'edit');
+                  }}
                 />
+                <FieldError field="email" />
               </div>
+
+              {/* Teléfono */}
               <div>
-                <Label htmlFor="edit-phone">Teléfono *</Label>
+                <Label htmlFor="e-phone">Teléfono *</Label>
                 <Input
-                  id="edit-phone"
+                  id="e-phone"
                   type="tel"
                   placeholder="+57 300 000 0000"
                   maxLength={20}
                   value={formData.phone}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phone: sanitizePhoneInput(e.target.value) })
-                  }
+                  className={inputCls('phone')}
+                  onChange={(e) => updateField('phone', sanitizePhoneInput(e.target.value), 'edit')}
+                  onBlur={() => { markTouched('phone'); touchField('phone', 'edit'); }}
                 />
+                <FieldError field="phone" />
               </div>
+
+              {/* Tipo documento */}
               <div>
-                <Label htmlFor="edit-documentType">Tipo de Documento</Label>
+                <Label htmlFor="e-docType">Tipo de Documento</Label>
                 <Select
                   value={formData.documentType || '__empty__'}
-                  onValueChange={(value) =>
-                    setFormData({
-                      ...formData,
-                      documentType: value === '__empty__' ? '' : value,
-                    })
-                  }
+                  onValueChange={(value) => {
+                    const v = value === '__empty__' ? '' : value;
+                    updateField('documentType', v, 'edit');
+                    markTouched('documentType');
+                    setTimeout(() => touchField('documentType', 'edit'), 0);
+                  }}
                 >
-                  <SelectTrigger className="w-full" id="edit-documentType">
+                  <SelectTrigger
+                    id="e-docType"
+                    className={`w-full ${inputCls('documentType')}`}
+                  >
                     <SelectValue placeholder="Tipo de documento" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__empty__">Sin especificar</SelectItem>
-                    <SelectItem value="CC">CC</SelectItem>
-                    <SelectItem value="CE">CE</SelectItem>
-                    <SelectItem value="TI">TI</SelectItem>
+                    <SelectItem value="CC">CC - Cédula de Ciudadanía</SelectItem>
+                    <SelectItem value="CE">CE - Cédula de Extranjería</SelectItem>
+                    <SelectItem value="TI">TI - Tarjeta de Identidad</SelectItem>
                     <SelectItem value="PASAPORTE">Pasaporte</SelectItem>
                     <SelectItem value="PEP">PEP</SelectItem>
                   </SelectContent>
                 </Select>
+                <FieldError field="documentType" />
               </div>
+
+              {/* Número documento */}
               <div>
-                <Label htmlFor="edit-documentNumber">Número de Documento</Label>
+                <Label htmlFor="e-docNum">Número de Documento</Label>
                 <Input
-                  id="edit-documentNumber"
+                  id="e-docNum"
+                  placeholder="Ej: 1098765432"
                   maxLength={20}
                   value={formData.documentNumber}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      documentNumber: sanitizeDocumentInput(e.target.value),
-                    })
-                  }
+                  className={inputCls('documentNumber')}
+                  onChange={(e) => updateField('documentNumber', sanitizeDocumentInput(e.target.value), 'edit')}
+                  onBlur={() => { markTouched('documentNumber'); touchField('documentNumber', 'edit'); }}
                 />
+                <FieldError field="documentNumber" />
               </div>
+
+              {/* Fecha nacimiento */}
               <div>
-                <Label htmlFor="edit-birthDate">Fecha de Nacimiento</Label>
+                <Label htmlFor="e-birth">Fecha de Nacimiento</Label>
                 <Input
-                  id="edit-birthDate"
+                  id="e-birth"
                   type="date"
                   max={MAX_BIRTH_DATE}
                   min="1900-01-01"
                   value={formData.birthDate}
-                  onChange={(e) => setFormData({ ...formData, birthDate: e.target.value })}
+                  className={inputCls('birthDate')}
+                  onChange={(e) => updateField('birthDate', e.target.value, 'edit')}
+                  onBlur={() => { markTouched('birthDate'); touchField('birthDate', 'edit'); }}
                 />
+                <FieldError field="birthDate" />
               </div>
+
+              {/* Ubicación */}
               <div>
-                <Label htmlFor="edit-location">Ubicación / Dirección</Label>
+                <Label htmlFor="e-location">Ubicación / Dirección</Label>
                 <Input
-                  id="edit-location"
+                  id="e-location"
                   placeholder="Ciudad o dirección"
                   maxLength={200}
                   value={formData.location}
-                  onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                  className={inputCls('location')}
+                  onChange={(e) => updateField('location', e.target.value, 'edit')}
+                  onBlur={() => { markTouched('location'); touchField('location', 'edit'); }}
                 />
+                <FieldError field="location" />
               </div>
+
             </div>
+
+            {/* Preferencias */}
             <div>
-              <Label htmlFor="edit-preferences">Preferencias</Label>
+              <Label htmlFor="e-prefs">Preferencias</Label>
               <Input
-                id="edit-preferences"
+                id="e-prefs"
                 placeholder="Ej: Rural, Gastronómica, Aventura"
                 maxLength={500}
                 value={formData.preferences}
-                onChange={(e) => setFormData({ ...formData, preferences: e.target.value })}
+                className={inputCls('preferences')}
+                onChange={(e) => updateField('preferences', e.target.value, 'edit')}
+                onBlur={() => { markTouched('preferences'); touchField('preferences', 'edit'); }}
               />
+              <FieldError field="preferences" />
             </div>
+
+            {/* Notas */}
             <div>
-              <Label htmlFor="edit-notes">Notas</Label>
+              <Label htmlFor="e-notes">Notas</Label>
               <Textarea
-                id="edit-notes"
+                id="e-notes"
                 placeholder="Información adicional sobre el cliente..."
                 maxLength={1000}
                 value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                className={inputCls('notes')}
+                onChange={(e) => updateField('notes', e.target.value, 'edit')}
+                onBlur={() => { markTouched('notes'); touchField('notes', 'edit'); }}
                 rows={3}
               />
+              <FieldError field="notes" />
             </div>
+
             <div className="flex justify-end space-x-2 pt-4 border-t">
-              <Button
-                variant="outline"
-                onClick={() => setIsEditModalOpen(false)}
-                disabled={isLoading}
-              >
+              <Button variant="outline" onClick={() => { setIsEditModalOpen(false); setFormErrors({}); setTouchedFields({}); }} disabled={isLoading}>
                 Cancelar
               </Button>
-              <Button
-                onClick={handleUpdateClient}
-                disabled={isLoading}
-                className="bg-green-600 hover:bg-green-700"
-              >
+              <Button onClick={handleUpdateClient} disabled={isLoading} className="bg-green-600 hover:bg-green-700">
                 {isLoading ? 'Guardando...' : 'Actualizar Cliente'}
               </Button>
             </div>
