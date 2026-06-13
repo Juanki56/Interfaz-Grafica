@@ -68,7 +68,9 @@ type PdfWriter = {
   doc: jsPDF;
   margin: number;
   maxW: number;
-  y: number;
+  getY: () => number;
+  setY: (v: number) => void;
+  addY: (v: number) => void;
   ensureSpace: (needed?: number) => void;
   writeHeading: (text: string) => void;
   writeLabelValue: (label: string, value: string) => void;
@@ -101,7 +103,9 @@ function createPdfWriter(doc: jsPDF): PdfWriter {
     doc,
     margin,
     maxW,
-    y,
+    getY: () => y,
+    setY: (v: number) => { y = v; },
+    addY: (v: number) => { y += v; },
     ensureSpace,
     writeHeading(text: string) {
       ensureSpace(12);
@@ -124,8 +128,9 @@ function createPdfWriter(doc: jsPDF): PdfWriter {
         doc.text(valueLines[0], margin + 52, y);
         y += 6;
       } else {
+        doc.text(valueLines[0], margin + 52, y);
         y += 6;
-        writeLines(valueLines, 10, 52);
+        writeLines(valueLines.slice(1), 10, 52);
       }
     },
     writeParagraph(text: string) {
@@ -140,26 +145,64 @@ function createPdfWriter(doc: jsPDF): PdfWriter {
 }
 
 /** Genera y descarga el PDF de una venta OCCITOUR. */
-export function downloadSalePdf(sale: SalePdfInput): void {
+export async function downloadSalePdf(sale: SalePdfInput): Promise<void> {
   const doc = new jsPDF();
   const w = createPdfWriter(doc);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(18);
-  doc.setTextColor(22, 101, 52);
-  doc.text('OCCITOUR', w.margin, w.y);
-  w.y += 8;
+  // Intentar cargar e insertar el logo
+  try {
+    const imgData = await new Promise<string>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'Anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/jpeg'));
+        } else {
+          reject(new Error('No canvas context'));
+        }
+      };
+      img.onerror = reject;
+      img.src = '/logo.jpg';
+    });
+    // Add logo (x, y, width, height)
+    doc.addImage(imgData, 'JPEG', w.margin, w.getY(), 25, 25);
+    
+    // Título alineado con el logo
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(22, 101, 52);
+    doc.text('OCCITOURS', w.margin + 30, w.getY() + 10);
+    
+    doc.setFontSize(14);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Comprobante de venta', w.margin + 30, w.getY() + 18);
+    
+    // Avanzar Y pasando el logo
+    w.addY(32);
+  } catch (error) {
+    // Fallback if logo fails to load
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(22);
+    doc.setTextColor(22, 101, 52);
+    doc.text('OCCITOURS', w.margin, w.getY() + 4);
+    w.addY(12);
 
-  doc.setFontSize(14);
-  doc.setTextColor(0, 0, 0);
-  doc.text('Comprobante de venta', w.margin, w.y);
-  w.y += 10;
+    doc.setFontSize(14);
+    doc.setTextColor(0, 0, 0);
+    doc.text('Comprobante de venta', w.margin, w.getY());
+    w.addY(10);
+  }
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
   doc.setTextColor(80, 80, 80);
-  doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, w.margin, w.y);
-  w.y += 12;
+  doc.text(`Generado: ${new Date().toLocaleString('es-CO')}`, w.margin, w.getY());
+  w.addY(10);
   doc.setTextColor(0, 0, 0);
 
   w.writeLabelValue('ID venta', sale.id);
@@ -237,9 +280,9 @@ export function downloadSalePdf(sale: SalePdfInput): void {
   doc.setTextColor(100, 100, 100);
   w.ensureSpace(10);
   doc.text(
-    'Documento generado por el sistema OCCITOUR. No sustituye factura electrónica salvo indicación expresa.',
+    'Documento generado por el sistema OCCITOURS. No sustituye factura electrónica salvo indicación expresa.',
     w.margin,
-    w.y,
+    w.getY(),
     { maxWidth: w.maxW },
   );
 

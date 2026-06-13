@@ -792,8 +792,9 @@ export function SalesManagement() {
       try {
         const [clients, routes, farms, farmServicesRaw] = await Promise.all([
           clientesAPI.getAll(),
-          rutasAPI.getActivas().catch(() => rutasAPI.getAll()),
-          fincasAPI.getActivas(),
+          // Caché de 5 min: evita N peticiones a Supabase Storage al navegar entre módulos
+          rutasAPI.getActivas({ cacheTtlMs: 5 * 60_000 }).catch(() => rutasAPI.getActivas()),
+          fincasAPI.getActivas({ cacheTtlMs: 5 * 60_000 }),
           serviciosAPI.getDisponibles({ aplica_a: 'finca' }).catch(() => serviciosAPI.getAll()),
         ]);
 

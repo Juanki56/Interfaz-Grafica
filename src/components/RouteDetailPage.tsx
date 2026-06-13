@@ -20,6 +20,8 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { TourBookingModal } from './TourBookingModal';
 import {
   rutasAPI,
+  reservasAPI,
+  solicitudesPersonalizadasAPI,
   extractRutaServiciosPredefinidos,
   extractRutaServiciosOpcionales,
   type Ruta,
@@ -84,6 +86,8 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
   const [error, setError] = useState<string | null>(null);
   const [heroIndex, setHeroIndex] = useState(0);
   const [imageGallery, setImageGallery] = useState<string[]>([]);
+  const [existingBooking, setExistingBooking] = useState<{ type: 'reserva' | 'solicitud', id: number, status: string, summary: string } | null>(null);
+  const [isLoadingExisting, setIsLoadingExisting] = useState(false);
 
   const id = useMemo(() => Number(routeId), [routeId]);
 
@@ -188,6 +192,75 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
       cancelled = true;
     };
   }, [id]);
+
+  useEffect(() => {
+    if (!user || user.role !== 'client' || Number.isNaN(id) || id <= 0) {
+      setExistingBooking(null);
+      return;
+    }
+    
+    let cancelled = false;
+
+    const checkExistingBooking = async () => {
+      setIsLoadingExisting(true);
+      try {
+        // Fetch custom requests
+        const solicitudes = await solicitudesPersonalizadasAPI.getMine();
+        if (cancelled) return;
+        const activeSolicitud = solicitudes.find((s: any) => {
+          const status = String(s.estado || '').toLowerCase();
+          return s.id_ruta === id && status !== 'cancelada' && status !== 'rechazada';
+        });
+
+        if (activeSolicitud) {
+          setExistingBooking({
+            type: 'solicitud',
+            id: activeSolicitud.id_solicitud_personalizada,
+            status: activeSolicitud.estado,
+            summary: `Reserva personalizada - ${activeSolicitud.fecha_deseada}`
+          });
+          return;
+        }
+
+        // Fetch regular bookings
+        const reservas = await reservasAPI.getMine();
+        if (cancelled) return;
+        const activeReserva = reservas.find((r: any) => {
+          const status = String(r.estado || '').toLowerCase();
+          // To map a reservation to a route, we look for id_ruta in programaciones or the payload itself
+          let hasRuta = false;
+          if (r.id_ruta === id) hasRuta = true;
+          if (r.programaciones && Array.isArray(r.programaciones)) {
+            hasRuta = hasRuta || r.programaciones.some((p: any) => p.id_ruta === id || p.ruta?.id_ruta === id);
+          }
+          if (r.ruta_detalle && r.ruta_detalle.id_ruta === id) hasRuta = true;
+          
+          return hasRuta && status !== 'cancelada' && status !== 'completada';
+        });
+
+        if (activeReserva) {
+          setExistingBooking({
+            type: 'reserva',
+            id: activeReserva.id_reserva || activeReserva.id,
+            status: activeReserva.estado,
+            summary: `Reserva confirmada`
+          });
+        } else {
+          setExistingBooking(null);
+        }
+      } catch (e) {
+        console.error("Error al buscar reserva existente", e);
+      } finally {
+        if (!cancelled) setIsLoadingExisting(false);
+      }
+    };
+
+    void checkExistingBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [id, user]);
 
   const handleBookingClick = async () => {
     if (!user) {
@@ -505,45 +578,80 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
               </Card>
             ) : null}
 
-            <Card className="bg-green-50 border-green-200 shadow-md">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-lg text-green-900">Solicitar esta ruta</CardTitle>
-                <CardDescription className="text-green-800/90">
-                  Precio mostrado es <strong>referencial por persona</strong>. La cotización final puede incluir
-                  servicios incluidos u opcionales que elijas en el formulario.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <span className="text-3xl text-green-700">
-                      {price == null ? 'Consultar' : `$${price.toLocaleString('es-CO')}`}
-                    </span>
-                    <span className="text-gray-600 ml-2">por persona (base)</span>
+            {existingBooking ? (
+              <Card className="bg-blue-50 border-blue-200 shadow-md">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-blue-900">Ya reservaste esta ruta</CardTitle>
+                  <CardDescription className="text-blue-800/90">
+                    Actualmente tienes una {existingBooking.type === 'solicitud' ? 'solicitud de reserva' : 'reserva'} activa para esta ruta.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-col gap-2 bg-white p-3 rounded border border-blue-100">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Estado:</span>
+                      <Badge variant="outline" className="bg-blue-100 text-blue-800">{existingBooking.status}</Badge>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-gray-500">Detalle:</span>
+                      <span className="text-sm font-medium text-gray-800">{existingBooking.summary}</span>
+                    </div>
                   </div>
-                  <Badge
-                    variant="secondary"
-                    className={isAvailable ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'}
+                  <Button
+                    onClick={() => {
+                      if (existingBooking.type === 'solicitud') {
+                        onViewChange('dashboard', `solicitud-${existingBooking.id}`);
+                      } else {
+                        onViewChange('dashboard', `reserva-${existingBooking.id}`);
+                      }
+                    }}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-lg py-3"
                   >
-                    {isAvailable ? 'Disponible para solicitud' : 'No disponible'}
-                  </Badge>
-                </div>
+                    Ver mi reserva o Pagar
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="bg-green-50 border-green-200 shadow-md">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-lg text-green-900">Solicitar esta ruta</CardTitle>
+                  <CardDescription className="text-green-800/90">
+                    Precio mostrado es <strong>referencial por persona</strong>. La cotización final puede incluir
+                    servicios incluidos u opcionales que elijas en el formulario.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <span className="text-3xl text-green-700">
+                        {price == null ? 'Consultar' : `$${price.toLocaleString('es-CO')}`}
+                      </span>
+                      <span className="text-gray-600 ml-2">por persona (base)</span>
+                    </div>
+                    <Badge
+                      variant="secondary"
+                      className={isAvailable ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-700'}
+                    >
+                      {isAvailable ? 'Disponible para solicitud' : 'No disponible'}
+                    </Badge>
+                  </div>
 
-                <Button
-                  onClick={handleBookingClick}
-                  className="w-full bg-green-600 hover:bg-green-700 text-lg py-3"
-                  disabled={!isAvailable}
-                >
-                  <Sparkles className="w-5 h-5 mr-2" />
-                  Solicitar reserva personalizada
-                </Button>
+                  <Button
+                    onClick={handleBookingClick}
+                    className="w-full bg-green-600 hover:bg-green-700 text-lg py-3"
+                    disabled={!isAvailable || isLoadingExisting}
+                  >
+                    <Sparkles className="w-5 h-5 mr-2" />
+                    {isLoadingExisting ? 'Verificando...' : 'Solicitar reserva personalizada'}
+                  </Button>
 
-                <p className="text-xs text-gray-600 text-center leading-relaxed">
-                  Tras enviar la solicitud, OCCITOUR valida disponibilidad y te habilita el pago cuando corresponda.
-                  Cancelación sujeta a políticas que te confirma el asesor.
-                </p>
-              </CardContent>
-            </Card>
+                  <p className="text-xs text-gray-600 text-center leading-relaxed">
+                    Tras enviar la solicitud, OCCITOUR valida disponibilidad y te habilita el pago cuando corresponda.
+                    Cancelación sujeta a políticas que te confirma el asesor.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </div>
         </div>
 

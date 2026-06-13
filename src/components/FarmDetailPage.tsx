@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Coffee, TreePine, Sparkles, Check } from 'lucide-react';
+import { ArrowLeft, MapPin, Users, Calendar, ChevronLeft, ChevronRight, Wifi, Coffee, TreePine, Sparkles, Check, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Badge } from './ui/badge';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { FarmBookingModal } from './FarmBookingModal';
 import { useAuth } from '../context/AuthContext';
-import { fincasAPI, serviciosAPI, type Finca as BackendFinca, type Servicio } from '../services/api';
+import { fincasAPI, serviciosAPI, reservasAPI, type Finca as BackendFinca, type Servicio } from '../services/api';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { inferirServicioAplicacion, servicioVisibleEnContexto } from '../utils/servicioAplicacion';
 import type { LucideIcon } from 'lucide-react';
@@ -123,6 +123,8 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
   const [isBookingModalOpen, setIsBookingModalOpen] = useState(false);
   const [farm, setFarm] = useState<FarmDetailModel | null>(null);
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [existingBooking, setExistingBooking] = useState<{ id: number, status: string, summary: string } | null>(null);
+  const [isLoadingExisting, setIsLoadingExisting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -199,6 +201,75 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
     };
   }, [farmId]);
 
+  useEffect(() => {
+    if (!user || user.role !== 'client' || !farmId) {
+      setExistingBooking(null);
+      return;
+    }
+    
+    let cancelled = false;
+    const id = Number(farmId);
+
+    const checkExistingBooking = async () => {
+      setIsLoadingExisting(true);
+      try {
+        const reservas = await reservasAPI.getMine();
+        if (cancelled) return;
+        
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const activeReserva = reservas.find((r: any) => {
+          const status = String(r.estado || '').toLowerCase();
+          if (status === 'cancelada' || status === 'completada') return false;
+
+          let hasFinca = false;
+          if (r.id_finca_resumen === id) hasFinca = true;
+          if (r.fincas && Array.isArray(r.fincas)) {
+            hasFinca = hasFinca || r.fincas.some((f: any) => f.id_finca === id);
+          }
+          if (!hasFinca) return false;
+
+          // Si ya pasó el checkout, la estadía terminó → permitir nueva reserva
+          const fincaDetalles = r.fincas?.find?.((f: any) => f.id_finca === id);
+          const checkoutRaw =
+            fincaDetalles?.fecha_checkout ??
+            fincaDetalles?.fecha_salida ??
+            r.fecha_checkout ??
+            r.fecha_salida ??
+            null;
+
+          if (checkoutRaw) {
+            const checkout = new Date(`${String(checkoutRaw).split('T')[0]}T00:00:00`);
+            if (checkout < today) return false; // Estadía ya terminó
+          }
+
+          return true;
+        });
+
+        if (activeReserva) {
+          setExistingBooking({
+            id: activeReserva.id_reserva || activeReserva.id,
+            status: activeReserva.estado,
+            summary: `Finca reservada`
+          });
+        } else {
+          setExistingBooking(null);
+        }
+      } catch (e) {
+        console.error("Error al buscar reserva existente", e);
+      } finally {
+        if (!cancelled) setIsLoadingExisting(false);
+      }
+    };
+
+    void checkExistingBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [farmId, user]);
+
   const handleBookingClick = () => {
     if (!user) {
       onViewChange('home');
@@ -228,6 +299,59 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
         <div className="text-center">
           <h2 className="mb-4 text-2xl text-gray-800">Finca no encontrada</h2>
           <Button onClick={() => onViewChange('farms')}>Volver a fincas</Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (isLoadingExisting) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-gray-600 bg-gradient-to-br from-green-50 via-sky-50/40 to-emerald-50 pt-20">
+        <Loader2 className="w-10 h-10 animate-spin text-green-600" />
+        <p>Verificando tus reservas...</p>
+      </div>
+    );
+  }
+
+  if (existingBooking) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-sky-50/40 to-emerald-50 pt-32 pb-16 px-4">
+        <div className="max-w-2xl mx-auto">
+          <Card className="bg-blue-50 border-blue-200 shadow-md">
+            <CardHeader className="pb-2 text-center">
+              <CardTitle className="text-2xl text-blue-900">Ya reservaste esta finca</CardTitle>
+              <CardDescription className="text-blue-800/90 text-base mt-2">
+                Actualmente tienes una reserva activa para esta finca.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6 mt-4">
+              <div className="flex flex-col gap-3 bg-white p-4 rounded border border-blue-100">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Estado:</span>
+                  <Badge variant="outline" className="bg-blue-100 text-blue-800 px-3 py-1 text-sm">{existingBooking.status}</Badge>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Detalle:</span>
+                  <span className="font-medium text-gray-800">{existingBooking.summary}</span>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                <Button
+                  variant="outline"
+                  onClick={() => onViewChange('farms')}
+                  className="flex-1 text-blue-700 border-blue-200 hover:bg-blue-100"
+                >
+                  Volver a Fincas
+                </Button>
+                <Button
+                  onClick={() => onViewChange('dashboard', `reserva-${existingBooking.id}`)}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                >
+                  Ver mi reserva o Pagar
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       </div>
     );

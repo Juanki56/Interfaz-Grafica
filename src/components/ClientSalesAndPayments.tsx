@@ -3,6 +3,7 @@ import {
   Calendar,
   CreditCard,
   DollarSign,
+  Download,
   Eye,
   FileText,
   MapPin,
@@ -28,11 +29,7 @@ import {
   type ClientPaymentFlowKind,
 } from '../utils/clientPaymentFlow';
 import { formatDateDisplay, formatTimeDisplay } from '../utils/dateTimeDisplay';
-import {
-  clientPaymentFlowLabel,
-  resolveClientPaymentFlowKind,
-  type ClientPaymentFlowKind,
-} from '../utils/clientPaymentFlow';
+import { downloadAbonoPdf } from '../utils/abonoPdf';
 
 type ClientSaleItem = {
   id: string;
@@ -455,6 +452,7 @@ export function ClientSalesTab() {
 
 export function ClientPaymentsTab() {
   const [selectedPayment, setSelectedPayment] = useState<ClientPaymentItem | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const { payments, isLoading } = useClientPaymentsData();
 
   const filteredPayments = useMemo(
@@ -642,6 +640,41 @@ export function ClientPaymentsTab() {
                   </a>
                 </Button>
               ) : null}
+              <Button
+                className="w-full mt-2 bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => {
+                  downloadAbonoPdf(
+                    {
+                      id: selectedPayment.id,
+                      backendId: selectedPayment.paymentId,
+                      client: {
+                        name: '—',
+                        document: '—',
+                        phone: '—',
+                        email: '—',
+                      },
+                      reservation: {
+                        id: `R-${selectedPayment.reservationId}`,
+                        serviceType: selectedPayment.sale,
+                        serviceName: selectedPayment.sale,
+                        totalAmount: selectedPayment.totalSale,
+                        paidAmount: selectedPayment.totalSale - selectedPayment.remaining,
+                        pendingBalance: selectedPayment.remaining,
+                        date: selectedPayment.date,
+                      },
+                      amount: selectedPayment.amount,
+                      date: selectedPayment.date,
+                      status: selectedPayment.status,
+                      paymentMethod: selectedPayment.paymentMethod,
+                      transactionNumber: selectedPayment.transactionNumber ?? undefined,
+                    },
+                    { forClient: true },
+                  ).catch(console.error);
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Descargar PDF
+              </Button>
             </div>
           )}
         </DialogContent>
@@ -652,6 +685,7 @@ export function ClientPaymentsTab() {
 
 export function ClientProgrammingsTab() {
   const [selectedProgramming, setSelectedProgramming] = useState<ClientProgrammingItem | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
   const { programmings, isLoading } = useClientProgrammingsData();
 
   const filteredProgrammings = useMemo(

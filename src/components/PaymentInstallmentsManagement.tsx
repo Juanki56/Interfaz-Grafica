@@ -53,7 +53,6 @@ import {
   clientesAPI,
   pagosAPI,
   reservasAPI,
-  ventasAPI,
   type Cliente as ClienteBackend,
   type PagoCliente,
   type Reserva,
@@ -68,6 +67,7 @@ import {
   resolveReservaProductoNombre,
   resolveReservaServicioEtiqueta,
 } from '../utils/reservaProductoDisplay';
+import { downloadAbonoPdf } from '../utils/abonoPdf';
 
 interface Client {
   id: string;
@@ -449,6 +449,8 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [filterStatus, setFilterStatus] = useState('Todos');
+  const [filterServiceType, setFilterServiceType] = useState('Todos');
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
@@ -459,14 +461,37 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [pagos, ventas] = await Promise.all([pagosAPI.getAll(), ventasAPI.getAll()]);
+      // Una sola llamada: la query del backend ya incluye todos los campos de venta
+      const pagos = await pagosAPI.getAll();
 
-      // Poblar cache con las ventas del listado para acelerar el detalle
+      // Reconstruir ventasMap desde los datos que vienen en cada pago (ya embebidos)
       const ventasMap = new Map<number, Venta>();
-      ventas.forEach((venta) => {
-        const vid = Number(venta.id_venta);
-        ventasMap.set(vid, venta);
-        ventasCacheRef.current.set(vid, venta);
+      pagos.forEach((pago) => {
+        const vid = Number(pago.id_venta);
+        if (vid > 0 && !ventasMap.has(vid)) {
+          const ventaSintetica: Venta = {
+            id_venta: vid,
+            id_reserva: Number(pago.id_reserva),
+            monto_total: (pago as any).monto_total ?? 0,
+            monto_pagado: (pago as any).monto_pagado ?? 0,
+            saldo_pendiente: (pago as any).saldo_pendiente ?? 0,
+            estado_pago: (pago as any).estado_pago ?? 'Pendiente',
+            id_cliente: pago.id_cliente ?? undefined,
+            cliente_nombre: pago.cliente_nombre,
+            cliente_apellido: pago.cliente_apellido,
+            cliente_telefono: pago.cliente_telefono,
+            tipo_documento: pago.tipo_documento,
+            numero_documento: pago.numero_documento,
+            email: pago.email,
+            fecha_venta: (pago as any).fecha_venta,
+            fecha_reserva: pago.fecha_reserva,
+            ruta_nombre_resumen: pago.ruta_nombre_resumen,
+            finca_nombre_resumen: pago.finca_nombre_resumen,
+            reserva_tipo_servicio: pago.reserva_tipo_servicio,
+          } as unknown as Venta;
+          ventasMap.set(vid, ventaSintetica);
+          ventasCacheRef.current.set(vid, ventaSintetica);
+        }
       });
 
       const mappedInstallments = pagos.map((pago) => {
@@ -474,7 +499,8 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
         return mapPagoToInstallment(pago, venta, undefined);
       });
 
-      const fincaReservations = ventas
+      // Reservas de finca con saldo pendiente (filtradas desde las ventas sintéticas)
+      const fincaReservations = Array.from(ventasMap.values())
         .filter((venta) => isReservationFinca(undefined, venta) && toNumber(venta.saldo_pendiente) > 0)
         .map((venta) => {
           const backendClientId = String(venta.id_cliente || '');
@@ -541,14 +567,16 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
       const installmentDate = installment.date;
       const matchesDateFrom = !dateFrom || installmentDate >= dateFrom;
       const matchesDateTo = !dateTo || installmentDate <= dateTo;
+      const matchesStatus = filterStatus === 'Todos' || installment.status === filterStatus;
+      const matchesServiceType = filterServiceType === 'Todos' || installment.reservation.serviceType === filterServiceType;
 
-      return matchesSearch && matchesDateFrom && matchesDateTo;
+      return matchesSearch && matchesDateFrom && matchesDateTo && matchesStatus && matchesServiceType;
     });
-  }, [installments, searchTerm, dateFrom, dateTo]);
+  }, [installments, searchTerm, dateFrom, dateTo, filterStatus, filterServiceType]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, dateFrom, dateTo]);
+  }, [searchTerm, dateFrom, dateTo, filterStatus, filterServiceType]);
 
   const totalPages = Math.max(1, Math.ceil(filteredInstallments.length / itemsPerPage));
   const startIndex = (currentPage - 1) * itemsPerPage;
@@ -759,6 +787,10 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
             setDateFrom={setDateFrom}
             dateTo={dateTo}
             setDateTo={setDateTo}
+            filterStatus={filterStatus}
+            setFilterStatus={setFilterStatus}
+            filterServiceType={filterServiceType}
+            setFilterServiceType={setFilterServiceType}
             currentPage={currentPage}
             setCurrentPage={setCurrentPage}
             itemsPerPage={itemsPerPage}
@@ -868,6 +900,10 @@ interface InstallmentsListViewProps {
   setDateFrom: (value: string) => void;
   dateTo: string;
   setDateTo: (value: string) => void;
+  filterStatus: string;
+  setFilterStatus: (value: string) => void;
+  filterServiceType: string;
+  setFilterServiceType: (value: string) => void;
   currentPage: number;
   setCurrentPage: (page: number) => void;
   itemsPerPage: number;
@@ -890,6 +926,10 @@ function InstallmentsListView({
   setDateFrom,
   dateTo,
   setDateTo,
+  filterStatus,
+  setFilterStatus,
+  filterServiceType,
+  setFilterServiceType,
   currentPage,
   setCurrentPage,
   itemsPerPage,
@@ -903,7 +943,29 @@ function InstallmentsListView({
   onCancelInstallment,
 }: InstallmentsListViewProps) {
   const handleGeneratePDF = (installment: PaymentInstallment) => {
-    alert(`Generando PDF para el abono ${installment.id}...`);
+    downloadAbonoPdf({
+      id: installment.id,
+      backendId: installment.backendId,
+      client: installment.client,
+      reservation: {
+        id: installment.reservation.id,
+        serviceType: installment.reservation.serviceType,
+        serviceName: installment.reservation.serviceName,
+        totalAmount: installment.reservation.totalAmount,
+        paidAmount: installment.reservation.paidAmount,
+        pendingBalance: installment.reservation.pendingBalance,
+        date: installment.reservation.date,
+      },
+      amount: installment.amount,
+      date: installment.date,
+      status: installment.status,
+      paymentMethod: installment.paymentMethod,
+      transactionNumber: installment.transactionNumber,
+      observations: installment.observations,
+      rejectionReason: installment.rejectionReason,
+      verificationDate: installment.verificationDate,
+      verifiedBy: installment.verifiedBy,
+    }).catch(() => toast.error('No se pudo generar el PDF'));
   };
 
   return (
@@ -923,7 +985,7 @@ function InstallmentsListView({
 
       <Card className="border-green-100 shadow-sm">
         <CardContent className="p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
             <div className="lg:col-span-2">
               <Label>Buscar</Label>
               <div className="relative mt-2">
@@ -935,6 +997,37 @@ function InstallmentsListView({
                   className="pl-10 border-gray-200 focus:border-green-500"
                 />
               </div>
+            </div>
+
+            <div>
+              <Label>Estado</Label>
+              <Select value={filterStatus} onValueChange={setFilterStatus}>
+                <SelectTrigger className="mt-2 border-gray-200 focus:border-green-500">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Todos">Todos</SelectItem>
+                  <SelectItem value="Pendiente">Pendiente</SelectItem>
+                  <SelectItem value="Aprobado">Aprobado</SelectItem>
+                  <SelectItem value="Rechazado">Rechazado</SelectItem>
+                  <SelectItem value="Verificado">Verificado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label>Servicio</Label>
+              <Select value={filterServiceType} onValueChange={setFilterServiceType}>
+                <SelectTrigger className="mt-2 border-gray-200 focus:border-green-500">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Todos">Todos</SelectItem>
+                  <SelectItem value="Finca">Finca</SelectItem>
+                  <SelectItem value="Ruta">Ruta</SelectItem>
+                  <SelectItem value="Servicio">Servicio</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div>
@@ -1552,8 +1645,40 @@ function InstallmentDetailView({
           ? 'Comprobante rechazado'
           : 'Comprobante verificado';
 
+  const buildAbonoPdfInput = (forClient = false) => ({
+    id: installment.id,
+    backendId: installment.backendId,
+    client: installment.client,
+    reservation: {
+      id: installment.reservation.id,
+      serviceType: installment.reservation.serviceType,
+      serviceName: installment.reservation.serviceName,
+      totalAmount: installment.reservation.totalAmount,
+      paidAmount: installment.reservation.paidAmount,
+      pendingBalance: installment.reservation.pendingBalance,
+      date: installment.reservation.date,
+    },
+    amount: installment.amount,
+    date: installment.date,
+    status: installment.status,
+    paymentMethod: installment.paymentMethod,
+    transactionNumber: installment.transactionNumber,
+    observations: forClient ? undefined : installment.observations,
+    rejectionReason: forClient ? undefined : installment.rejectionReason,
+    verificationDate: forClient ? undefined : installment.verificationDate,
+    verifiedBy: forClient ? undefined : installment.verifiedBy,
+  });
+
   const handlePrintPDF = () => {
-    alert(`Generando PDF del abono ${installment.id}...`);
+    downloadAbonoPdf(buildAbonoPdfInput(false)).catch(() =>
+      toast.error('No se pudo generar el PDF'),
+    );
+  };
+
+  const handleClientPDF = () => {
+    downloadAbonoPdf(buildAbonoPdfInput(true), { forClient: true }).catch(() =>
+      toast.error('No se pudo generar el PDF para el cliente'),
+    );
   };
 
   const receiptUrl = normalizeReceiptUrl(installment.receiptUrl);
@@ -1589,10 +1714,18 @@ function InstallmentDetailView({
             <p className="text-gray-600 mt-1">ID: {installment.id}</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button onClick={handlePrintPDF} className="bg-green-600 hover:bg-green-700 text-white">
             <Printer className="w-4 h-4 mr-2" />
             Generar PDF
+          </Button>
+          <Button
+            onClick={handleClientPDF}
+            variant="outline"
+            className="border-green-400 text-green-700 hover:bg-green-50"
+          >
+            <Download className="w-4 h-4 mr-2" />
+            PDF Cliente
           </Button>
           {canDeleteAbono && (
             <Button onClick={onCancel} variant="outline" className="border-red-300 text-red-700 hover:bg-red-50">
@@ -1801,7 +1934,16 @@ function InstallmentDetailView({
               <div className="space-y-3">
                 <Button onClick={handlePrintPDF} className="w-full bg-green-600 hover:bg-green-700 text-white">
                   <Printer className="w-4 h-4 mr-2" />
-                  Generar PDF
+                  Generar PDF (Interno)
+                </Button>
+
+                <Button
+                  onClick={handleClientPDF}
+                  variant="outline"
+                  className="w-full border-green-400 text-green-700 hover:bg-green-50"
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Descargar PDF (Cliente)
                 </Button>
 
                 {installment.receiptUrl && (

@@ -164,7 +164,7 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
     });
   }, [isOpen, farm.id, maxCompanionsAllowed]);
 
-  const totalSteps = 4; // Servicios y huéspedes, Info médica, Pago, Confirmación
+  const totalSteps = 3; // Servicios y huéspedes, Pago, Confirmación
   const totalGuests = 1 + Math.max(0, Math.min(bookingData.companionCount, maxCompanionsAllowed));
   const staySubtotal = farm.pricePerNight * bookingData.nights;
   const selectedServiceItems = useMemo(
@@ -229,7 +229,7 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
 
   const handleDateChange = (field: 'checkIn' | 'checkOut', value: string) => {
     const newData = { ...bookingData, [field]: value };
-    
+
     if (newData.checkIn && newData.checkOut) {
       const checkInDate = new Date(newData.checkIn);
       const checkOutDate = new Date(newData.checkOut);
@@ -237,7 +237,7 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       newData.nights = diffDays || 1;
     }
-    
+
     setBookingData(newData);
   };
 
@@ -359,11 +359,19 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
         toast.error(`La finca permite máximo ${farmCapacity} persona${farmCapacity !== 1 ? 's' : ''} en esta reserva`);
         return;
       }
+      // Skip step 2 (medical info removed) — go straight to payment
+      setStep(3);
+      return;
     }
     setStep(step + 1);
   };
 
   const handlePreviousStep = () => {
+    // Step 2 is removed, so from step 3 go back to step 1
+    if (step === 3) {
+      setStep(1);
+      return;
+    }
     setStep(step - 1);
   };
 
@@ -488,732 +496,687 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
     <div className="fixed inset-0 z-50 overflow-y-auto overscroll-contain bg-black/50">
       <div className="flex min-h-full items-start justify-center p-4 sm:p-6">
         <Card className="my-4 flex w-full max-w-4xl min-h-0 flex-col bg-white shadow-xl border-2 sm:my-8 max-h-[min(100dvh-2rem,56rem)]">
-        <CardHeader className="flex shrink-0 flex-row items-center justify-between space-y-0 border-b bg-white pb-4">
-          <div>
-            <CardTitle className="text-xl">
-              {step === 4 ? 'Confirmación de Reserva' : 'Reservar Finca'}
-            </CardTitle>
-            {step < 4 && <p className="text-sm text-muted-foreground">Paso {step} de {totalSteps - 1}</p>}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={resetAndClose}
-            className="hover:bg-red-100"
-          >
-            <X className="w-4 h-4" />
-          </Button>
-        </CardHeader>
+          <CardHeader className="flex shrink-0 flex-row items-center justify-between space-y-0 border-b bg-white pb-4">
+            <div>
+              <CardTitle className="text-xl">
+                {step === 4 ? 'Confirmación de Reserva' : 'Reservar Finca'}
+              </CardTitle>
+              {step < 4 && (
+                <p className="text-sm text-muted-foreground">
+                  Paso {step === 3 ? 2 : step} de 2
+                </p>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={resetAndClose}
+              className="hover:bg-red-100"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
 
-        <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
-          {/* Farm Summary */}
-          {step < 4 && (
-            <div className="bg-green-50 p-4 rounded-lg mb-6">
-              <div className="flex items-center space-x-4">
-                <img
-                  src={farm.image}
-                  alt={farm.name}
-                  className="w-16 h-16 rounded-lg object-cover"
-                />
-                <div className="flex-1">
-                  <h3 className="font-semibold text-lg text-green-800">{farm.name}</h3>
-                  <div className="flex items-center text-sm text-muted-foreground mt-1">
-                    <MapPin className="w-3 h-3 mr-1" />
-                    {farm.location}
+          <CardContent className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6">
+            {/* Farm Summary */}
+            {step < 4 && (
+              <div className="bg-green-50 p-4 rounded-lg mb-6">
+                <div className="flex items-center space-x-4">
+                  <img
+                    src={farm.image}
+                    alt={farm.name}
+                    className="w-16 h-16 rounded-lg object-cover"
+                  />
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-lg text-green-800">{farm.name}</h3>
+                    <div className="flex items-center text-sm text-muted-foreground mt-1">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      {farm.location}
+                    </div>
                   </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold text-green-600">
-                    ${farm.pricePerNight.toLocaleString()}
-                  </p>
-                  <p className="text-xs text-muted-foreground">por noche</p>
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-green-600">
+                      ${farm.pricePerNight.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-muted-foreground">por noche</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Paso 1: Fechas, servicios opcionales y número de acompañantes */}
-          {step === 1 && (
-            <div className="space-y-6">
-              <div>
-                <h4 className="font-semibold mb-4">Fechas de Estadía</h4>
+            {/* Paso 1: Fechas, servicios opcionales y número de acompañantes */}
+            {step === 1 && (
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-semibold mb-4">Fechas de Estadía</h4>
 
-                {availabilityWarning ? (
-                  <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    No pudimos cargar todas las reservas existentes. Las fechas en gris pueden estar incompletas:{' '}
-                    <strong>confirma con OCCITOUR</strong> antes de pagar.
-                  </div>
-                ) : null}
+                  {availabilityWarning ? (
+                    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                      No pudimos cargar todas las reservas existentes. Las fechas en gris pueden estar incompletas:{' '}
+                      <strong>confirma con OCCITOUR</strong> antes de pagar.
+                    </div>
+                  ) : null}
 
-                <p className="text-sm text-muted-foreground mb-4">
-                  En <strong>entrada</strong>, el gris tachado incluye desde el check-in hasta el <strong>día de salida</strong>{' '}
-                  de otra reserva (no permitimos nueva entrada ese mismo día). En <strong>salida</strong> no usamos ese
-                  mismo gris: lo inválido con tu entrada sale{' '}
-                  <span className="font-medium text-gray-600">deshabilitado</span>.
-                </p>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    En <strong>entrada</strong>, el gris tachado incluye desde el check-in hasta el <strong>día de salida</strong>{' '}
+                    de otra reserva (no permitimos nueva entrada ese mismo día). En <strong>salida</strong> no usamos ese
+                    mismo gris: lo inválido con tu entrada sale{' '}
+                    <span className="font-medium text-gray-600">deshabilitado</span>.
+                  </p>
 
-                {isLoadingAvailability ? (
-                  <p className="text-sm text-gray-500 py-6 text-center">Cargando disponibilidad de la finca…</p>
-                ) : (
-                  <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-4">
-                    <div className="space-y-2">
-                      <Label>Entrada *</Label>
-                      <p className="text-sm text-gray-600">
-                        {bookingData.checkIn
-                          ? new Date(`${bookingData.checkIn}T12:00:00`).toLocaleDateString('es-CO', {
+                  {isLoadingAvailability ? (
+                    <p className="text-sm text-gray-500 py-6 text-center">Cargando disponibilidad de la finca…</p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-4">
+                      <div className="space-y-2">
+                        <Label>Entrada *</Label>
+                        <p className="text-sm text-gray-600">
+                          {bookingData.checkIn
+                            ? new Date(`${bookingData.checkIn}T12:00:00`).toLocaleDateString('es-CO', {
                               year: 'numeric',
                               month: 'short',
                               day: '2-digit',
                             })
-                          : 'Selecciona en el calendario'}
-                      </p>
-                      <div className="rounded-xl border border-green-200 bg-white p-3 shadow-sm flex justify-center overflow-x-auto">
-                        <BookingCalendar
-                          mode="single"
-                          weekStartsOn={1}
-                          selected={checkInCalendarSelected}
-                          onSelect={(date: Date | undefined) => {
-                            if (!date) return;
-                            handleDateChange('checkIn', toYMD(date));
-                          }}
-                          disabled={isFarmCheckInDisabled}
-                          modifiers={farmCheckInCalendarModifiers}
-                          modifiersClassNames={farmCheckInCalendarModifiersClassNames}
-                          defaultMonth={checkInCalendarSelected || new Date()}
-                          className="rounded-md"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>Salida *</Label>
-                      <p className="text-sm text-gray-600">
-                        {!bookingData.checkIn ? (
-                          'Primero elige la entrada'
-                        ) : bookingData.checkOut ? (
-                          new Date(`${bookingData.checkOut}T12:00:00`).toLocaleDateString('es-CO', {
-                            year: 'numeric',
-                            month: 'short',
-                            day: '2-digit',
-                          })
-                        ) : (
-                          'Selecciona el día de salida'
-                        )}
-                      </p>
-                      <div
-                        className={`rounded-xl border border-green-200 bg-white p-3 shadow-sm flex justify-center overflow-x-auto ${
-                          !bookingData.checkIn ? 'pointer-events-none opacity-50' : ''
-                        }`}
-                      >
-                        <BookingCalendar
-                          mode="single"
-                          weekStartsOn={1}
-                          selected={checkOutCalendarSelected}
-                          onSelect={(date: Date | undefined) => {
-                            if (!date) return;
-                            if (!bookingData.checkIn) {
-                              toast.error('Primero elige la fecha de entrada');
-                              return;
-                            }
-                            handleDateChange('checkOut', toYMD(date));
-                          }}
-                          disabled={isFarmCheckOutDisabled}
-                          modifiers={farmCheckOutCalendarModifiers}
-                          modifiersClassNames={farmCheckOutCalendarModifiersClassNames}
-                          defaultMonth={checkOutCalendarSelected || checkInCalendarSelected || new Date()}
-                          className="rounded-md"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {!isLoadingAvailability ? (
-                  <div className="mb-6 flex flex-wrap justify-center gap-x-4 gap-y-2 border border-green-100 rounded-lg bg-green-50/50 px-3 py-2 text-xs text-gray-600">
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="h-3.5 w-3.5 rounded border border-green-300 bg-white shadow-sm" />
-                      Disponible
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="h-3.5 w-3.5 rounded bg-slate-100 border border-slate-200 opacity-75" />
-                      Pasado
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="h-3.5 w-3.5 rounded bg-gray-200 border border-gray-400/50 shadow-inner" />
-                      Noche ocupada (entrada)
-                    </span>
-                    <span className="text-gray-500 max-w-[14rem] leading-snug">
-                      En salida, bloqueos sin solape se ven como día deshabilitado (estilo atenuado).
-                    </span>
-                  </div>
-                ) : null}
-
-                {bookingData.nights > 0 && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6">
-                    <p className="text-sm text-blue-800">
-                      <strong>Total de noches:</strong> {bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}
-                    </p>
-                  </div>
-                )}
-
-                <Separator className="my-6" />
-
-                <h4 className="font-semibold mb-4">Servicios Adicionales (Opcionales)</h4>
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-                  {availableServices.map((service) => {
-                    const ServiceIcon = service.icon;
-                    const isSelected = bookingData.selectedServices.includes(service.id);
-                    
-                    return (
-                      <div 
-                        key={service.id}
-                        className={`border rounded-lg p-4 cursor-pointer transition-all ${
-                          isSelected 
-                            ? 'border-emerald-500 bg-emerald-50' 
-                            : 'border-gray-200 hover:border-emerald-300'
-                        }`}
-                        onClick={() => toggleService(service.id)}
-                      >
-                        <div className="flex items-start gap-3">
-                          <Checkbox
-                            checked={isSelected}
-                            onCheckedChange={() => toggleService(service.id)}
-                            className="mt-1"
+                            : 'Selecciona en el calendario'}
+                        </p>
+                        <div className="rounded-xl border border-green-200 bg-white p-3 shadow-sm flex justify-center overflow-x-auto">
+                          <BookingCalendar
+                            mode="single"
+                            weekStartsOn={1}
+                            selected={checkInCalendarSelected}
+                            onSelect={(date: Date | undefined) => {
+                              if (!date) return;
+                              handleDateChange('checkIn', toYMD(date));
+                            }}
+                            disabled={isFarmCheckInDisabled}
+                            modifiers={farmCheckInCalendarModifiers}
+                            modifiersClassNames={farmCheckInCalendarModifiersClassNames}
+                            defaultMonth={checkInCalendarSelected || new Date()}
+                            className="rounded-md"
                           />
-                          
-                          <div className="flex-1">
-                            <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <ServiceIcon className="w-4 h-4 text-emerald-600" />
-                                <h5 className="font-medium text-sm">{service.name}</h5>
-                              </div>
-                              <p className="font-semibold text-emerald-600 text-sm">
-                                ${service.price.toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
 
-                <Separator className="my-6" />
-
-                <div className="space-y-3">
-                  <h4 className="font-semibold">¿Cuántas personas van contigo?</h4>
-                  <p className="text-sm text-muted-foreground">
-                    Indica solo el <strong>número de acompañantes</strong> (no te cuentes a ti). No hace falta registrar nombre ni documento.
-                  </p>
-                  <div className="flex flex-wrap items-end gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="companionCount">Número de acompañantes</Label>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="shrink-0 border-emerald-200"
-                          disabled={bookingData.companionCount <= 0}
-                          onClick={() => bumpCompanionCount(-1)}
-                          aria-label="Quitar un acompañante"
+                      <div className="space-y-2">
+                        <Label>Salida *</Label>
+                        <p className="text-sm text-gray-600">
+                          {!bookingData.checkIn ? (
+                            'Primero elige la entrada'
+                          ) : bookingData.checkOut ? (
+                            new Date(`${bookingData.checkOut}T12:00:00`).toLocaleDateString('es-CO', {
+                              year: 'numeric',
+                              month: 'short',
+                              day: '2-digit',
+                            })
+                          ) : (
+                            'Selecciona el día de salida'
+                          )}
+                        </p>
+                        <div
+                          className={`rounded-xl border border-green-200 bg-white p-3 shadow-sm flex justify-center overflow-x-auto ${!bookingData.checkIn ? 'pointer-events-none opacity-50' : ''
+                            }`}
                         >
-                          <Minus className="h-4 w-4" />
-                        </Button>
-                        <Input
-                          id="companionCount"
-                          type="number"
-                          inputMode="numeric"
-                          min={0}
-                          max={maxCompanionsAllowed}
-                          className="w-24 text-center"
-                          value={bookingData.companionCount}
-                          onChange={(e) => setCompanionCountFromInput(e.target.value)}
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="shrink-0 border-emerald-200"
-                          disabled={bookingData.companionCount >= maxCompanionsAllowed}
-                          onClick={() => bumpCompanionCount(1)}
-                          aria-label="Añadir un acompañante"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
+                          <BookingCalendar
+                            mode="single"
+                            weekStartsOn={1}
+                            selected={checkOutCalendarSelected}
+                            onSelect={(date: Date | undefined) => {
+                              if (!date) return;
+                              if (!bookingData.checkIn) {
+                                toast.error('Primero elige la fecha de entrada');
+                                return;
+                              }
+                              handleDateChange('checkOut', toYMD(date));
+                            }}
+                            disabled={isFarmCheckOutDisabled}
+                            modifiers={farmCheckOutCalendarModifiers}
+                            modifiersClassNames={farmCheckOutCalendarModifiersClassNames}
+                            defaultMonth={checkOutCalendarSelected || checkInCalendarSelected || new Date()}
+                            className="rounded-md"
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
-                      <Users className="mb-1 inline h-4 w-4 align-text-bottom" />
-                      <span className="ml-1">
-                        Total en la reserva: <strong>{totalGuests}</strong> persona
-                        {totalGuests !== 1 ? 's' : ''}
-                        {' '}(tú + {bookingData.companionCount} acompañante
-                        {bookingData.companionCount !== 1 ? 's' : ''})
-                      </span>
-                    </div>
-                  </div>
-                  <p className="text-xs text-gray-500">
-                    <strong>Límite según la finca:</strong> hasta <strong>{maxCompanionsAllowed}</strong> acompañante
-                    {maxCompanionsAllowed !== 1 ? 's' : ''} · capacidad total{' '}
-                    <strong>{farmCapacity}</strong> persona
-                    {farmCapacity !== 1 ? 's' : ''} (tú + acompañantes).
-                    {maxCompanionsAllowed === 0 ? (
-                      <span className="block mt-1 text-amber-700">
-                        Esta finca solo admite una persona por reserva (solo tú).
-                      </span>
-                    ) : null}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 2: Indicaciones Médicas y Especiales */}
-          {step === 2 && (
-            <div className="space-y-6">
-              <div>
-                <h4 className="font-semibold mb-4">Información Importante</h4>
-                
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="medicalIndications">Indicaciones Médicas</Label>
-                    <Textarea
-                      id="medicalIndications"
-                      placeholder="Alergias, condiciones médicas, medicamentos, restricciones dietéticas, etc."
-                      value={bookingData.medicalIndications}
-                      onChange={(e) => handleInputChange('medicalIndications', e.target.value)}
-                      className="min-h-[120px]"
-                    />
-                    <p className="text-xs text-gray-500">
-                      Esta información es confidencial y solo será usada para garantizar tu seguridad y bienestar durante la estadía
-                    </p>
-                  </div>
-                  
-                  <div className="space-y-2">
-                    <Label htmlFor="specialRequests">Solicitudes Especiales</Label>
-                    <Textarea
-                      id="specialRequests"
-                      placeholder="Preferencias de habitación, ocasión especial, necesidades de accesibilidad, etc."
-                      value={bookingData.specialRequests}
-                      onChange={(e) => handleInputChange('specialRequests', e.target.value)}
-                      className="min-h-[100px]"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 3: Pago */}
-          {step === 3 && (
-            <div className="space-y-6">
-              <div>
-                <h4 className="font-semibold mb-4">Resumen de la Reserva</h4>
-                
-                <div className="bg-gray-50 p-4 rounded-lg space-y-3 mb-6">
-                  <div className="flex justify-between">
-                    <span>Finca:</span>
-                    <span className="font-medium">{farm.name}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Entrada:</span>
-                    <span className="font-medium">{bookingData.checkIn}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Salida:</span>
-                    <span className="font-medium">{bookingData.checkOut}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Noches:</span>
-                    <span className="font-medium">{bookingData.nights}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Huéspedes:</span>
-                    <span className="font-medium">{totalGuests} persona{totalGuests !== 1 ? 's' : ''}</span>
-                  </div>
-                </div>
-
-                <Separator className="my-6" />
-
-                <div className="space-y-4">
-                  <h5 className="font-medium">Desglose de Precios</h5>
-                  
-                  <div className="bg-blue-50 p-4 rounded-lg space-y-2">
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span>Estadía ({bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}):</span>
-                        <span>${(farm.pricePerNight * bookingData.nights).toLocaleString()}</span>
-                      </div>
-                      
-                      {bookingData.selectedServices.length > 0 && (
-                        <>
-                          {selectedServiceItems.map(service => {
-                            if (!service) return null;
-                            return (
-                              <div key={service.id} className="flex justify-between text-amber-700">
-                                <span>{service.name} (solicitud):</span>
-                                <span>Se coordina luego</span>
-                              </div>
-                            );
-                          })}
-                        </>
-                      )}
-                    </div>
-                    
-                    <Separator className="bg-blue-200" />
-                    
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">Valor base de la estadía:</span>
-                      <span className="text-xl font-bold text-green-600">
-                        ${calculateTotal().toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <Separator className="my-6" />
-
-                <div className="space-y-4">
-                  <h5 className="font-medium">Monto a consignar ahora</h5>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setPaymentAmountMode('50')}
-                      className={`rounded-lg border-2 p-4 text-left transition-all ${
-                        paymentAmountMode === '50'
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200 hover:border-green-300'
-                      }`}
-                    >
-                      <p className="font-medium text-gray-900">Abonar 50%</p>
-                      <p className="text-sm text-gray-600 mt-1">
-                        ${Math.ceil(calculateTotal() / 2).toLocaleString()}
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPaymentAmountMode('100')}
-                      className={`rounded-lg border-2 p-4 text-left transition-all ${
-                        paymentAmountMode === '100'
-                          ? 'border-green-500 bg-green-50'
-                          : 'border-gray-200 hover:border-green-300'
-                      }`}
-                    >
-                      <p className="font-medium text-gray-900">Pagar 100%</p>
-                      <p className="text-sm text-gray-600 mt-1">
-                        ${calculateTotal().toLocaleString()}
-                      </p>
-                    </button>
-                  </div>
-
-                  <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">
-                    Monto del comprobante que se registrará en abonos: <strong>${amountToPayToday.toLocaleString()}</strong>
-                  </div>
-
-                  {selectedServiceItems.length > 0 && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                      Los servicios adicionales seleccionados se guardan como solicitud para coordinación posterior; el abono inicial se registra sobre la estadía de la finca.
                     </div>
                   )}
-                </div>
 
-                <Separator className="my-6" />
+                  {!isLoadingAvailability ? (
+                    <div className="mb-6 flex flex-wrap justify-center gap-x-4 gap-y-2 border border-green-100 rounded-lg bg-green-50/50 px-3 py-2 text-xs text-gray-600">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3.5 w-3.5 rounded border border-green-300 bg-white shadow-sm" />
+                        Disponible
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3.5 w-3.5 rounded bg-slate-100 border border-slate-200 opacity-75" />
+                        Pasado
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3.5 w-3.5 rounded bg-gray-200 border border-gray-400/50 shadow-inner" />
+                        Noche ocupada (entrada)
+                      </span>
+                      <span className="text-gray-500 max-w-[14rem] leading-snug">
+                        En salida, bloqueos sin solape se ven como día deshabilitado (estilo atenuado).
+                      </span>
+                    </div>
+                  ) : null}
 
-                <div className="space-y-4">
-                  <h5 className="font-medium">Método de Pago</h5>
-                  
-                  <RadioGroup 
-                    value={bookingData.paymentMethod} 
-                    onValueChange={(value: 'nequi' | 'bancolombia') => handleInputChange('paymentMethod', value)}
-                  >
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div 
-                        className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${
-                          bookingData.paymentMethod === 'nequi' 
-                            ? 'border-purple-500 bg-purple-50' 
-                            : 'border-gray-200 hover:border-purple-300'
-                        }`}
-                        onClick={() => handleInputChange('paymentMethod', 'nequi')}
-                      >
-                        <div className="flex items-center space-x-3">
-                          <RadioGroupItem value="nequi" id="nequi" />
-                          <Label htmlFor="nequi" className="flex-1 cursor-pointer">
-                            <div className="font-medium">Nequi</div>
-                            <div className="text-xs text-gray-600">Pago por QR o número</div>
-                          </Label>
+                  {bookingData.nights > 0 && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6">
+                      <p className="text-sm text-blue-800">
+                        <strong>Total de noches:</strong> {bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  )}
+
+                  <Separator className="my-6" />
+
+                  <h4 className="font-semibold mb-4">Servicios Adicionales (Opcionales)</h4>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
+                    {availableServices.map((service) => {
+                      const ServiceIcon = service.icon;
+                      const isSelected = bookingData.selectedServices.includes(service.id);
+
+                      return (
+                        <div
+                          key={service.id}
+                          className={`border rounded-lg p-4 cursor-pointer transition-all ${isSelected
+                              ? 'border-emerald-500 bg-emerald-50'
+                              : 'border-gray-200 hover:border-emerald-300'
+                            }`}
+                          onClick={() => toggleService(service.id)}
+                        >
+                          <div className="flex items-start gap-3">
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={() => toggleService(service.id)}
+                              className="mt-1"
+                            />
+
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-1">
+                                <div className="flex items-center gap-2">
+                                  <ServiceIcon className="w-4 h-4 text-emerald-600" />
+                                  <h5 className="font-medium text-sm">{service.name}</h5>
+                                </div>
+                                <p className="font-semibold text-emerald-600 text-sm">
+                                  ${service.price.toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <Separator className="my-6" />
+
+                  <div className="space-y-3">
+                    <h4 className="font-semibold">¿Cuántas personas van contigo?</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Indica solo el <strong>número de acompañantes</strong> (no te cuentes a ti). No hace falta registrar nombre ni documento.
+                    </p>
+                    <div className="flex flex-wrap items-end gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="companionCount">Número de acompañantes</Label>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="shrink-0 border-emerald-200"
+                            disabled={bookingData.companionCount <= 0}
+                            onClick={() => bumpCompanionCount(-1)}
+                            aria-label="Quitar un acompañante"
+                          >
+                            <Minus className="h-4 w-4" />
+                          </Button>
+                          <Input
+                            id="companionCount"
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            max={maxCompanionsAllowed}
+                            className="w-24 text-center"
+                            value={bookingData.companionCount}
+                            onChange={(e) => setCompanionCountFromInput(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="shrink-0 border-emerald-200"
+                            disabled={bookingData.companionCount >= maxCompanionsAllowed}
+                            onClick={() => bumpCompanionCount(1)}
+                            aria-label="Añadir un acompañante"
+                          >
+                            <Plus className="h-4 w-4" />
+                          </Button>
                         </div>
                       </div>
-                      
-                      <div 
-                        className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${
-                          bookingData.paymentMethod === 'bancolombia' 
-                            ? 'border-red-500 bg-red-50' 
-                            : 'border-gray-200 hover:border-red-300'
-                        }`}
-                        onClick={() => handleInputChange('paymentMethod', 'bancolombia')}
-                      >
-                        <div className="flex items-center space-x-3">
-                          <RadioGroupItem value="bancolombia" id="bancolombia" />
-                          <Label htmlFor="bancolombia" className="flex-1 cursor-pointer">
-                            <div className="font-medium">Bancolombia</div>
-                            <div className="text-xs text-gray-600">Transferencia bancaria</div>
-                          </Label>
-                        </div>
+                      <div className="rounded-lg border border-emerald-100 bg-emerald-50/80 px-4 py-3 text-sm text-emerald-900">
+                        <Users className="mb-1 inline h-4 w-4 align-text-bottom" />
+                        <span className="ml-1">
+                          Total en la reserva: <strong>{totalGuests}</strong> persona
+                          {totalGuests !== 1 ? 's' : ''}
+                          {' '}(tú + {bookingData.companionCount} acompañante
+                          {bookingData.companionCount !== 1 ? 's' : ''})
+                        </span>
                       </div>
                     </div>
-                  </RadioGroup>
+                    <p className="text-xs text-gray-500">
+                      <strong>Límite según la finca:</strong> hasta <strong>{maxCompanionsAllowed}</strong> acompañante
+                      {maxCompanionsAllowed !== 1 ? 's' : ''} · capacidad total{' '}
+                      <strong>{farmCapacity}</strong> persona
+                      {farmCapacity !== 1 ? 's' : ''} (tú + acompañantes).
+                      {maxCompanionsAllowed === 0 ? (
+                        <span className="block mt-1 text-amber-700">
+                          Esta finca solo admite una persona por reserva (solo tú).
+                        </span>
+                      ) : null}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-                  <OccitoursPaymentBankDetails />
 
-                  {/* Payment Info */}
-                  <div className={`bg-gradient-to-br ${
-                    bookingData.paymentMethod === 'nequi' 
-                      ? 'from-purple-50 to-pink-50 border-purple-200' 
-                      : 'from-red-50 to-orange-50 border-red-200'
-                  } border-2 p-6 rounded-lg`}>
-                    <div className="text-center space-y-4">
-                      <div className={`inline-flex items-center justify-center w-16 h-16 ${
-                        bookingData.paymentMethod === 'nequi' ? 'bg-purple-600' : 'bg-red-600'
-                      } rounded-full mb-2`}>
-                        <QrCode className="w-8 h-8 text-white" />
-                      </div>
-                      
-                      <div>
-                        <h6 className={`font-semibold mb-2 ${
-                          bookingData.paymentMethod === 'nequi' ? 'text-purple-900' : 'text-red-900'
-                        }`}>
-                          {bookingData.paymentMethod === 'nequi' ? 'Paga con Nequi' : 'Paga con Bancolombia'}
-                        </h6>
-                        <p className={`text-sm mb-4 ${
-                          bookingData.paymentMethod === 'nequi' ? 'text-purple-700' : 'text-red-700'
-                        }`}>
-                          {bookingData.paymentMethod === 'nequi' 
-                            ? 'Escanea el código QR con tu app Nequi' 
-                            : 'Realiza la transferencia a la cuenta'}
-                        </p>
-                      </div>
-                      
-                      {/* QR Code or Account Info */}
-                      <div className="bg-white p-4 rounded-lg inline-block">
-                        {bookingData.paymentMethod === 'nequi' ? (
-                          <div className="w-48 h-48 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
-                            <div className="text-center">
-                              <QrCode className="w-24 h-24 text-gray-400 mx-auto mb-2" />
-                              <p className="text-xs text-gray-500">Código QR de Nequi</p>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="w-64 space-y-2 text-left">
-                            <div>
-                              <p className="text-xs text-gray-600">Banco</p>
-                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaBankName}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-600">Tipo de cuenta:</p>
-                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaTipoCuenta}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-600">Número de cuenta:</p>
-                              <p className="font-medium font-mono">{OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-600">Titular:</p>
-                              <p className="font-medium">{OCCITOURS_PAYMENT_INFO.titular}</p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-gray-600">Documento:</p>
-                              <p className="font-medium font-mono text-sm">
-                                {OCCITOURS_PAYMENT_INFO.beneficiarioTipoDocumento}{' '}
-                                {OCCITOURS_PAYMENT_INFO.beneficiarioNumeroDocumento}
-                              </p>
-                            </div>
-                          </div>
+            {/* Step 3: Pago */}
+            {step === 3 && (
+              <div className="space-y-6">
+                <div>
+                  <h4 className="font-semibold mb-4">Resumen de la Reserva</h4>
+
+                  <div className="bg-gray-50 p-4 rounded-lg space-y-3 mb-6">
+                    <div className="flex justify-between">
+                      <span>Finca:</span>
+                      <span className="font-medium">{farm.name}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Entrada:</span>
+                      <span className="font-medium">{bookingData.checkIn}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Salida:</span>
+                      <span className="font-medium">{bookingData.checkOut}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Noches:</span>
+                      <span className="font-medium">{bookingData.nights}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Huéspedes:</span>
+                      <span className="font-medium">{totalGuests} persona{totalGuests !== 1 ? 's' : ''}</span>
+                    </div>
+                  </div>
+
+                  <Separator className="my-6" />
+
+                  <div className="space-y-4">
+                    <h5 className="font-medium">Desglose de Precios</h5>
+
+                    <div className="bg-blue-50 p-4 rounded-lg space-y-2">
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span>Estadía ({bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}):</span>
+                          <span>${(farm.pricePerNight * bookingData.nights).toLocaleString()}</span>
+                        </div>
+
+                        {bookingData.selectedServices.length > 0 && (
+                          <>
+                            {selectedServiceItems.map(service => {
+                              if (!service) return null;
+                              return (
+                                <div key={service.id} className="flex justify-between text-amber-700">
+                                  <span>{service.name} (solicitud):</span>
+                                  <span>Se coordina luego</span>
+                                </div>
+                              );
+                            })}
+                          </>
                         )}
                       </div>
-                      
-                      <Separator className={
-                        bookingData.paymentMethod === 'nequi' ? 'bg-purple-200' : 'bg-red-200'
-                      } />
-                      
-                      <div className="space-y-2">
-                        <p className={`text-sm font-medium ${
-                          bookingData.paymentMethod === 'nequi' ? 'text-purple-800' : 'text-red-800'
-                        }`}>
-                          {bookingData.paymentMethod === 'nequi' 
-                            ? 'Número de Nequi:' 
-                            : 'Número de cuenta:'}
-                        </p>
-                        <div className={`bg-white p-3 rounded-lg border-2 ${
-                          bookingData.paymentMethod === 'nequi' ? 'border-purple-300' : 'border-red-300'
-                        }`}>
-                          <p className={`text-lg font-mono font-bold ${
-                            bookingData.paymentMethod === 'nequi' ? 'text-purple-900' : 'text-red-900'
-                          }`}>
-                            {bookingData.paymentMethod === 'nequi'
-                              ? OCCITOURS_PAYMENT_INFO.nequiNumero
-                              : OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}
-                          </p>
-                        </div>
-                        <p className={`text-xs ${
-                          bookingData.paymentMethod === 'nequi' ? 'text-purple-600' : 'text-red-600'
-                        }`}>
-                          A nombre de: {OCCITOURS_PAYMENT_INFO.titular}
-                        </p>
+
+                      <Separator className="bg-blue-200" />
+
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium">Valor base de la estadía:</span>
+                        <span className="text-xl font-bold text-green-600">
+                          ${calculateTotal().toLocaleString()}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   <Separator className="my-6" />
 
-                  {/* Upload Payment Proof */}
-                  <div className="space-y-3">
-                    <Label htmlFor="paymentProof" className="text-base font-medium">
-                      Adjuntar Comprobante de Pago *
-                    </Label>
-                    
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors">
-                      <input
-                        type="file"
-                        id="paymentProof"
-                        accept="image/*,.pdf"
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-                      <label htmlFor="paymentProof" className="cursor-pointer">
-                        {bookingData.paymentProof ? (
-                          <div className="space-y-2">
-                            <FileCheck className="w-12 h-12 text-green-600 mx-auto" />
-                            <p className="font-medium text-green-700">{bookingData.paymentProof.name}</p>
-                            <p className="text-xs text-gray-500">Haz clic para cambiar el archivo</p>
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <Upload className="w-12 h-12 text-gray-400 mx-auto" />
-                            <p className="text-gray-700">Haz clic para seleccionar el comprobante</p>
-                            <p className="text-xs text-gray-500">PNG, JPG o PDF (máx. 5MB)</p>
-                          </div>
-                        )}
-                      </label>
-                    </div>
-                    
-                    <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-                      <p className="text-xs text-yellow-800">
-                    <strong>Importante:</strong> Al confirmar se creará la reserva, la venta y el abono asociado con este comprobante. Todo quedará pendiente hasta que el staff revise y apruebe el pago.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Step 4: Confirmación */}
-          {step === 4 && (
-            <div className="space-y-6">
-              <div className="text-center py-8">
-                <div className="inline-flex items-center justify-center w-20 h-20 bg-yellow-100 rounded-full mb-4">
-                  <Clock3 className="w-12 h-12 text-yellow-600" />
-                </div>
-                
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">¡Reserva Registrada!</h3>
-                <p className="text-gray-600 mb-6">Tu reserva está pendiente de confirmación</p>
-                
-                <div className="bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-200 p-6 rounded-lg max-w-md mx-auto mb-6">
                   <div className="space-y-4">
-                    <div>
-                      <p className="text-sm text-gray-600 mb-1">Número de Reserva</p>
-                      <p className="text-2xl font-bold text-yellow-700">{bookingId}</p>
+                    <h5 className="font-medium">Monto a consignar ahora</h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentAmountMode('50')}
+                        className={`rounded-lg border-2 p-4 text-left transition-all ${paymentAmountMode === '50'
+                            ? 'border-green-500 bg-green-50'
+                            : 'border-gray-200 hover:border-green-300'
+                          }`}
+                      >
+                        <p className="font-medium text-gray-900">Abonar 50%</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          ${Math.ceil(calculateTotal() / 2).toLocaleString()}
+                        </p>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPaymentAmountMode('100')}
+                        className={`rounded-lg border-2 p-4 text-left transition-all ${paymentAmountMode === '100'
+                            ? 'border-green-500 bg-green-50'
+                            : 'border-gray-200 hover:border-green-300'
+                          }`}
+                      >
+                        <p className="font-medium text-gray-900">Pagar 100%</p>
+                        <p className="text-sm text-gray-600 mt-1">
+                          ${calculateTotal().toLocaleString()}
+                        </p>
+                      </button>
                     </div>
-                    
-                    <Separator className="bg-yellow-200" />
-                    
-                    <div>
-                      <p className="text-sm text-gray-600 mb-1">Estado</p>
-                      <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 px-4 py-1">
-                        <Clock3 className="w-4 h-4 mr-1" />
-                        Pendiente de Revisión
-                      </Badge>
+
+                    <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">
+                      Monto del comprobante que se registrará en abonos: <strong>${amountToPayToday.toLocaleString()}</strong>
                     </div>
-                    
-                    <Separator className="bg-yellow-200" />
-                    
-                    <div className="text-left">
-                      <p className="text-sm text-gray-600 mb-2">Detalles:</p>
-                      <div className="space-y-1 text-sm text-gray-700">
-                        <p>• {farm.name}</p>
-                        <p>• Entrada: {bookingData.checkIn}</p>
-                        <p>• Salida: {bookingData.checkOut}</p>
-                        <p>• {bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}</p>
-                        <p>• {totalGuests} persona{totalGuests !== 1 ? 's' : ''}</p>
-                        <p>• Venta creada: {createdSaleId ? `#${createdSaleId}` : 'Pendiente'}</p>
-                        <p>• Valor reserva: ${createdReservationTotal.toLocaleString()}</p>
-                        <p>• Abono enviado: ${registeredPaymentAmount.toLocaleString()}</p>
-                        {registeredPaymentId ? <p>• Abono registrado: #{registeredPaymentId}</p> : null}
+
+                    {selectedServiceItems.length > 0 && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        Los servicios adicionales seleccionados se guardan como solicitud para coordinación posterior; el abono inicial se registra sobre la estadía de la finca.
+                      </div>
+                    )}
+                  </div>
+
+                  <Separator className="my-6" />
+
+                  <div className="space-y-4">
+                    <h5 className="font-medium">Método de Pago</h5>
+
+                    <RadioGroup
+                      value={bookingData.paymentMethod}
+                      onValueChange={(value: 'nequi' | 'bancolombia') => handleInputChange('paymentMethod', value)}
+                    >
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div
+                          className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${bookingData.paymentMethod === 'nequi'
+                              ? 'border-purple-500 bg-purple-50'
+                              : 'border-gray-200 hover:border-purple-300'
+                            }`}
+                          onClick={() => handleInputChange('paymentMethod', 'nequi')}
+                        >
+                          <div className="flex items-center space-x-3">
+                            <RadioGroupItem value="nequi" id="nequi" />
+                            <Label htmlFor="nequi" className="flex-1 cursor-pointer">
+                              <div className="font-medium">Nequi</div>
+                              <div className="text-xs text-gray-600">Pago por QR o número</div>
+                            </Label>
+                          </div>
+                        </div>
+
+                        <div
+                          className={`border-2 rounded-lg p-4 cursor-pointer transition-all ${bookingData.paymentMethod === 'bancolombia'
+                              ? 'border-red-500 bg-red-50'
+                              : 'border-gray-200 hover:border-red-300'
+                            }`}
+                          onClick={() => handleInputChange('paymentMethod', 'bancolombia')}
+                        >
+                          <div className="flex items-center space-x-3">
+                            <RadioGroupItem value="bancolombia" id="bancolombia" />
+                            <Label htmlFor="bancolombia" className="flex-1 cursor-pointer">
+                              <div className="font-medium">Bancolombia</div>
+                              <div className="text-xs text-gray-600">Transferencia bancaria</div>
+                            </Label>
+                          </div>
+                        </div>
+                      </div>
+                    </RadioGroup>
+
+                    <OccitoursPaymentBankDetails />
+
+                    {/* Payment Info */}
+                    <div className={`bg-gradient-to-br ${bookingData.paymentMethod === 'nequi'
+                        ? 'from-purple-50 to-pink-50 border-purple-200'
+                        : 'from-red-50 to-orange-50 border-red-200'
+                      } border-2 p-6 rounded-lg`}>
+                      <div className="text-center space-y-4">
+                        <div className={`inline-flex items-center justify-center w-16 h-16 ${bookingData.paymentMethod === 'nequi' ? 'bg-purple-600' : 'bg-red-600'
+                          } rounded-full mb-2`}>
+                          <QrCode className="w-8 h-8 text-white" />
+                        </div>
+
+                        <div>
+                          <h6 className={`font-semibold mb-2 ${bookingData.paymentMethod === 'nequi' ? 'text-purple-900' : 'text-red-900'
+                            }`}>
+                            {bookingData.paymentMethod === 'nequi' ? 'Paga con Nequi' : 'Paga con Bancolombia'}
+                          </h6>
+                          <p className={`text-sm mb-4 ${bookingData.paymentMethod === 'nequi' ? 'text-purple-700' : 'text-red-700'
+                            }`}>
+                            {bookingData.paymentMethod === 'nequi'
+                              ? 'Escanea el código QR con tu app Nequi'
+                              : 'Realiza la transferencia a la cuenta'}
+                          </p>
+                        </div>
+
+                        {/* QR Code or Account Info */}
+                        <div className="bg-white p-4 rounded-lg inline-block">
+                          {bookingData.paymentMethod === 'nequi' ? (
+                            <div className="w-48 h-48 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
+                              <div className="text-center">
+                                <QrCode className="w-24 h-24 text-gray-400 mx-auto mb-2" />
+                                <p className="text-xs text-gray-500">Código QR de Nequi</p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="w-64 space-y-2 text-left">
+                              <div>
+                                <p className="text-xs text-gray-600">Banco</p>
+                                <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaBankName}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-600">Tipo de cuenta:</p>
+                                <p className="font-medium">{OCCITOURS_PAYMENT_INFO.bancolombiaTipoCuenta}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-600">Número de cuenta:</p>
+                                <p className="font-medium font-mono">{OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-600">Titular:</p>
+                                <p className="font-medium">{OCCITOURS_PAYMENT_INFO.titular}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-gray-600">Documento:</p>
+                                <p className="font-medium font-mono text-sm">
+                                  {OCCITOURS_PAYMENT_INFO.beneficiarioTipoDocumento}{' '}
+                                  {OCCITOURS_PAYMENT_INFO.beneficiarioNumeroDocumento}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        <Separator className={
+                          bookingData.paymentMethod === 'nequi' ? 'bg-purple-200' : 'bg-red-200'
+                        } />
+
+                        <div className="space-y-2">
+                          <p className={`text-sm font-medium ${bookingData.paymentMethod === 'nequi' ? 'text-purple-800' : 'text-red-800'
+                            }`}>
+                            {bookingData.paymentMethod === 'nequi'
+                              ? 'Número de Nequi:'
+                              : 'Número de cuenta:'}
+                          </p>
+                          <div className={`bg-white p-3 rounded-lg border-2 ${bookingData.paymentMethod === 'nequi' ? 'border-purple-300' : 'border-red-300'
+                            }`}>
+                            <p className={`text-lg font-mono font-bold ${bookingData.paymentMethod === 'nequi' ? 'text-purple-900' : 'text-red-900'
+                              }`}>
+                              {bookingData.paymentMethod === 'nequi'
+                                ? OCCITOURS_PAYMENT_INFO.nequiNumero
+                                : OCCITOURS_PAYMENT_INFO.bancolombiaNumeroCuenta}
+                            </p>
+                          </div>
+                          <p className={`text-xs ${bookingData.paymentMethod === 'nequi' ? 'text-purple-600' : 'text-red-600'
+                            }`}>
+                            A nombre de: {OCCITOURS_PAYMENT_INFO.titular}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Separator className="my-6" />
+
+                    {/* Upload Payment Proof */}
+                    <div className="space-y-3">
+                      <Label htmlFor="paymentProof" className="text-base font-medium">
+                        Adjuntar Comprobante de Pago *
+                      </Label>
+
+                      <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-green-400 transition-colors">
+                        <input
+                          type="file"
+                          id="paymentProof"
+                          accept="image/*,.pdf"
+                          onChange={handleFileChange}
+                          className="hidden"
+                        />
+                        <label htmlFor="paymentProof" className="cursor-pointer">
+                          {bookingData.paymentProof ? (
+                            <div className="space-y-2">
+                              <FileCheck className="w-12 h-12 text-green-600 mx-auto" />
+                              <p className="font-medium text-green-700">{bookingData.paymentProof.name}</p>
+                              <p className="text-xs text-gray-500">Haz clic para cambiar el archivo</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <Upload className="w-12 h-12 text-gray-400 mx-auto" />
+                              <p className="text-gray-700">Haz clic para seleccionar el comprobante</p>
+                              <p className="text-xs text-gray-500">PNG, JPG o PDF (máx. 5MB)</p>
+                            </div>
+                          )}
+                        </label>
+                      </div>
+
+                      <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <p className="text-xs text-yellow-800">
+                          <strong>Importante:</strong> Al confirmar se creará la reserva, la venta y el abono asociado con este comprobante. Todo quedará pendiente hasta que el staff revise y apruebe el pago.
+                        </p>
                       </div>
                     </div>
                   </div>
                 </div>
-                
-                <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg max-w-md mx-auto mb-4">
-                  <p className="text-sm text-blue-800">
-                    <strong>Próximos pasos:</strong><br />
-                    El staff revisará el comprobante en abonos. Cuando lo aprueben, la venta y la reserva se actualizarán automáticamente.
-                  </p>
-                </div>
-                
-                <div className="bg-green-50 border border-green-200 p-4 rounded-lg max-w-md mx-auto">
-                  <p className="text-sm text-green-800">
-                    <strong>✓ Comprobante adjuntado:</strong><br />
-                    {bookingData.paymentProof?.name}
-                  </p>
-                </div>
-                
-                <div className="mt-6">
-                  <Button
-                    onClick={resetAndClose}
-                    className="bg-green-600 hover:bg-green-700 px-8"
-                  >
-                    Entendido
-                  </Button>
+              </div>
+            )}
+
+            {/* Step 4: Confirmación */}
+            {step === 4 && (
+              <div className="space-y-6">
+                <div className="text-center py-8">
+                  <div className="inline-flex items-center justify-center w-20 h-20 bg-yellow-100 rounded-full mb-4">
+                    <Clock3 className="w-12 h-12 text-yellow-600" />
+                  </div>
+
+                  <h3 className="text-2xl font-bold text-gray-900 mb-2">¡Reserva Registrada!</h3>
+                  <p className="text-gray-600 mb-6">Tu reserva está pendiente de confirmación</p>
+
+                  <div className="bg-gradient-to-br from-yellow-50 to-orange-50 border-2 border-yellow-200 p-6 rounded-lg max-w-md mx-auto mb-6">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Número de Reserva</p>
+                        <p className="text-2xl font-bold text-yellow-700">{bookingId}</p>
+                      </div>
+
+                      <Separator className="bg-yellow-200" />
+
+                      <div>
+                        <p className="text-sm text-gray-600 mb-1">Estado</p>
+                        <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300 px-4 py-1">
+                          <Clock3 className="w-4 h-4 mr-1" />
+                          Pendiente de Revisión
+                        </Badge>
+                      </div>
+
+                      <Separator className="bg-yellow-200" />
+
+                      <div className="text-left">
+                        <p className="text-sm text-gray-600 mb-2">Detalles:</p>
+                        <div className="space-y-1 text-sm text-gray-700">
+                          <p>• {farm.name}</p>
+                          <p>• Entrada: {bookingData.checkIn}</p>
+                          <p>• Salida: {bookingData.checkOut}</p>
+                          <p>• {bookingData.nights} noche{bookingData.nights > 1 ? 's' : ''}</p>
+                          <p>• {totalGuests} persona{totalGuests !== 1 ? 's' : ''}</p>
+                          <p>• Venta creada: {createdSaleId ? `#${createdSaleId}` : 'Pendiente'}</p>
+                          <p>• Valor reserva: ${createdReservationTotal.toLocaleString()}</p>
+                          <p>• Abono enviado: ${registeredPaymentAmount.toLocaleString()}</p>
+                          {registeredPaymentId ? <p>• Abono registrado: #{registeredPaymentId}</p> : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-200 p-4 rounded-lg max-w-md mx-auto mb-4">
+                    <p className="text-sm text-blue-800">
+                      <strong>Próximos pasos:</strong><br />
+                      El staff revisará el comprobante en abonos. Cuando lo aprueben, la venta y la reserva se actualizarán automáticamente.
+                    </p>
+                  </div>
+
+                  <div className="bg-green-50 border border-green-200 p-4 rounded-lg max-w-md mx-auto">
+                    <p className="text-sm text-green-800">
+                      <strong>✓ Comprobante adjuntado:</strong><br />
+                      {bookingData.paymentProof?.name}
+                    </p>
+                  </div>
+
+                  <div className="mt-6">
+                    <Button
+                      onClick={resetAndClose}
+                      className="bg-green-600 hover:bg-green-700 px-8"
+                    >
+                      Entendido
+                    </Button>
+                  </div>
                 </div>
               </div>
+            )}
+          </CardContent>
+
+          {/* Navigation Buttons */}
+          {step < 4 && (
+            <div className="flex shrink-0 justify-between border-t bg-gray-50 p-6">
+              <Button
+                variant="outline"
+                onClick={step === 1 ? resetAndClose : handlePreviousStep}
+                disabled={isSubmitting}
+              >
+                {step === 1 ? 'Cancelar' : 'Anterior'}
+              </Button>
+
+              {step < 3 ? (
+                <Button
+                  onClick={handleNextStep}
+                  disabled={isSubmitting}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  Siguiente
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleSubmit}
+                  disabled={isSubmitting || !bookingData.paymentProof}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  {isSubmitting ? 'Procesando...' : 'Confirmar Reserva'}
+                </Button>
+              )}
             </div>
           )}
-        </CardContent>
-
-        {/* Navigation Buttons */}
-        {step < 4 && (
-          <div className="flex shrink-0 justify-between border-t bg-gray-50 p-6">
-            <Button
-              variant="outline"
-              onClick={step === 1 ? resetAndClose : handlePreviousStep}
-              disabled={isSubmitting}
-            >
-              {step === 1 ? 'Cancelar' : 'Anterior'}
-            </Button>
-            
-            {step < 3 ? (
-              <Button
-                onClick={handleNextStep}
-                disabled={isSubmitting}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                Siguiente
-              </Button>
-            ) : (
-              <Button
-                onClick={handleSubmit}
-                disabled={isSubmitting || !bookingData.paymentProof}
-                className="bg-green-600 hover:bg-green-700"
-              >
-                {isSubmitting ? 'Procesando...' : 'Confirmar Reserva'}
-              </Button>
-            )}
-          </div>
-        )}
-      </Card>
+        </Card>
       </div>
     </div>
   );

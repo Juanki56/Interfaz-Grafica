@@ -1410,6 +1410,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     if (isStaffRole && staffActiveTab !== 'programaciones') return;
 
     const intervalId = window.setInterval(async () => {
+      // No hacer fetch si la pestaña no está visible (reduce EGRESS en segundo plano)
+      if (document.visibilityState !== 'visible') return;
       try {
         if (role === 'guide') {
           const programaciones = await programacionAPI.getMisAsignaciones();
@@ -1421,7 +1423,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       } catch {
         // Ignore silent refresh errors; the manual state/error already covers initial load.
       }
-    }, 15000);
+    }, 60_000); // Aumentado de 15s a 60s para reducir consumo de EGRESS
 
     return () => window.clearInterval(intervalId);
   }, [canUseBackend, staffActiveTab, backendLoading, isStaffRole, role]);
@@ -3392,8 +3394,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                     return;
                   }
                   const cupos = Number(backendCreateForm.cupos_totales);
-                  if (!Number.isFinite(cupos) || cupos <= 0) {
-                    toast.error('Cupos totales inválidos');
+                  if (!Number.isFinite(cupos) || cupos <= 0 || cupos > 30) {
+                    toast.error('Los cupos totales deben estar entre 1 y 30');
                     return;
                   }
 
@@ -3561,6 +3563,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               <Label>Fecha salida *</Label>
                               <Input
                                 type="date"
+                                min={new Date().toISOString().split('T')[0]}
                                 value={backendCreateForm.fecha_salida}
                                 onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_salida: e.target.value }))}
                               />
@@ -3570,6 +3573,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               <Label>Fecha regreso *</Label>
                               <Input
                                 type="date"
+                                min={backendCreateForm.fecha_salida || new Date().toISOString().split('T')[0]}
                                 value={backendCreateForm.fecha_regreso}
                                 onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))}
                               />
@@ -3605,6 +3609,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             <Label>Cupos totales *</Label>
                             <Input
                               type="number"
+                              min="1"
+                              max="30"
                               value={backendCreateForm.cupos_totales}
                               onChange={(e) => setBackendCreateForm((prev) => ({ ...prev, cupos_totales: e.target.value }))}
                               placeholder="Ej: 20"
@@ -3730,11 +3736,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
                               const cuposTotales = backendEditForm.cupos_totales.trim() ? Number(backendEditForm.cupos_totales) : null;
                               const cuposDisponibles = backendEditForm.cupos_disponibles.trim() ? Number(backendEditForm.cupos_disponibles) : null;
-                              if (cuposTotales !== null && (!Number.isFinite(cuposTotales) || cuposTotales < 0)) {
-                                toast.error('Cupos totales inválidos');
+                              if (cuposTotales !== null && (!Number.isFinite(cuposTotales) || cuposTotales <= 0 || cuposTotales > 30)) {
+                                toast.error('Los cupos totales deben estar entre 1 y 30');
                                 return;
                               }
-                              if (cuposDisponibles !== null && (!Number.isFinite(cuposDisponibles) || cuposDisponibles < 0)) {
+                              if (cuposDisponibles !== null && (!Number.isFinite(cuposDisponibles) || cuposDisponibles < 0 || cuposDisponibles > 30)) {
                                 toast.error('Cupos disponibles inválidos');
                                 return;
                               }
@@ -3910,6 +3916,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                         <Label>Fecha salida *</Label>
                                         <Input
                                           type="date"
+                                          min={new Date().toISOString().split('T')[0]}
                                           value={backendEditForm.fecha_salida}
                                           onChange={(e) =>
                                             setBackendEditForm((prev) => ({ ...prev, fecha_salida: e.target.value }))
@@ -3921,6 +3928,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                         <Label>Fecha regreso *</Label>
                                         <Input
                                           type="date"
+                                          min={backendEditForm.fecha_salida || new Date().toISOString().split('T')[0]}
                                           value={backendEditForm.fecha_regreso}
                                           onChange={(e) =>
                                             setBackendEditForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))
@@ -3954,6 +3962,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                         <Label>Cupos totales</Label>
                                         <Input
                                           type="number"
+                                          min="1"
+                                          max="30"
                                           value={backendEditForm.cupos_totales}
                                           onChange={(e) => handleBackendEditCuposTotalesChange(e.target.value)}
                                         />

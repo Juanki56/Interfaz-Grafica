@@ -41,7 +41,6 @@ interface PagoProveedor {
   monto: number;
   fecha_pago: string;
   metodo_pago?: string | null;
-  numero_transaccion?: string | null;
   comprobante_pago?: string | null;
   estado?: string | null;
 }
@@ -79,7 +78,6 @@ export function ProviderPaymentManagement() {
     monto: '',
     fecha_pago: new Date().toISOString().split('T')[0],
     metodo_pago: 'transferencia',
-    numero_transaccion: '',
     comprobante_pago: '',
     estado: 'activo'
   });
@@ -114,8 +112,7 @@ export function ProviderPaymentManagement() {
     const proveedor = proveedores.find(p => p.id_proveedores === payment.id_proveedores)?.nombre || '';
     const matchesSearch =
       proveedor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (payment.observaciones ?? '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (payment.numero_transaccion ?? '').toLowerCase().includes(searchTerm.toLowerCase());
+      (payment.observaciones ?? '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus =
       filterStatus === 'todos' ||
       (payment.estado ?? 'activo').toLowerCase() === filterStatus;
@@ -204,7 +201,6 @@ export function ProviderPaymentManagement() {
         `Monto: ${formatCurrency(payment.monto)}`,
         `Fecha de pago: ${fechaPago}`,
         `Método de pago: ${payment.metodo_pago ?? '—'}`,
-        `Nº transacción / factura: ${payment.numero_transaccion ?? '—'}`,
         `Estado: ${(payment.estado ?? 'activo').toString()}`,
       ];
       if (payment.comprobante_pago) {
@@ -271,7 +267,6 @@ export function ProviderPaymentManagement() {
         monto: Number(formData.monto),
         fecha_pago: formData.fecha_pago,
         metodo_pago: formData.metodo_pago,
-        numero_transaccion: formData.numero_transaccion,
         comprobante_pago: formData.comprobante_pago,
         estado: 'activo'
       };
@@ -293,9 +288,7 @@ export function ProviderPaymentManagement() {
       monto: '',
       fecha_pago: new Date().toISOString().split('T')[0],
       metodo_pago: 'transferencia',
-      numero_transaccion: '',
       comprobante_pago: '',
-      estado: 'activo'
     });
   };
 
@@ -351,7 +344,7 @@ export function ProviderPaymentManagement() {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
             <Input
               type="text"
-              placeholder="Buscar por proveedor, observación o número de transacción..."
+              placeholder="Buscar por proveedor u observación..."
               className="pl-9 border-green-200 focus:border-green-500"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -434,12 +427,6 @@ export function ProviderPaymentManagement() {
                       <TableCell>
                         <div className="max-w-md">
                           <p className="text-gray-900 truncate">{payment.observaciones}</p>
-                          {payment.numero_transaccion ? (
-                            <p className="text-xs text-gray-500 mt-1">
-                              <FileText className="w-3 h-3 inline mr-1" />
-                              {payment.numero_transaccion}
-                            </p>
-                          ) : null}
                         </div>
                       </TableCell>
                       <TableCell className="font-semibold text-gray-900">
@@ -609,24 +596,15 @@ export function ProviderPaymentManagement() {
                 </Select>
               </div>
               <div>
-                <Label htmlFor="numero_transaccion">Número de Transacción/Factura</Label>
+                <Label htmlFor="comprobante_pago">URL del Comprobante de Pago</Label>
                 <Input
-                  id="numero_transaccion"
-                  value={formData.numero_transaccion}
-                  onChange={(e) => setFormData({ ...formData, numero_transaccion: e.target.value })}
-                  placeholder="Ej: FAC-2025-001"
+                  id="comprobante_pago"
+                  value={formData.comprobante_pago}
+                  onChange={(e) => setFormData({ ...formData, comprobante_pago: e.target.value })}
+                  placeholder="Ej: https://.../comprobante.pdf"
                 />
               </div>
             </div>
-            {/* <div>
-              <Label htmlFor="comprobante_pago">Comprobante de Pago</Label>
-              <Input
-                id="comprobante_pago"
-                value={formData.comprobante_pago}
-                onChange={(e) => setFormData({ ...formData, comprobante_pago: e.target.value })}
-                placeholder="URL o info del comprobante"
-              />
-            </div> */}
           </div>
           <DialogFooter>
             <Button
@@ -708,10 +686,6 @@ export function ProviderPaymentManagement() {
                       day: 'numeric'
                     })}
                   </p>
-                </div>
-                <div>
-                  <Label className="text-gray-600">Factura / Transacción</Label>
-                  <p className="text-gray-900">{selectedPayment.numero_transaccion || 'No registrada'}</p>
                 </div>
               </div>
               {selectedPayment.comprobante_pago && (

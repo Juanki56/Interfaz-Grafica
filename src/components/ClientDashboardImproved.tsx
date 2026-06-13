@@ -1625,7 +1625,7 @@ function clienteComprobanteEsPdfParaVista(url: string, mime?: string | null): bo
   return u.includes('application/pdf') || u.endsWith('.pdf');
 }
 
-export function ClientDashboardImproved() {
+export function ClientDashboardImproved({ initialSelectedItemId }: { initialSelectedItemId?: string }) {
   const { user, adminActiveTab } = useAuth();
   const [activeTab, setActiveTab] = useState('bookings');
   const [clientId, setClientId] = useState<number | null>(null);
@@ -1738,6 +1738,36 @@ export function ClientDashboardImproved() {
       setActiveTab(adminActiveTab);
     }
   }, [adminActiveTab]);
+
+  const initialSelectionHandledRef = useRef(false);
+
+  useEffect(() => {
+    if (initialSelectedItemId) {
+      if (initialSelectedItemId.startsWith('reserva-') || initialSelectedItemId.startsWith('solicitud-')) {
+        setActiveTab('bookings');
+      }
+    }
+  }, [initialSelectedItemId]);
+
+  useEffect(() => {
+    if (initialSelectedItemId && activeTab === 'bookings' && !initialSelectionHandledRef.current) {
+      if (initialSelectedItemId.startsWith('solicitud-') && requests.length > 0) {
+        const id = initialSelectedItemId.replace('solicitud-', '');
+        const req = requests.find((r) => r.id === id);
+        if (req) {
+          openRequestDetail(req);
+          initialSelectionHandledRef.current = true;
+        }
+      } else if (initialSelectedItemId.startsWith('reserva-') && bookings.length > 0) {
+        const id = initialSelectedItemId.replace('reserva-', '');
+        const bk = bookings.find((b) => b.id === id);
+        if (bk) {
+          openDetailView(bk);
+          initialSelectionHandledRef.current = true;
+        }
+      }
+    }
+  }, [initialSelectedItemId, requests, bookings, activeTab]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2176,6 +2206,9 @@ export function ClientDashboardImproved() {
       if (loadToken === bookingDetailLoadTokenRef.current) {
         setIsLoadingBookingPagos(false);
         setIsLoadingBookingDetail(false);
+        setTimeout(() => {
+          document.getElementById('payment-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 400);
       }
     }
   };
@@ -2230,6 +2263,9 @@ export function ClientDashboardImproved() {
     } finally {
       if (loadToken === requestDetailLoadTokenRef.current) {
         setIsLoadingRequestDetail(false);
+        setTimeout(() => {
+          document.getElementById('payment-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 400);
       }
     }
   };
@@ -3669,7 +3705,7 @@ export function ClientDashboardImproved() {
             </div>
 
             <div className="space-y-6">
-              <Card>
+              <Card id="payment-section">
                 <CardHeader>
                   <CardTitle>Subir comprobante</CardTitle>
                 </CardHeader>
@@ -4302,7 +4338,7 @@ export function ClientDashboardImproved() {
               />
 
               {showSaldoPagoForm ? (
-                <Card className="border-amber-300 bg-amber-50/60 shadow-sm">
+                <Card id="payment-section" className="border-amber-300 bg-amber-50/60 shadow-sm">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-lg text-amber-950 flex items-center gap-2">
                       <Upload className="h-5 w-5" />

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mountain, Menu, X, User, MapPin, Package, Home, Building, LogOut, Settings } from 'lucide-react';
+import { Mountain, Menu, X, User, Users, MapPin, Package, Home, Building, LogOut, Settings } from 'lucide-react';
 import { Button } from './ui/button';
 import { Avatar, AvatarFallback } from './ui/avatar';
 import { Badge } from './ui/badge';
@@ -24,6 +24,7 @@ export function HeaderNavigation({ currentView, onViewChange, onLogin }: HeaderN
 
   const navigationItems = [
     { id: 'home', label: 'Inicio', icon: Home },
+    { id: 'about', label: 'Quiénes Somos', icon: Users },
     { id: 'routes', label: 'Rutas', icon: MapPin },
     { id: 'farms', label: 'Fincas', icon: Building },
   ];
@@ -71,8 +72,8 @@ export function HeaderNavigation({ currentView, onViewChange, onLogin }: HeaderN
             className="flex items-center space-x-3 cursor-pointer"
             onClick={() => onViewChange('home')}
           >
-            <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-blue-600 rounded-full flex items-center justify-center">
-              <Mountain className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden bg-white shadow-sm border border-green-100">
+              <img src="/logo.jpg" alt="Occitours Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-green-800">Occitours</h1>

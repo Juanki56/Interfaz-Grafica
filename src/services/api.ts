@@ -550,7 +550,6 @@ export interface PagoProveedor {
   monto: number;
   fecha_pago: string;
   metodo_pago?: string | null;
-  numero_transaccion?: string | null;
   comprobante_pago?: string | null;
   estado?: string | null;
 }
@@ -973,8 +972,37 @@ function isExplicitExternalImageUrl(url: string): boolean {
 }
 
 /**
+ * TTL del caché en memoria para URLs de imágenes de Storage.
+ * 10 minutos: suficiente para que el usuario navegue entre módulos sin repetir peticiones.
+ * Las imágenes raramente cambian durante una sesión activa.
+ */
+const IMAGE_STORAGE_CACHE_TTL_MS = 10 * 60_000;
+
+/**
+ * Obtiene la primera URL de imagen de Storage para una entidad, con caché en memoria.
+ * Evita el patrón N+1 donde cada carga de listado genera N peticiones a Supabase.
+ */
+async function getStorageImageUrlCached(
+  tipo: 'rutas' | 'fincas',
+  id: number,
+  skipAuth: boolean
+): Promise<string | null> {
+  const cacheKey = `img_storage:${tipo}:${id}`;
+  return fetchCached<string | null>(cacheKey, IMAGE_STORAGE_CACHE_TTL_MS, async () => {
+    try {
+      const response = await fetchAPI<any>(`/api/${tipo}/${id}/imagenes`, { skipAuth });
+      const imgs = coerceImagenesApiResponseToUrls(response);
+      return firstPublicImageUrlFromList(imgs);
+    } catch {
+      return null;
+    }
+  });
+}
+
+/**
  * Cards / home: si hay archivos en Storage, usa la primera URL.
  * Sustituye `imagen_url` rota o antigua de Supabase en BD; respeta solo URLs externas no-Supabase.
+ * Usa caché en memoria (10 min) para evitar peticiones repetidas a Storage al navegar entre módulos.
  */
 async function enrichRutasImagenFromStorageIfMissing(
   rutas: Ruta[],
@@ -986,20 +1014,11 @@ async function enrichRutasImagenFromStorageIfMissing(
       if (!r || typeof r !== 'object') return r;
       const id = Number(r.id_ruta);
       if (!Number.isFinite(id) || id <= 0) return r;
-      try {
-        const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`, {
-          skipAuth: skipAuthForImagenes,
-        });
-        const imgs = coerceImagenesApiResponseToUrls(response);
-        const fromStorage = firstPublicImageUrlFromList(imgs);
-        if (fromStorage) {
-          const dbUrl = String(r.imagen_url ?? '').trim();
-          if (isExplicitExternalImageUrl(dbUrl)) return r;
-          return { ...r, imagen_url: fromStorage };
-        }
-      } catch {
-        // ignorar
-      }
+      // Si ya hay una URL válida en BD (no-Supabase), no consultar Storage
+      const dbUrl = String(r.imagen_url ?? '').trim();
+      if (isExplicitExternalImageUrl(dbUrl)) return r;
+      const fromStorage = await getStorageImageUrlCached('rutas', id, skipAuthForImagenes);
+      if (fromStorage) return { ...r, imagen_url: fromStorage };
       return r;
     })
   );
@@ -1015,20 +1034,11 @@ async function enrichFincasImagenFromStorageIfMissing(
       if (!f || typeof f !== 'object') return f;
       const id = Number(f.id_finca);
       if (!Number.isFinite(id) || id <= 0) return f;
-      try {
-        const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`, {
-          skipAuth: skipAuthForImagenes,
-        });
-        const imgs = coerceImagenesApiResponseToUrls(response);
-        const fromStorage = firstPublicImageUrlFromList(imgs);
-        if (fromStorage) {
-          const dbUrl = String(f.imagen_principal ?? '').trim();
-          if (isExplicitExternalImageUrl(dbUrl)) return f;
-          return { ...f, imagen_principal: fromStorage };
-        }
-      } catch {
-        // ignorar
-      }
+      // Si ya hay una URL válida en BD (no-Supabase), no consultar Storage
+      const dbUrl = String(f.imagen_principal ?? '').trim();
+      if (isExplicitExternalImageUrl(dbUrl)) return f;
+      const fromStorage = await getStorageImageUrlCached('fincas', id, skipAuthForImagenes);
+      if (fromStorage) return { ...f, imagen_principal: fromStorage };
       return f;
     })
   );
@@ -1677,9 +1687,11 @@ export const pagosAPI = {
 export type SubirImagenesPayload = File[] | { principal?: File | null; galeria?: File[] };
 
 export const rutasAPI = {
-  getAll: async (): Promise<Ruta[]> => {
+  /** Para admin: usa skipEnrich:true cuando no necesites imágenes (listados, dropdowns). */
+  getAll: async (opts?: { skipEnrich?: boolean }): Promise<Ruta[]> => {
     const response = await fetchAPI<any>('/api/rutas');
     const list = unwrapApiArray<Ruta>(response);
+    if (opts?.skipEnrich) return list;
     return enrichRutasImagenFromStorageIfMissing(list, false);
   },
 
@@ -1832,12 +1844,17 @@ export const fincasAPI = {
     return unwrapApiArray<string>(response);
   },
 
-  /** Solo fincas activas (reservas, ventas, catálogo operativo). */
-  getActivas: async (): Promise<Finca[]> => {
-    const response = await fetchAPI<any>('/api/fincas/disponibles');
-    const raw = (response?.data ?? response) as Finca[];
-    const list = Array.isArray(raw) ? raw : [];
-    return enrichFincasImagenFromStorageIfMissing(filterFincasActivas(list), false);
+  /** Solo fincas activas (reservas, ventas, catálogo operativo). Acepta caché opcional para reducir peticiones a Supabase. */
+  getActivas: async (opts?: { cacheTtlMs?: number }): Promise<Finca[]> => {
+    const cacheKey = 'GET:/api/fincas/disponibles:activas_v1';
+    const ttlMs = opts?.cacheTtlMs ?? 0;
+    const fetch = async () => {
+      const response = await fetchAPI<any>('/api/fincas/disponibles');
+      const raw = (response?.data ?? response) as Finca[];
+      const list = Array.isArray(raw) ? raw : [];
+      return enrichFincasImagenFromStorageIfMissing(filterFincasActivas(list), false);
+    };
+    return ttlMs > 0 ? fetchCached<Finca[]>(cacheKey, ttlMs, fetch) : fetch();
   },
 
   getAll: async (): Promise<Finca[]> => {

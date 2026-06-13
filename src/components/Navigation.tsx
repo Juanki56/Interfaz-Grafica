@@ -1,17 +1,17 @@
 import React, { useState } from 'react';
-import { 
+import {
   Mountain, User, LogOut, Bell, Calendar, Menu, X, LayoutDashboard, MapPin,
   BarChart3, TrendingUp, Users, UserCheck, TreePine, Route, Settings,
-  CreditCard, DollarSign, Building2, Tag, Shield
+  CreditCard, DollarSign, Building2, Tag, Shield, ChevronDown, ChevronRight
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Avatar, AvatarFallback } from './ui/avatar';
-import { 
-  DropdownMenu, 
-  DropdownMenuContent, 
-  DropdownMenuItem, 
-  DropdownMenuSeparator, 
-  DropdownMenuTrigger 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
 import { useAuth } from '../context/AuthContext';
@@ -22,49 +22,124 @@ export function Navigation() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Management modules for admin role
-  const managementModules = [
-    { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
-    { id: 'users', label: 'Usuarios', icon: Users },
-    { id: 'clients', label: 'Clientes', icon: User },
-    { id: 'owners', label: 'Propietarios', icon: UserCheck },
-    { id: 'bookings', label: 'Reservas', icon: Calendar },
-    { id: 'farms', label: 'Fincas', icon: TreePine },
-    { id: 'routes', label: 'Rutas', icon: Route },
-    { id: 'services', label: 'Servicios', icon: Settings },
-    { id: 'sales', label: 'Ventas', icon: CreditCard },
-    { id: 'installments', label: 'Abonos', icon: DollarSign },
-    { id: 'payments', label: 'Pagos', icon: DollarSign },
-    { id: 'providers', label: 'Proveedores', icon: Building2 },
-    { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
-    { id: 'employees', label: 'Empleados', icon: Shield },
-    { id: 'roles', label: 'Roles', icon: UserCheck }
+  // Management modules for admin role grouped by category
+  type ModuleCategory = {
+    id: string;
+    label: string;
+    modules: any[];
+  };
+
+  const adminCategories: ModuleCategory[] = [
+    {
+      id: 'principal',
+      label: 'Principal',
+      modules: [
+        { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
+      ]
+    },
+    {
+      id: 'users',
+      label: 'Usuarios y Roles',
+      modules: [
+        { id: 'users', label: 'Usuarios', icon: Users },
+        { id: 'clients', label: 'Clientes', icon: User },
+        { id: 'owners', label: 'Propietarios', icon: UserCheck },
+        { id: 'employees', label: 'Empleados', icon: Shield },
+        { id: 'roles', label: 'Roles', icon: UserCheck }
+      ]
+    },
+    {
+      id: 'catalog',
+      label: 'Catálogo y Operativa',
+      modules: [
+        { id: 'bookings', label: 'Reservas', icon: Calendar },
+        { id: 'farms', label: 'Fincas', icon: TreePine },
+        { id: 'routes', label: 'Rutas', icon: Route },
+        { id: 'services', label: 'Servicios', icon: Settings },
+      ]
+    },
+    {
+      id: 'finance',
+      label: 'Ventas y Finanzas',
+      modules: [
+        { id: 'sales', label: 'Ventas', icon: CreditCard },
+        { id: 'installments', label: 'Abonos', icon: DollarSign },
+        { id: 'payments', label: 'Pagos', icon: DollarSign },
+        { id: 'providers', label: 'Proveedores', icon: Building2 },
+        { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
+      ]
+    }
   ];
 
-  // Management modules for advisor role
-  const advisorManagementModules = [
-    { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
-    { id: 'users', label: 'Usuarios', icon: Users },
-    { id: 'bookings', label: 'Reservas', icon: Calendar },
-    { id: 'farms', label: 'Fincas', icon: TreePine },
-    { id: 'routes', label: 'Rutas', icon: Route },
-    { id: 'services', label: 'Servicios', icon: Settings },
-    { id: 'owners', label: 'Propietarios', icon: UserCheck },
-    { id: 'sales', label: 'Ventas', icon: CreditCard },
-    { id: 'installments', label: 'Abonos', icon: DollarSign },
-    { id: 'providers', label: 'Proveedores', icon: Building2 },
-    { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
-    { id: 'employees', label: 'Empleados', icon: Shield },
-    { id: 'roles', label: 'Roles', icon: Shield }
+  const advisorCategories: ModuleCategory[] = [
+    {
+      id: 'principal',
+      label: 'Principal',
+      modules: [
+        { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
+      ]
+    },
+    {
+      id: 'users',
+      label: 'Usuarios y Roles',
+      modules: [
+        { id: 'users', label: 'Usuarios', icon: Users },
+        { id: 'owners', label: 'Propietarios', icon: UserCheck },
+        { id: 'employees', label: 'Empleados', icon: Shield },
+        { id: 'roles', label: 'Roles', icon: Shield }
+      ]
+    },
+    {
+      id: 'catalog',
+      label: 'Catálogo y Operativa',
+      modules: [
+        { id: 'bookings', label: 'Reservas', icon: Calendar },
+        { id: 'farms', label: 'Fincas', icon: TreePine },
+        { id: 'routes', label: 'Rutas', icon: Route },
+        { id: 'services', label: 'Servicios', icon: Settings },
+      ]
+    },
+    {
+      id: 'finance',
+      label: 'Ventas y Finanzas',
+      modules: [
+        { id: 'sales', label: 'Ventas', icon: CreditCard },
+        { id: 'installments', label: 'Abonos', icon: DollarSign },
+        { id: 'providers', label: 'Proveedores', icon: Building2 },
+        { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
+      ]
+    }
   ];
 
-  // Management modules for client role
-  const clientManagementModules = [
-    { id: 'bookings', label: 'Reservas', icon: Calendar },
-    { id: 'programming', label: 'Programaciones', icon: Route },
-    { id: 'sales', label: 'Ventas', icon: DollarSign },
-    { id: 'payments', label: 'Abonos', icon: CreditCard }
+  const clientCategories: ModuleCategory[] = [
+    {
+      id: 'catalog',
+      label: 'Operativa',
+      modules: [
+        { id: 'bookings', label: 'Reservas', icon: Calendar },
+        { id: 'programming', label: 'Programaciones', icon: Route },
+      ]
+    },
+    {
+      id: 'finance',
+      label: 'Finanzas',
+      modules: [
+        { id: 'sales', label: 'Ventas', icon: DollarSign },
+        { id: 'payments', label: 'Abonos', icon: CreditCard }
+      ]
+    }
   ];
+
+  const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({
+    principal: true,
+    users: false,
+    catalog: false,
+    finance: false
+  });
+
+  const toggleCategory = (categoryId: string) => {
+    setOpenCategories(prev => ({ ...prev, [categoryId]: !prev[categoryId] }));
+  };
 
   const handleModuleClick = (moduleId: string) => {
     setAdminActiveTab(moduleId);
@@ -102,27 +177,71 @@ export function Navigation() {
     }
   };
 
+  const renderCategories = (categories: ModuleCategory[], isMobile: boolean = false) => {
+    return (
+      <div className="mt-2 space-y-2 pb-2">
+        <div className="pt-2 pb-1 border-t border-green-100">
+          <p className="text-xs text-green-600 px-3 font-semibold uppercase tracking-wider">Módulos de Gestión</p>
+        </div>
+        {categories.map((category) => (
+          <div key={category.id} className="space-y-1">
+            <Button
+              variant="ghost"
+              onClick={() => toggleCategory(category.id)}
+              className="w-full justify-between h-9 px-3 text-gray-600 hover:text-green-700 hover:bg-green-50/50"
+            >
+              <span className="text-xs font-semibold uppercase tracking-wider">{category.label}</span>
+              {openCategories[category.id] ? (
+                <ChevronDown className="w-4 h-4 text-gray-400" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-gray-400" />
+              )}
+            </Button>
+            {openCategories[category.id] && (
+              <div className="space-y-1 pl-4 ml-1 border-l border-green-100">
+                {category.modules.map((module) => {
+                  const Icon = module.icon;
+                  return (
+                    <Button
+                      key={module.id}
+                      variant="ghost"
+                      className="w-full justify-start space-x-3 h-9 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
+                      onClick={() => handleModuleClick(module.id)}
+                    >
+                      <Icon className="w-4 h-4 text-green-600" />
+                      <span className="text-sm">{module.label}</span>
+                    </Button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <>
       {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-sm border-b border-green-100 shadow-sm">
         <div className="flex items-center justify-between h-16 px-4">
-          <div 
+          <div
             className="flex items-center space-x-3 cursor-pointer"
             onClick={() => setCurrentView('home')}
           >
-            <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-blue-600 rounded-full flex items-center justify-center">
-              <Mountain className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden bg-white shadow-sm border border-green-100">
+              <img src="/logo.jpg" alt="Occitours Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-green-800">Occitours</h1>
             </div>
           </div>
-          
+
           <div className="flex items-center space-x-2">
-            <Button 
-              variant="ghost" 
-              size="sm" 
+            <Button
+              variant="ghost"
+              size="sm"
               className="relative"
               onClick={() => setShowNotifications(true)}
             >
@@ -143,14 +262,14 @@ export function Navigation() {
       {/* Desktop Sidebar */}
       <div className="hidden lg:flex lg:flex-col lg:fixed lg:left-0 lg:top-0 lg:bottom-0 lg:w-64 lg:bg-white/95 lg:backdrop-blur-sm lg:border-r lg:border-green-100 lg:shadow-sm lg:z-40">
         {/* Logo Section */}
-        <div 
+        <div
           className="flex items-center space-x-3 p-4 cursor-pointer border-b border-green-100 bg-green-50/20"
           onClick={() => setCurrentView('home')}
         >
-          <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-blue-600 rounded-full flex items-center justify-center">
-            <Mountain className="w-6 h-6 text-white" />
+          <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden bg-white shadow-sm border border-green-100 shrink-0">
+            <img src="/logo.jpg" alt="Occitours Logo" className="w-full h-full object-cover" />
           </div>
-          <div>
+          <div className="overflow-hidden whitespace-nowrap">
             <h1 className="text-xl font-bold text-green-800">Occitours</h1>
             <p className="text-xs text-green-600">Turismo de Naturaleza</p>
           </div>
@@ -205,79 +324,13 @@ export function Navigation() {
           </Button>
 
           {/* Admin Management Modules */}
-          {user?.role === 'admin' && (
-            <>
-              <div className="pt-3 pb-2 border-t border-green-100 mt-3">
-                <p className="text-xs text-green-600 px-2 mb-1">MÓDULOS DE GESTIÓN</p>
-              </div>
-              <div className="space-y-1">
-                {managementModules.map((module) => {
-                  const Icon = module.icon;
-                  return (
-                    <Button
-                      key={module.id}
-                      variant="ghost"
-                      className="w-full justify-start space-x-3 h-9 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                      onClick={() => handleModuleClick(module.id)}
-                    >
-                      <Icon className="w-4 h-4 text-green-600" />
-                      <span className="text-sm">{module.label}</span>
-                    </Button>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {user?.role === 'admin' && renderCategories(adminCategories)}
 
           {/* Advisor Management Modules */}
-          {user?.role === 'advisor' && (
-            <>
-              <div className="pt-3 pb-2 border-t border-green-100 mt-3">
-                <p className="text-xs text-green-600 px-2 mb-1">MÓDULOS DE GESTIÓN</p>
-              </div>
-              <div className="space-y-1">
-                {advisorManagementModules.map((module) => {
-                  const Icon = module.icon;
-                  return (
-                    <Button
-                      key={module.id}
-                      variant="ghost"
-                      className="w-full justify-start space-x-3 h-9 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                      onClick={() => handleModuleClick(module.id)}
-                    >
-                      <Icon className="w-4 h-4 text-green-600" />
-                      <span className="text-sm">{module.label}</span>
-                    </Button>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {user?.role === 'advisor' && renderCategories(advisorCategories)}
 
           {/* Client Management Modules */}
-          {user?.role === 'client' && (
-            <>
-              <div className="pt-3 pb-2 border-t border-green-100 mt-3">
-                <p className="text-xs text-green-600 px-2 mb-1">MÓDULOS</p>
-              </div>
-              <div className="space-y-1">
-                {clientManagementModules.map((module) => {
-                  const Icon = module.icon;
-                  return (
-                    <Button
-                      key={module.id}
-                      variant="ghost"
-                      className="w-full justify-start space-x-3 h-9 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                      onClick={() => handleModuleClick(module.id)}
-                    >
-                      <Icon className="w-4 h-4 text-green-600" />
-                      <span className="text-sm">{module.label}</span>
-                    </Button>
-                  );
-                })}
-              </div>
-            </>
-          )}
+          {user?.role === 'client' && renderCategories(clientCategories)}
         </div>
 
         {/* Logout Section */}
@@ -300,15 +353,15 @@ export function Navigation() {
           <div className="absolute left-0 top-0 bottom-0 w-64 bg-white shadow-xl">
             {/* Mobile Sidebar Header */}
             <div className="flex items-center justify-between p-4 border-b border-green-100">
-              <div 
+              <div
                 className="flex items-center space-x-3 cursor-pointer"
                 onClick={() => {
                   setCurrentView('home');
                   setIsMobileSidebarOpen(false);
                 }}
               >
-                <div className="w-10 h-10 bg-gradient-to-br from-green-600 to-blue-600 rounded-full flex items-center justify-center">
-                  <Mountain className="w-6 h-6 text-white" />
+                <div className="w-10 h-10 rounded-full flex items-center justify-center overflow-hidden bg-white shadow-sm border border-green-100">
+                  <img src="/logo.jpg" alt="Occitours Logo" className="w-full h-full object-cover" />
                 </div>
                 <div>
                   <h1 className="text-xl font-bold text-green-800">Occitours</h1>
@@ -384,79 +437,13 @@ export function Navigation() {
               </Button>
 
               {/* Admin Management Modules - Mobile */}
-              {user?.role === 'admin' && (
-                <>
-                  <div className="pt-4 pb-2 border-t border-green-100 mt-4">
-                    <p className="text-xs text-green-600 px-3 mb-2">MÓDULOS DE GESTIÓN</p>
-                  </div>
-                  <div className="max-h-[300px] overflow-y-auto space-y-1 pr-2">
-                    {managementModules.map((module) => {
-                      const Icon = module.icon;
-                      return (
-                        <Button
-                          key={module.id}
-                          variant="ghost"
-                          className="w-full justify-start space-x-3 h-10 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                          onClick={() => handleModuleClick(module.id)}
-                        >
-                          <Icon className="w-4 h-4 text-green-600" />
-                          <span className="text-sm">{module.label}</span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {user?.role === 'admin' && renderCategories(adminCategories, true)}
 
               {/* Advisor Management Modules - Mobile */}
-              {user?.role === 'advisor' && (
-                <>
-                  <div className="pt-4 pb-2 border-t border-green-100 mt-4">
-                    <p className="text-xs text-green-600 px-3 mb-2">MÓDULOS DE GESTIÓN</p>
-                  </div>
-                  <div className="max-h-[300px] overflow-y-auto space-y-1 pr-2">
-                    {advisorManagementModules.map((module) => {
-                      const Icon = module.icon;
-                      return (
-                        <Button
-                          key={module.id}
-                          variant="ghost"
-                          className="w-full justify-start space-x-3 h-10 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                          onClick={() => handleModuleClick(module.id)}
-                        >
-                          <Icon className="w-4 h-4 text-green-600" />
-                          <span className="text-sm">{module.label}</span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {user?.role === 'advisor' && renderCategories(advisorCategories, true)}
 
               {/* Client Management Modules - Mobile */}
-              {user?.role === 'client' && (
-                <>
-                  <div className="pt-4 pb-2 border-t border-green-100 mt-4">
-                    <p className="text-xs text-green-600 px-3 mb-2">MÓDULOS</p>
-                  </div>
-                  <div className="max-h-[300px] overflow-y-auto space-y-1 pr-2">
-                    {clientManagementModules.map((module) => {
-                      const Icon = module.icon;
-                      return (
-                        <Button
-                          key={module.id}
-                          variant="ghost"
-                          className="w-full justify-start space-x-3 h-10 text-left hover:bg-green-50 hover:text-green-700 transition-colors"
-                          onClick={() => handleModuleClick(module.id)}
-                        >
-                          <Icon className="w-4 h-4 text-green-600" />
-                          <span className="text-sm">{module.label}</span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {user?.role === 'client' && renderCategories(clientCategories, true)}
 
               <div className="pt-4 border-t border-green-100">
                 <Button
@@ -475,7 +462,7 @@ export function Navigation() {
           </div>
         </div>
       )}
-      
+
       {/* Notification Panel */}
       <NotificationPanel
         isOpen={showNotifications}

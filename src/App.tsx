@@ -1,5 +1,6 @@
 import { Suspense, lazy, useState, useEffect } from 'react';
 import { AuthContext, type AuthContextType, type LoginResult } from './context/AuthContext';
+import { PermissionsProvider } from './context/PermissionsContext';
 
 export { useAuth } from './context/AuthContext';
 import { Mountain } from 'lucide-react';
@@ -43,6 +44,7 @@ const FarmDetailPage = lazy(() =>
 const ProgrammedRouteBookingPage = lazy(() =>
   import('./components/ProgrammedRouteBookingPage').then((m) => ({ default: m.ProgrammedRouteBookingPage }))
 );
+const AboutUsPage = lazy(() => import('./components/AboutUsPage').then((m) => ({ default: m.AboutUsPage })));
 
 const ProgrammingManagement = lazy(() =>
   import('./components/ProgrammingManagement').then((m) => ({ default: m.ProgrammingManagement }))
@@ -239,14 +241,14 @@ const mockAuth = {
     this.saveUsers();
     console.log('Auth system reset successfully');
   },
-  
+
   async login(email: string, password: string) {
     await new Promise(resolve => setTimeout(resolve, 500)); // Simulate network delay
     const user = this.users[email as keyof typeof this.users];
-    
+
     // Debug logging
     console.log('Login attempt:', { email, password, userExists: !!user, userPassword: user?.password });
-    
+
     if (user && user.password === password) {
       const session = { access_token: `mock_token_${user.id}`, user };
       localStorage.setItem('occitours_session', JSON.stringify(session));
@@ -257,7 +259,7 @@ const mockAuth = {
 
   async register(name: string, email: string, password: string, role: string) {
     await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate network delay
-    
+
     // Check if user already exists
     if (this.users[email as keyof typeof this.users]) {
       return { user: null, error: { message: 'Ya existe una cuenta con este correo electrónico' } };
@@ -278,7 +280,7 @@ const mockAuth = {
 
     // Add to users object
     this.users[email as keyof typeof this.users] = newUser;
-    
+
     // Save to localStorage
     this.saveUsers();
 
@@ -300,7 +302,7 @@ const mockAuth = {
     }
     return { success: false, error: 'Usuario no encontrado' };
   },
-  
+
   async getSession() {
     const sessionStr = localStorage.getItem('occitours_session');
     if (sessionStr) {
@@ -309,7 +311,7 @@ const mockAuth = {
     }
     return { session: null, error: null };
   },
-  
+
   async signOut() {
     localStorage.removeItem('occitours_session');
     return { error: null };
@@ -391,12 +393,42 @@ export default function App() {
     }
   }, []);
 
+  // Sync state with URL to support back/forward buttons and direct links
+  useEffect(() => {
+    const syncViewFromUrl = () => {
+      const path = window.location.pathname.replace(/^\/+/, '');
+      const searchParams = new URLSearchParams(window.location.search);
+      const item = searchParams.get('item');
+
+      let newView = 'home';
+      if (path === 'dashboard') newView = 'dashboard';
+      else if (path === 'rutas') newView = 'routes';
+      else if (path === 'fincas') newView = 'farms';
+      else if (path === 'perfil') newView = 'profile';
+
+      setCurrentView(newView);
+      if (item) {
+        setSelectedItemId(item);
+      } else {
+        setSelectedItemId('');
+      }
+    };
+
+    // Initial sync
+    syncViewFromUrl();
+
+    // Listen to back/forward buttons
+    window.addEventListener('popstate', syncViewFromUrl);
+    return () => window.removeEventListener('popstate', syncViewFromUrl);
+  }, []);
+
   useEffect(() => {
     if (!user?.email) return;
     if (user.email.toLowerCase().trim() === FORCED_ADMIN_EMAIL && user.role !== 'admin') {
       setUser(prev => (prev ? { ...prev, role: 'admin' } : prev));
     }
-  }, [user]);
+    // Usar dependencias primitivas para evitar re-ejecución por referencia de objeto
+  }, [user?.email, user?.role]);
 
   const checkSession = async () => {
     try {
@@ -414,7 +446,7 @@ export default function App() {
           const tokenPayload = decodeJWT(token);
           // El backend retorna { success: true, perfil: {...} }
           if (data.success && data.perfil) {
-            const nombreCompleto = data.perfil.apellido 
+            const nombreCompleto = data.perfil.apellido
               ? `${data.perfil.nombre} ${data.perfil.apellido}`
               : data.perfil.nombre || '';
 
@@ -624,7 +656,7 @@ export default function App() {
   const login = async (email: string, password: string): Promise<LoginResult> => {
     try {
       console.log('🔐 Intentando login con:', { correo: email });
-      
+
       const response = await fetch(buildApiUrl(API_CONFIG.AUTH.LOGIN), {
         method: 'POST',
         headers: {
@@ -637,7 +669,7 @@ export default function App() {
       });
 
       const data = await response.json();
-      
+
       console.log('📡 Respuesta del servidor:', {
         status: response.status,
         ok: response.ok,
@@ -785,7 +817,7 @@ export default function App() {
 
       setShowLogin(false);
       setShowRegister(false);
-      
+
       if (frontendRole === 'client') {
         setAdminActiveTab('bookings');
         setCurrentView('dashboard');
@@ -839,7 +871,7 @@ export default function App() {
       });
 
       const data = await response.json().catch(() => ({}));
-      
+
       if (!response.ok) {
         return { success: false, error: data.mensaje || data.message || data.error || 'Error al crear la cuenta' };
       }
@@ -1190,15 +1222,35 @@ export default function App() {
 
       console.warn('Sesión expirada localmente. Cerrando sesión.');
       logout();
-    }, 30 * 1000); // cada 30 segundos
+    }, 60 * 1000); // cada 60 segundos (reducido de 30s para disminuir EGRESS)
 
     return () => clearInterval(intervalId);
-  }, [user]);
+    // Usar user?.id (primitivo) para evitar recrear el intervalo con cada re-render de user
+  }, [user?.id]);
 
   const handleViewChange = (view: string, itemId?: string) => {
     setCurrentView(view);
     if (itemId) {
       setSelectedItemId(itemId);
+    } else {
+      setSelectedItemId('');
+    }
+
+    // Update browser history
+    let newPath = '/';
+    if (view === 'dashboard') newPath = '/dashboard';
+    else if (view === 'routes') newPath = '/rutas';
+    else if (view === 'farms') newPath = '/fincas';
+    else if (view === 'profile') newPath = '/perfil';
+
+    let search = '';
+    if (itemId) {
+      search = `?item=${itemId}`;
+    }
+
+    // Only push if the URL is different to prevent duplicate history entries
+    if (window.location.pathname !== newPath || window.location.search !== search) {
+      window.history.pushState({ view, itemId }, '', newPath + search);
     }
 
     // Actividad del usuario: extender sesión local.
@@ -1380,7 +1432,6 @@ export default function App() {
   const renderDashboard = () => {
     if (!user) return null;
     const normalizedRole = normalizeRole(user.role);
-    console.log('🎭 Rol del usuario:', { original: user?.role, normalizado: normalizedRole, usuario: user });
 
     switch (normalizedRole) {
       case 'admin':
@@ -1390,7 +1441,7 @@ export default function App() {
       case 'guide':
         return <GuideDashboard key="dash-guide" />;
       case 'client':
-        return <ClientDashboard key="dash-client" />;
+        return <ClientDashboard key="dash-client" initialSelectedItemId={selectedItemId} />;
       default:
         console.error('❌ Rol no reconocido:', normalizedRole);
         return (
@@ -1399,7 +1450,7 @@ export default function App() {
               <h2 className="text-2xl font-bold text-red-600 mb-4">Rol no reconocido</h2>
               <p>Rol actual: <strong>{user?.role}</strong></p>
               <p className="mt-2">Roles válidos: admin, advisor, guide, client</p>
-              <button 
+              <button
                 onClick={logout}
                 className="mt-4 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
               >
@@ -1412,10 +1463,11 @@ export default function App() {
   };
 
   const renderPublicView = () => {
-    console.log('🖥️ Renderizando vista:', currentView, { user });
     switch (currentView) {
       case 'home':
         return <HomePage onViewChange={handleViewChange} />;
+      case 'about':
+        return <AboutUsPage onViewChange={handleViewChange} />;
       case 'routes':
         return <RoutesPage onViewChange={handleViewChange} />;
       case 'route-detail':
@@ -1435,70 +1487,74 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={authValue}>
-      <ServicesProvider
-        enabled={hasBackendToken && !!user && (user.role === 'admin' || user.role === 'advisor' || user.role === 'guide')}
-      >
-        <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
-        {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (
-          <Suspense
-            fallback={
-              <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
-            }
-          >
-            <Navigation />
-            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
-              {currentView === 'dashboard' ? renderDashboard() : 
-               currentView === 'programming' ? (
-                 <div className="p-6">
-                   <ProgrammingManagement 
-                     role={user.role as 'admin' | 'advisor' | 'guide' | 'client'} 
-                     userId={user.id}
-                     userName={user.name}
-                   />
-                 </div>
-               ) :
-               currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
-            </main>
-          </Suspense>
-        ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking') ? (
-          <>
-            <HeaderNavigation 
-              currentView={currentView}
-              onViewChange={handleViewChange}
-              onLogin={handleShowLogin}
-            />
-            <main className="pt-16 min-h-screen">
+      {/* PermissionsProvider: instancia única que comparten todos los módulos del dashboard.
+           Evita que cada componente haga sus propias peticiones de roles/permisos. */}
+      <PermissionsProvider>
+        <ServicesProvider
+          enabled={hasBackendToken && !!user && (user.role === 'admin' || user.role === 'advisor' || user.role === 'guide')}
+        >
+          <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
+            {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (
               <Suspense
                 fallback={
                   <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
                 }
               >
-                {renderPublicView()}
+                <Navigation />
+                <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
+                  {currentView === 'dashboard' ? renderDashboard() :
+                    currentView === 'programming' ? (
+                      <div className="p-6">
+                        <ProgrammingManagement
+                          role={user.role as 'admin' | 'advisor' | 'guide' | 'client'}
+                          userId={user.id}
+                          userName={user.name}
+                        />
+                      </div>
+                    ) :
+                      currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
+                </main>
               </Suspense>
-            </main>
-            <WhatsAppButton />
-          </>
-        ) : (
-          <>
-            <PublicNavigation 
-              currentView={currentView}
-              onViewChange={handleViewChange}
-              onLogin={handleShowLogin}
-            />
-            <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
-              <Suspense
-                fallback={
-                  <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
-                }
-              >
-                {renderPublicView()}
-              </Suspense>
-            </main>
-          </>
-        )}
-        <Toaster />
-        </div>
-      </ServicesProvider>
+            ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking') ? (
+              <>
+                <HeaderNavigation
+                  currentView={currentView}
+                  onViewChange={handleViewChange}
+                  onLogin={handleShowLogin}
+                />
+                <main className="pt-16 min-h-screen">
+                  <Suspense
+                    fallback={
+                      <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                    }
+                  >
+                    {renderPublicView()}
+                  </Suspense>
+                </main>
+                <WhatsAppButton />
+              </>
+            ) : (
+              <>
+                <PublicNavigation
+                  currentView={currentView}
+                  onViewChange={handleViewChange}
+                  onLogin={handleShowLogin}
+                />
+                <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
+                  <Suspense
+                    fallback={
+                      <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                    }
+                  >
+                    {renderPublicView()}
+                  </Suspense>
+                </main>
+              </>
+            )}
+            <Toaster />
+          </div>
+        </ServicesProvider>
+      </PermissionsProvider>
     </AuthContext.Provider>
   );
 }

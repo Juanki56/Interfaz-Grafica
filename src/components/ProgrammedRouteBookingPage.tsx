@@ -11,6 +11,9 @@ import {
 } from '../services/api';
 import { ProgrammedRouteBookingModal } from './ProgrammedRouteBookingModal';
 import { Button } from './ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Badge } from './ui/badge';
+import { reservasAPI } from '../services/api';
 
 interface ProgrammedRouteBookingPageProps {
   programacionId: string;
@@ -25,6 +28,8 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
   const [ruta, setRuta] = useState<Ruta | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [existingBooking, setExistingBooking] = useState<{ id: number, status: string, summary: string } | null>(null);
+  const [isLoadingExisting, setIsLoadingExisting] = useState(false);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
     const id = Number(programacionId);
@@ -145,6 +150,55 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, user?.role, load]);
 
+  useEffect(() => {
+    if (!user || user.role !== 'client' || !programacionId) {
+      setExistingBooking(null);
+      return;
+    }
+    
+    let cancelled = false;
+    const id = Number(programacionId);
+
+    const checkExistingBooking = async () => {
+      setIsLoadingExisting(true);
+      try {
+        const reservas = await reservasAPI.getMine();
+        if (cancelled) return;
+        const activeReserva = reservas.find((r: any) => {
+          const status = String(r.estado || '').toLowerCase();
+          
+          let hasProg = false;
+          if (r.id_programacion_resumen === id) hasProg = true;
+          if (r.programaciones && Array.isArray(r.programaciones)) {
+            hasProg = hasProg || r.programaciones.some((p: any) => p.id_programacion === id);
+          }
+          
+          return hasProg && status !== 'cancelada' && status !== 'completada';
+        });
+
+        if (activeReserva) {
+          setExistingBooking({
+            id: activeReserva.id_reserva || activeReserva.id,
+            status: activeReserva.estado,
+            summary: `Cupo reservado en salida`
+          });
+        } else {
+          setExistingBooking(null);
+        }
+      } catch (e) {
+        console.error("Error al buscar reserva existente", e);
+      } finally {
+        if (!cancelled) setIsLoadingExisting(false);
+      }
+    };
+
+    void checkExistingBooking();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [programacionId, user]);
+
   const handleSuccess = async () => {
     // Sin pantalla de carga: si no, se desmonta el modal y se pierde el estado del pago/comprobante.
     await load({ silent: true });
@@ -175,6 +229,57 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
         <Button onClick={() => onViewChange('home')} className="bg-green-600 hover:bg-green-700">
           Volver al inicio
         </Button>
+      </div>
+    );
+  }
+
+  if (isLoadingExisting) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4 text-gray-600 px-4">
+        <Loader2 className="w-10 h-10 animate-spin text-green-600" />
+        <p>Verificando tus reservas...</p>
+      </div>
+    );
+  }
+
+  if (existingBooking) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-16">
+        <Card className="bg-blue-50 border-blue-200 shadow-md">
+          <CardHeader className="pb-2 text-center">
+            <CardTitle className="text-2xl text-blue-900">Ya reservaste esta salida</CardTitle>
+            <CardDescription className="text-blue-800/90 text-base mt-2">
+              Actualmente tienes una reserva activa para esta fecha y ruta.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6 mt-4">
+            <div className="flex flex-col gap-3 bg-white p-4 rounded border border-blue-100">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Estado:</span>
+                <Badge variant="outline" className="bg-blue-100 text-blue-800 px-3 py-1 text-sm">{existingBooking.status}</Badge>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-500">Detalle:</span>
+                <span className="font-medium text-gray-800">{existingBooking.summary}</span>
+              </div>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => onViewChange('home')}
+                className="flex-1 text-blue-700 border-blue-200 hover:bg-blue-100"
+              >
+                Volver al inicio
+              </Button>
+              <Button
+                onClick={() => onViewChange('dashboard', `reserva-${existingBooking.id}`)}
+                className="flex-1 bg-blue-600 hover:bg-blue-700"
+              >
+                Ver mi reserva o Pagar
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

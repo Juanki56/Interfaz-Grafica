@@ -680,7 +680,8 @@ export function BookingsManagement() {
 
   const loadRutas = async () => {
     try {
-      const data = await rutasAPI.getAll();
+      // Usa caché de 5 min para no repetir peticiones a Supabase Storage al navegar entre módulos
+      const data = await rutasAPI.getActivas({ cacheTtlMs: 5 * 60_000 });
       setRutas(
         (data || []).map((ruta: any) => ({
           id: String(ruta.id_ruta),
@@ -695,7 +696,8 @@ export function BookingsManagement() {
 
   const loadFincas = async () => {
     try {
-      const data = await fincasAPI.getActivas();
+      // Usa getPublicas con caché para evitar peticiones repetidas a Supabase Storage
+      const data = await fincasAPI.getActivas({ cacheTtlMs: 5 * 60_000 });
       setFincas(
         (data || []).map((finca: any) => ({
           id: String(finca.id_finca),
@@ -934,40 +936,7 @@ export function BookingsManagement() {
     };
   }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
 
-  useEffect(() => {
-    if (formData.serviceType !== 'ruta' || formData.rutaReservaModo !== 'taquilla_personalizada') {
-      setTaquillaOccupiedDates(new Set());
-      setTaquillaAvailabilityWarning(false);
-      return;
-    }
-    const idRuta = Number(formData.routeId);
-    if (!Number.isFinite(idRuta) || idRuta <= 0) {
-      setTaquillaOccupiedDates(new Set());
-      return;
-    }
-    let cancelled = false;
-    setIsLoadingTaquillaCalendar(true);
-    setTaquillaAvailabilityWarning(false);
-    programacionAPI
-      .getFechasOcupadasRuta(idRuta)
-      .then((dates) => {
-        if (cancelled) return;
-        setTaquillaOccupiedDates(
-          new Set((dates || []).map((d) => normalizeOccupiedYmd(String(d))).filter(Boolean))
-        );
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setTaquillaOccupiedDates(new Set());
-        setTaquillaAvailabilityWarning(true);
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingTaquillaCalendar(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
+  // (useEffect duplicado eliminado — la lógica de carga del calendario taquilla está en el bloque anterior)
 
   useEffect(() => {
     if (activeView !== 'detail' && activeView !== 'edit') return;
@@ -977,14 +946,16 @@ export function BookingsManagement() {
   }, [activeView, selectedBooking?.id]);
 
   useEffect(() => {
+    // Solo aplica en modo "programada": en modo taquilla se usan todas las rutas del catálogo.
     if (formData.serviceType !== 'ruta') return;
+    if (formData.rutaReservaModo !== 'programada') return;
     if (!formData.routeId) return;
     const ok = rutasConSalidaProgramada.some((r) => r.id === formData.routeId);
     if (ok) return;
     setFormData((prev) => ({ ...prev, routeId: '', programacionId: '' }));
     setFormRutaDetalle(null);
     setFormRutaOpcionalesSeleccion({});
-  }, [formData.serviceType, formData.routeId, rutasConSalidaProgramada]);
+  }, [formData.serviceType, formData.rutaReservaModo, formData.routeId, rutasConSalidaProgramada]);
 
   useEffect(() => {
     if (formData.serviceType !== 'finca') return;
