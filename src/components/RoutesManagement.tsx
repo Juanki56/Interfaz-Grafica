@@ -54,6 +54,7 @@ import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
 import { toast } from 'sonner';
 import { rutasAPI, Ruta, RutaServicioPredefinido, RutaServicioOpcional } from '../services/api';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { usePermissions } from '../hooks/usePermissions';
 import { createModulePermissions } from '../utils/permissionHelper';
@@ -462,7 +463,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
       duracion = parseInt(formData.duracion_dias);
       if (isNaN(duracion) || duracion <= 0) {
-        toast.error('La duración debe ser un número válido mayor a 0');
+        toast.error('Las horas de duración deben ser un número válido mayor a 0');
         return;
       }
     }
@@ -564,7 +565,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
     if (formData.duracion_dias && formData.duracion_dias.trim() !== '') {
       duracion = parseInt(formData.duracion_dias);
       if (isNaN(duracion) || duracion <= 0) {
-        toast.error('La duración debe ser un número válido mayor a 0');
+        toast.error('Las horas de duración deben ser un número válido mayor a 0');
         return;
       }
     }
@@ -785,7 +786,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     <TableHead className="font-semibold">Nombre</TableHead>
                     <TableHead className="font-semibold">Zona / municipios</TableHead>
                     <TableHead className="font-semibold">Descripción</TableHead>
-                    <TableHead className="font-semibold">Duración (días)</TableHead>
+                    <TableHead className="font-semibold">Duración (horas)</TableHead>
                     <TableHead className="font-semibold">Precio Base</TableHead>
                     <TableHead className="font-semibold">Dificultad</TableHead>
                     {canEditRoute && (
@@ -858,7 +859,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                         <TableCell>
                           <div className="flex items-center space-x-2 text-gray-700">
                             <Clock className="w-4 h-4 text-blue-600" />
-                            <span>{route.duracion_dias || 'N/A'}</span>
+                            <span>{formatRutaDuracionHoras(route.duracion_dias)}</span>
                           </div>
                         </TableCell>
                         <TableCell className="font-semibold text-gray-900">
@@ -1062,7 +1063,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="duracion_dias">Duración (días)</Label>
+                  <Label htmlFor="duracion_dias">Duración (horas)</Label>
                   <Input
                     id="duracion_dias"
                     type="number"
@@ -1072,6 +1073,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     min="1"
                     step="1"
                   />
+                  <p className="text-xs text-gray-500 mt-1">Horas estimadas de la salida (campo en sistema: duracion_dias).</p>
                 </div>
                 <div>
                   <Label htmlFor="precio_base">Precio Base (COP)</Label>
@@ -1439,7 +1441,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <Label htmlFor="edit-duracion_dias">Duración (días)</Label>
+                  <Label htmlFor="edit-duracion_dias">Duración (horas)</Label>
                   <Input
                     id="edit-duracion_dias"
                     type="number"
@@ -1449,6 +1451,7 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
                     min="1"
                     step="1"
                   />
+                  <p className="text-xs text-gray-500 mt-1">Horas estimadas de la salida (campo en sistema: duracion_dias).</p>
                 </div>
                 <div>
                   <Label htmlFor="edit-precio_base">Precio Base (COP)</Label>
@@ -1758,14 +1761,14 @@ export function RoutesManagement({ userRole = 'admin' }: RoutesManagementProps) 
 
               {/* Details Grid */}
               <div className="grid grid-cols-2 gap-4">
-                {selectedRoute.duracion_dias && (
+                {selectedRoute.duracion_dias != null && Number(selectedRoute.duracion_dias) > 0 && (
                   <div className="bg-green-50 p-4 rounded-lg">
                     <div className="flex items-center space-x-2 mb-2">
                       <Clock className="w-5 h-5 text-green-600" />
-                      <Label className="text-gray-600">Duración</Label>
+                      <Label className="text-gray-600">Duración estimada</Label>
                     </div>
                     <p className="text-lg font-semibold text-gray-900">
-                      {selectedRoute.duracion_dias} {selectedRoute.duracion_dias === 1 ? 'día' : 'días'}
+                      {formatRutaDuracionHoras(selectedRoute.duracion_dias)}
                     </p>
                   </div>
                 )}

@@ -29,6 +29,7 @@ import {
 import { Input } from './ui/input';
 import { Checkbox } from './ui/checkbox';
 import { useServices } from '../hooks/useServices';
+import { servicioVisibleEnContexto } from '../utils/servicioAplicacion';
 
 const serviceCategories = [
   { value: 'all', label: 'Todas las categorías' },
@@ -45,13 +46,19 @@ interface ServiceSelectorProps {
   onServicesChange: (services: string[]) => void;
   label?: string;
   className?: string;
+  /**
+   * Alinea el listado con reservas/gestión: en finca no se muestran servicios marcados solo para ruta (y viceversa).
+   * Por defecto `todos` mantiene el comportamiento anterior.
+   */
+  contexto?: 'ruta' | 'finca' | 'todos';
 }
 
-export function ServiceSelector({ 
-  selectedServices, 
-  onServicesChange, 
-  label = "Servicios",
-  className = "" 
+export function ServiceSelector({
+  selectedServices,
+  onServicesChange,
+  label = 'Servicios',
+  className = '',
+  contexto = 'todos',
 }: ServiceSelectorProps) {
   const { services, getServicesByIds } = useServices();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -59,9 +66,15 @@ export function ServiceSelector({
   const [searchTerm, setSearchTerm] = useState('');
   const [tempSelectedServices, setTempSelectedServices] = useState<string[]>(selectedServices);
 
-  const filteredServices = services.filter(service => {
-    const matchesSearch = service.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         service.description.toLowerCase().includes(searchTerm.toLowerCase());
+  const servicesInContext =
+    contexto === 'todos'
+      ? services
+      : services.filter((s) => servicioVisibleEnContexto(s.aplicacion, contexto));
+
+  const filteredServices = servicesInContext.filter((service) => {
+    const matchesSearch =
+      service.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      service.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesCategory = categoryFilter === 'all' || service.category === categoryFilter;
     return matchesSearch && matchesCategory;
   });
@@ -190,6 +203,17 @@ export function ServiceSelector({
               <Settings className="w-5 h-5" />
               <span>Seleccionar Servicios</span>
             </DialogTitle>
+            {contexto === 'finca' ? (
+              <p className="text-sm text-gray-600">
+                Solo se listan servicios con ámbito <strong>finca</strong> en catálogo. Los
+                definidos solo para rutas no aparecen aquí.
+              </p>
+            ) : contexto === 'ruta' ? (
+              <p className="text-sm text-gray-600">
+                Solo se listan servicios con ámbito <strong>ruta</strong> en catálogo. Los de solo finca no
+                aparecen aquí.
+              </p>
+            ) : null}
           </DialogHeader>
 
           {/* Filters */}
@@ -279,8 +303,9 @@ export function ServiceSelector({
                 {tempSelectedServices.length} servicio{tempSelectedServices.length !== 1 ? 's' : ''} seleccionado{tempSelectedServices.length !== 1 ? 's' : ''}
               </span>
               <span className="font-medium">
-                Total estimado: ${services
-                  .filter(service => tempSelectedServices.includes(service.id))
+                Total estimado: $
+                {servicesInContext
+                  .filter((service) => tempSelectedServices.includes(service.id))
                   .reduce((total, service) => total + service.price, 0)
                   .toLocaleString()}
               </span>

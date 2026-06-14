@@ -9,18 +9,13 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { fincasAPI, programacionAPI, rutasAPI, type Finca, type Programacion, type Ruta } from '../services/api';
 import { estadoSalidaParaCliente } from '../utils/programacionEstadoCliente';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 import { useAuth } from '../App';
 import { motion } from 'motion/react';
 import heroImage from '../assets/hero.webp';
 
 interface HomePageProps {
   onViewChange: (view: string, itemId?: string) => void;
-}
-
-function formatDurationDays(duracion_dias?: number | null): string {
-  if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
-  const days = Number(duracion_dias);
-  return days === 1 ? '1 día' : `${days} días`;
 }
 
 function parseApiDate(value?: string | null): Date | null {
@@ -402,7 +397,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
                   <div className="grid grid-cols-2 gap-4 mb-6">
                     <div className="flex items-center space-x-2">
                       <Clock className="w-5 h-5 text-green-600" />
-                      <span className="text-gray-700">{formatDurationDays(featuredRoute.duracion_dias)}</span>
+                      <span className="text-gray-700">{formatRutaDuracionHoras(featuredRoute.duracion_dias)}</span>
                     </div>
                     <div className="flex items-center space-x-2">
                       <Users className="w-5 h-5 text-green-600" />

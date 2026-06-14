@@ -311,6 +311,7 @@ export function CreateFarmFormWithServices({
               selectedServices={selectedServices}
               onServicesChange={handleServicesChange}
               label="Servicios incluidos en la finca"
+              contexto="finca"
             />
           </div>
 

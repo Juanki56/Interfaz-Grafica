@@ -21,6 +21,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Input } from './ui/input';
 import { Separator } from './ui/separator';
 import { pagosAPI, reservasAPI } from '../services/api';
+import { clienteProgramacionPrecioFila } from '../utils/programacionLinePricing';
 import {
   clientPaymentFlowLabel,
   resolveClientPaymentFlowKind,
@@ -246,6 +247,14 @@ function useClientProgrammingsData() {
       try {
         setIsLoading(true);
         const reservas = await reservasAPI.getByCliente(Number(user.id));
+        const listTotalByReservaId = new Map<number, number>();
+        for (const row of reservas as any[]) {
+          const id = Number(row?.id_reserva ?? row?.id ?? 0);
+          if (!id) continue;
+          const t = Number(row?.total ?? row?.monto_total ?? 0);
+          if (t > 0) listTotalByReservaId.set(id, t);
+        }
+
         const details = await Promise.all(
           reservas.map(async (booking: any) => {
             const reservationId = Number(booking.id_reserva ?? booking.id ?? 0);
@@ -265,16 +274,22 @@ function useClientProgrammingsData() {
           detail.programaciones.forEach((item: any) => {
             const programacionId = Number(item.id_programacion ?? 0);
             if (!programacionId) return;
+            const reservaId = Number(detail.id_reserva ?? 0);
+            const listHint = reservaId ? listTotalByReservaId.get(reservaId) : undefined;
             items.push({
               id: `PRO-${programacionId}-${detail.id_reserva}`,
               programacionId,
-              reservationId: Number(detail.id_reserva),
+              reservationId: reservaId,
               routeName: item.ruta_nombre || `Programación #${programacionId}`,
               date: formatDate(item.fecha_salida),
               time: String(item.hora_salida || '').slice(0, 5) || '—',
               people: Number(item.cantidad_personas ?? detail.numero_participantes ?? 1),
               meetingPoint: item.lugar_encuentro || 'Por confirmar',
-              subtotal: Number(item.subtotal ?? item.precio_unitario ?? 0),
+              subtotal: clienteProgramacionPrecioFila(
+                item,
+                detail,
+                listHint ? { listMontoTotal: listHint } : null,
+              ).subtotalMostrado,
             });
           });
         });

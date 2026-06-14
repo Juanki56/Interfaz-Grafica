@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import {
   Plus, Edit, Trash2, Eye, Settings,
-  ChevronLeft, ChevronRight, Filter, ArrowUpDown
+  ChevronLeft, ChevronRight, Search, Filter,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
@@ -13,8 +13,7 @@ import {
 } from "./ui/table";
 import {
   Dialog, DialogContent, DialogFooter,
-  DialogHeader, DialogTitle, DialogDescription,
-  DialogTrigger
+  DialogHeader, DialogTitle, DialogDescription
 } from "./ui/dialog";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel,
@@ -36,77 +35,99 @@ import {
   SelectTrigger, SelectValue
 } from "./ui/select";
 
-const emptyForm = {
+type AplicaServicioForm = "finca" | "ruta";
+
+type ServicioFormData = {
+  nombre: string;
+  descripcion: string;
+  precio: string;
+  id_proveedores: string;
+  aplica_a: AplicaServicioForm;
+};
+
+const emptyForm: ServicioFormData = {
   nombre: "",
   descripcion: "",
   precio: "",
   id_proveedores: "",
-  estado: true,
+  aplica_a: "ruta",
 };
 
-type ServiceFormData = typeof emptyForm;
-
-interface ServiceFormFieldsProps {
-  formData: ServiceFormData;
-  formErrors: Record<string, string>;
-  proveedores: Proveedor[];
-  onNombreChange: (value: string) => void;
-  onPrecioChange: (value: string) => void;
-  onDescripcionChange: (value: string) => void;
-  onProveedorChange: (value: string) => void;
-  onEstadoChange: (value: boolean) => void;
+function normalizarAplicaServicio(raw: unknown): AplicaServicioForm {
+  const v = String(raw ?? "")
+    .trim()
+    .toLowerCase();
+  return v === "finca" ? "finca" : "ruta";
 }
 
-function ServiceFormFields({
+function servicioEstaActivo(service: ServicioConProveedor): boolean {
+  const e = service.estado;
+  if (e === true) return true;
+  if (e === false) return false;
+  const t = String(e ?? "").trim().toLowerCase();
+  if (t.includes("inactiv")) return false;
+  if (t.includes("activ")) return true;
+  return true;
+}
+
+/** Componente de campos del formulario con restricciones en tiempo real */
+function ServicioFormFields({
   formData,
-  formErrors,
+  setFormData,
   proveedores,
-  onNombreChange,
-  onPrecioChange,
-  onDescripcionChange,
-  onProveedorChange,
-  onEstadoChange,
-}: ServiceFormFieldsProps) {
+}: {
+  formData: ServicioFormData;
+  setFormData: Dispatch<SetStateAction<ServicioFormData>>;
+  proveedores: Proveedor[];
+}) {
+  
+  // Solo permite letras (mayúsculas, minúsculas, tildes, ñ) y espacios
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const clean = e.target.value.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ\s]/g, "");
+    setFormData((f) => ({ ...f, nombre: clean }));
+  };
+
+  // Solo permite números positivos, máximo 10 dígitos y formatea con puntos en tiempo real
+  const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+    const formatted = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+    setFormData((f) => ({ ...f, precio: formatted }));
+  };
+
   return (
     <div className="grid gap-3">
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Nombre *</Label>
           <Input
-            autoFocus
             value={formData.nombre}
-            onChange={(e) => onNombreChange(e.target.value)}
-            placeholder="Nombre del servicio"
+            onChange={handleNameChange}
+            placeholder="Nombre del servicio (solo letras)"
           />
-          {formErrors.nombre && <p className="text-sm text-red-600 mt-1">{formErrors.nombre}</p>}
         </div>
         <div>
           <Label>Precio *</Label>
           <Input
-            type="text"
-            inputMode="decimal"
             value={formData.precio}
-            onChange={(e) => onPrecioChange(e.target.value)}
+            onChange={handlePriceChange}
             placeholder="0"
           />
-          {formErrors.precio && <p className="text-sm text-red-600 mt-1">{formErrors.precio}</p>}
         </div>
       </div>
       <div>
         <Label>Descripción *</Label>
         <Textarea
           value={formData.descripcion}
-          onChange={(e) => onDescripcionChange(e.target.value)}
+          onChange={(e) => setFormData((f) => ({ ...f, descripcion: e.target.value }))}
           placeholder="Descripción del servicio"
         />
-        {formErrors.descripcion && <p className="text-sm text-red-600 mt-1">{formErrors.descripcion}</p>}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
           <Label>Proveedor *</Label>
           <Select
-            value={formData.id_proveedores}
-            onValueChange={(v: string) => onProveedorChange(v)}
+            value={formData.id_proveedores || undefined}
+            onValueChange={(v: string) => setFormData((f) => ({ ...f, id_proveedores: v }))}
           >
             <SelectTrigger>
               <SelectValue placeholder="Selecciona proveedor" />
@@ -119,20 +140,30 @@ function ServiceFormFields({
               ))}
             </SelectContent>
           </Select>
-          {formErrors.id_proveedores && <p className="text-sm text-red-600 mt-1">{formErrors.id_proveedores}</p>}
         </div>
-        <div className="flex flex-col justify-end">
-          <Label>Estado *</Label>
-          <div className="flex items-center gap-3 mt-2">
-            <Switch
-              checked={formData.estado}
-              onCheckedChange={onEstadoChange}
-              className="data-[state=checked]:bg-green-600"
-            />
-            <span className="text-sm text-gray-700">{formData.estado ? 'Activo' : 'Inactivo'}</span>
-          </div>
+        <div>
+          <Label>Ámbito del servicio *</Label>
+          <Select
+            value={formData.aplica_a}
+            onValueChange={(v: AplicaServicioForm) => setFormData((f) => ({ ...f, aplica_a: v }))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Selecciona ámbito" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="finca">
+                Finca — oferta global (reservas de finca, mismo catálogo para todas)
+              </SelectItem>
+              <SelectItem value="ruta">
+                Ruta — solo para rutas (elegibles al configurar cada ruta)
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
+      <p className="text-xs text-gray-500 mt-1">
+        Los de <strong>finca</strong> aparecen en la reserva pública de fincas; los de <strong>ruta</strong> se asocian por ruta en programación. All fields marked with * are mandatory.
+      </p>
     </div>
   );
 }
@@ -149,14 +180,13 @@ export function ServiceManagement() {
 
   const [services, setServices] = useState<ServicioConProveedor[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [aplicaFilter, setAplicaFilter] = useState<string>("__all__");
+  const [estadoFilter, setEstadoFilter] = useState<string>("__all__");
+  const [proveedorFilter, setProveedorFilter] = useState<string>("__all__");
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [proveedores, setProveedores] = useState<Proveedor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Nuevos estados para filtros y ordenamiento
-  const [filterCriteria, setFilterCriteria] = useState<{ type: 'nombre' | 'estado' | 'proveedor'; value: string }>({ type: 'nombre', value: '' });
-  const [sortCriteria, setSortCriteria] = useState<{ field: 'nombre' | 'estado' | 'proveedor'; direction: 'asc' | 'desc' }>({ field: 'nombre', direction: 'asc' });
-  const [showFilterDialog, setShowFilterDialog] = useState(false);
 
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -166,8 +196,9 @@ export function ServiceManagement() {
 
   const itemsPerPage = 10;
 
-  const [formData, setFormData] = useState(emptyForm);
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [formData, setFormData] = useState<ServicioFormData>(emptyForm);
+  const [serviceToToggle, setServiceToToggle] = useState<ServicioConProveedor | null>(null);
+  const [showConfirmToggle, setShowConfirmToggle] = useState(false);
 
   const cargarServicios = async () => {
     try {
@@ -204,117 +235,81 @@ export function ServiceManagement() {
     init();
   }, [permisos.loadingRoles, canViewServices]);
 
-  // Filtrar y ordenar servicios
-  const filteredAndSortedServices = useMemo(() => {
-    let filtered = services.filter((service) => {
-      // Búsqueda por nombre y descripción
-      const matchesSearch = (service.nombre ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-                            (service.descripcion ?? "").toLowerCase().includes(searchTerm.toLowerCase());
+  const hasActiveFilters =
+    aplicaFilter !== "__all__" || estadoFilter !== "__all__" || proveedorFilter !== "__all__";
 
-      // Filtros adicionales
-      let matchesFilter = true;
-      if (filterCriteria.value) {
-        switch (filterCriteria.type) {
-          case 'nombre':
-            matchesFilter = (service.nombre ?? "").toLowerCase().includes(filterCriteria.value.toLowerCase());
-            break;
-          case 'estado':
-            const estadoStr = service.estado ? 'activo' : 'inactivo';
-            matchesFilter = estadoStr.includes(filterCriteria.value.toLowerCase());
-            break;
-          case 'proveedor':
-            matchesFilter = (service.proveedor_nombre ?? "").toLowerCase().includes(filterCriteria.value.toLowerCase());
-            break;
+  const clearFilters = () => {
+    setAplicaFilter("__all__");
+    setEstadoFilter("__all__");
+    setProveedorFilter("__all__");
+  };
+
+  const proveedorOptions = useMemo(() => {
+    const map = new Map<number, string>();
+    proveedores.forEach((p) => {
+      if (p?.id_proveedores != null) map.set(Number(p.id_proveedores), p.nombre || `Proveedor #${p.id_proveedores}`);
+    });
+    services.forEach((s) => {
+      const id = s.id_proveedores != null ? Number(s.id_proveedores) : NaN;
+      if (Number.isFinite(id) && id > 0 && !map.has(id)) {
+        map.set(id, s.proveedor_nombre || `Proveedor #${id}`);
+      }
+    });
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], "es"));
+  }, [proveedores, services]);
+
+  const filteredServices = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return services.filter((service) => {
+      if (aplicaFilter !== "__all__") {
+        const amb = normalizarAplicaServicio(service.aplica_a);
+        if (amb !== aplicaFilter) return false;
+      }
+      if (estadoFilter !== "__all__") {
+        const activo = servicioEstaActivo(service);
+        if (estadoFilter === "activo" && !activo) return false;
+        if (estadoFilter === "inactivo" && activo) return false;
+      }
+      if (proveedorFilter !== "__all__") {
+        if (proveedorFilter === "__sin__") {
+          if (service.id_proveedores != null && Number(service.id_proveedores) > 0) return false;
+        } else if (String(service.id_proveedores ?? "") !== proveedorFilter) {
+          return false;
         }
       }
-
-      return matchesSearch && matchesFilter;
+      if (!term) return true;
+      const precioTxt =
+        service.precio != null && service.precio !== undefined
+          ? String(service.precio)
+          : "";
+      const haystack = [
+        service.nombre,
+        service.descripcion,
+        service.proveedor_nombre,
+        precioTxt,
+        normalizarAplicaServicio(service.aplica_a) === "finca" ? "finca" : "ruta",
+        servicioEstaActivo(service) ? "activo" : "inactivo",
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
     });
-
-    // Ordenar
-    filtered.sort((a, b) => {
-      let aValue: string | boolean;
-      let bValue: string | boolean;
-
-      switch (sortCriteria.field) {
-        case 'nombre':
-          aValue = (a.nombre ?? "").toLowerCase();
-          bValue = (b.nombre ?? "").toLowerCase();
-          break;
-        case 'estado':
-          aValue = Boolean(a.estado);
-          bValue = Boolean(b.estado);
-          break;
-        case 'proveedor':
-          aValue = (a.proveedor_nombre ?? "").toLowerCase();
-          bValue = (b.proveedor_nombre ?? "").toLowerCase();
-          break;
-        default:
-          return 0;
-      }
-
-      if (aValue < bValue) return sortCriteria.direction === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortCriteria.direction === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    return filtered;
-  }, [services, searchTerm, filterCriteria, sortCriteria]);
+  }, [services, searchTerm, aplicaFilter, estadoFilter, proveedorFilter]);
 
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(filteredAndSortedServices.length / itemsPerPage));
-    setCurrentPage((p) => Math.min(p, maxPage));
-  }, [filteredAndSortedServices.length]);
+    setCurrentPage(1);
+  }, [searchTerm, aplicaFilter, estadoFilter, proveedorFilter]);
 
-  const paginatedServices = filteredAndSortedServices.slice(
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredServices.length / itemsPerPage));
+    setCurrentPage((p) => Math.min(p, maxPage));
+  }, [filteredServices.length]);
+
+  const paginatedServices = filteredServices.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
-
-  const sanitizeNombre = (value: string) => value.replace(/[^A-Za-zÀ-ÿ\s]/g, "");
-  const sanitizePrecio = (value: string) => {
-    const sanitized = value.replace(/[^0-9.]/g, "");
-    const parts = sanitized.split(".");
-    return parts.length > 1
-      ? `${parts[0]}.${parts.slice(1).join("")}`
-      : parts[0];
-  };
-  const sanitizeDescripcion = (value: string) => value.replace(/[^A-Za-z0-9À-ÿ\s]/g, "");
-
-  const validarFormulario = () => {
-    const errors: Record<string, string> = {};
-    const nombre = formData.nombre.trim();
-    const precio = formData.precio.trim();
-    const descripcion = formData.descripcion.trim();
-    const proveedor = formData.id_proveedores;
-
-    if (!nombre) {
-      errors.nombre = "El nombre es obligatorio.";
-    } else if (!/^[A-Za-zÀ-ÿ\s]+$/.test(nombre)) {
-      errors.nombre = "El nombre solo puede contener letras.";
-    }
-
-    if (!precio) {
-      errors.precio = "El precio es obligatorio.";
-    } else if (!/^\d+(\.\d{1,2})?$/.test(precio)) {
-      errors.precio = "El precio debe ser un número válido.";
-    } else if (Number(precio) < 0) {
-      errors.precio = "El precio no puede ser negativo.";
-    }
-
-    if (!descripcion) {
-      errors.descripcion = "La descripción es obligatoria.";
-    } else if (!/^[A-Za-z0-9À-ÿ\s]+$/.test(descripcion)) {
-      errors.descripcion = "La descripción solo puede contener letras y números.";
-    }
-
-    if (!proveedor) {
-      errors.id_proveedores = "Selecciona un proveedor.";
-    }
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
 
   const handleCreate = async () => {
     if (!canCreateService) {
@@ -322,20 +317,46 @@ export function ServiceManagement() {
       return;
     }
 
-    if (!validarFormulario()) return;
+    // Validaciones estrictas de campos obligatorios
+    if (!formData.nombre.trim()) {
+      toast.error("El nombre es obligatorio");
+      return;
+    }
+    if (!formData.precio.trim()) {
+      toast.error("El precio es obligatorio");
+      return;
+    }
+    if (!formData.descripcion.trim()) {
+      toast.error("La descripción es obligatoria");
+      return;
+    }
+    if (!formData.id_proveedores) {
+      toast.error("El proveedor es obligatorio");
+      return;
+    }
+    if (!formData.aplica_a) {
+      toast.error("El ámbito del servicio es obligatorio");
+      return;
+    }
+
+    // Quitar puntos de formato para mandarlo como número limpio al backend
+    const numericPrice = Number(formData.precio.replace(/\./g, ""));
+    if (isNaN(numericPrice) || numericPrice <= 0) {
+      toast.error("El precio debe ser un número positivo");
+      return;
+    }
 
     try {
       await serviciosAPI.create({
         nombre: formData.nombre.trim(),
         descripcion: formData.descripcion.trim(),
-        precio: Number(formData.precio),
+        precio: numericPrice,
         id_proveedores: Number(formData.id_proveedores),
-        estado: formData.estado,
+        aplica_a: formData.aplica_a,
       });
       toast.success("Servicio creado exitosamente");
       setShowCreateDialog(false);
       setFormData(emptyForm);
-      setFormErrors({});
       await cargarServicios();
       setCurrentPage(1);
     } catch (error: any) {
@@ -350,14 +371,19 @@ export function ServiceManagement() {
     }
 
     setSelectedService(service);
+
+    // Dar formato con puntos al precio de base de datos antes de cargarlo en el form
+    const rawPrice = service.precio?.toString() || "";
+    const cleanDigits = rawPrice.replace(/\D/g, "").slice(0, 10);
+    const formattedPrice = cleanDigits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
     setFormData({
       nombre: service.nombre || "",
       descripcion: service.descripcion || "",
-      precio: service.precio?.toString() || "",
+      precio: formattedPrice,
       id_proveedores: service.id_proveedores?.toString() || "",
-      estado: Boolean(service.estado),
+      aplica_a: normalizarAplicaServicio(service.aplica_a),
     });
-    setFormErrors({});
     setShowEditDialog(true);
   };
 
@@ -368,21 +394,48 @@ export function ServiceManagement() {
     }
 
     if (!selectedService) return;
-    if (!validarFormulario()) return;
+
+    // Validaciones estrictas de campos obligatorios en Edición
+    if (!formData.nombre.trim()) {
+      toast.error("El nombre es obligatorio");
+      return;
+    }
+    if (!formData.precio.trim()) {
+      toast.error("El precio es obligatorio");
+      return;
+    }
+    if (!formData.descripcion.trim()) {
+      toast.error("La descripción es obligatoria");
+      return;
+    }
+    if (!formData.id_proveedores) {
+      toast.error("El proveedor es obligatorio");
+      return;
+    }
+    if (!formData.aplica_a) {
+      toast.error("El ámbito del servicio es obligatorio");
+      return;
+    }
+
+    // Quitar puntos de formato para enviarlo al backend
+    const numericPrice = Number(formData.precio.replace(/\./g, ""));
+    if (isNaN(numericPrice) || numericPrice <= 0) {
+      toast.error("El precio debe ser un número positivo");
+      return;
+    }
 
     try {
       await serviciosAPI.update(selectedService.id_servicio, {
         nombre: formData.nombre.trim(),
         descripcion: formData.descripcion.trim(),
-        precio: Number(formData.precio),
+        precio: numericPrice,
         id_proveedores: Number(formData.id_proveedores),
-        estado: formData.estado,
+        aplica_a: formData.aplica_a,
       } as any);
       toast.success("Servicio actualizado exitosamente");
       setShowEditDialog(false);
       setFormData(emptyForm);
       setSelectedService(null);
-      setFormErrors({});
       await cargarServicios();
     } catch (error: any) {
       toast.error(error?.message || "No se pudo actualizar el servicio");
@@ -407,38 +460,33 @@ export function ServiceManagement() {
     }
   };
 
-  const handleToggleEstado = async (service: ServicioConProveedor) => {
+  const handleToggleEstado = (service: ServicioConProveedor) => {
     if (!canEditService) {
       toast.error('No tienes permiso para editar servicios');
       return;
     }
+    setServiceToToggle(service);
+    setShowConfirmToggle(true);
+  };
 
+  const confirmToggleEstado = async () => {
+    if (!serviceToToggle) return;
+    
+    const activo = servicioEstaActivo(serviceToToggle);
+    const servicioId = serviceToToggle.id_servicio;
+    
+    setShowConfirmToggle(false);
+    setServiceToToggle(null);
+    
     try {
-      await serviciosAPI.update(service.id_servicio, {
-        estado: !service.estado,
+      await serviciosAPI.update(servicioId, {
+        estado: !activo,
       } as any);
-      toast.success(`Servicio ${!service.estado ? 'activado' : 'desactivado'}`);
+      toast.success(`Servicio ${!activo ? 'activado' : 'desactivado'}`);
       await cargarServicios();
     } catch (error: any) {
       toast.error(error?.message || "No se pudo cambiar el estado");
     }
-  };
-
-  const handleApplyFilter = () => {
-    setShowFilterDialog(false);
-    setCurrentPage(1);
-  };
-
-  const handleClearFilter = () => {
-    setFilterCriteria({ type: 'nombre', value: '' });
-    setShowFilterDialog(false);
-    setCurrentPage(1);
-  };
-
-  const handleSortChange = (value: string) => {
-    const [field, direction] = value.split('-');
-    setSortCriteria({ field: field as any, direction: direction as 'asc' | 'desc' });
-    setCurrentPage(1);
   };
 
   if (!permisos.loadingRoles && !canViewServices) {
@@ -466,7 +514,6 @@ export function ServiceManagement() {
         {canCreateService && (
           <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={() => {
             setFormData(emptyForm);
-            setFormErrors({});
             setShowCreateDialog(true);
           }}>
             <Plus className="w-4 h-4 mr-2" /> Crear Servicio
@@ -475,77 +522,105 @@ export function ServiceManagement() {
       </div>
 
       <Card>
-        <CardContent className="p-4">
-          <div className="flex items-center space-x-4">
-            <Input
-              placeholder="Buscar servicios..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="flex-1 border-green-200"
-            />
-            <Dialog open={showFilterDialog} onOpenChange={setShowFilterDialog}>
-              <DialogTrigger asChild>
-                <Button variant="outline" className="border-green-200 text-green-700">
-                  <Filter className="w-4 h-4 mr-2" />
-                  Filtrar
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Filtrar Servicios</DialogTitle>
-                </DialogHeader>
-                <div className="grid gap-4 py-4">
-                  <div className="grid grid-cols-4 items-center gap-4">
-                    <Label htmlFor="filter-type" className="text-right">Filtrar por</Label>
-                    <Select value={filterCriteria.type} onValueChange={(value: any) => setFilterCriteria({ ...filterCriteria, type: value })}>
-                      <SelectTrigger className="col-span-3">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="nombre">Nombre</SelectItem>
-                        <SelectItem value="estado">Estado</SelectItem>
-                        <SelectItem value="proveedor">Proveedor</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="grid grid-cols-4 items-center gap-4">
-                    <Label htmlFor="filter-value" className="text-right">Valor</Label>
-                    <Input
-                      id="filter-value"
-                      value={filterCriteria.value}
-                      onChange={(e) => setFilterCriteria({ ...filterCriteria, value: e.target.value })}
-                      placeholder={`Buscar por ${filterCriteria.type}`}
-                      className="col-span-3"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end space-x-2">
-                  <Button variant="outline" onClick={handleClearFilter}>Limpiar</Button>
-                  <Button onClick={handleApplyFilter}>Aplicar</Button>
-                </div>
-              </DialogContent>
-            </Dialog>
-            <Select value={`${sortCriteria.field}-${sortCriteria.direction}`} onValueChange={handleSortChange}>
-              <SelectTrigger className="w-[200px] border-green-200">
-                <ArrowUpDown className="mr-2 h-4 w-4" />
-                <SelectValue placeholder="Ordenar por" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="nombre-asc">Nombre A-Z</SelectItem>
-                <SelectItem value="nombre-desc">Nombre Z-A</SelectItem>
-                <SelectItem value="estado-asc">Estado Activo primero</SelectItem>
-                <SelectItem value="estado-desc">Estado Inactivo primero</SelectItem>
-                <SelectItem value="proveedor-asc">Proveedor A-Z</SelectItem>
-                <SelectItem value="proveedor-desc">Proveedor Z-A</SelectItem>
-              </SelectContent>
-            </Select>
+        <CardContent className="p-4 space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="relative flex-1 min-w-0 max-w-xl">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-green-600" />
+              <Input
+                placeholder="Buscar por nombre, descripción, proveedor, precio, ámbito..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 border-green-200 w-full"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-green-200 hover:bg-green-50 shrink-0"
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              <Filter className="w-4 h-4 mr-2 text-green-600" />
+              Filtros
+              {hasActiveFilters ? (
+                <Badge variant="secondary" className="ml-2 bg-emerald-100 text-emerald-800">
+                  Activos
+                </Badge>
+              ) : null}
+            </Button>
           </div>
+
+          {filtersOpen ? (
+            <div className="flex flex-col sm:flex-row flex-wrap gap-3 rounded-lg border border-green-100 bg-green-50/50 p-4">
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Ámbito</Label>
+                <Select value={aplicaFilter} onValueChange={setAplicaFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="ruta">Ruta</SelectItem>
+                    <SelectItem value="finca">Finca</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Estado</Label>
+                <Select value={estadoFilter} onValueChange={setEstadoFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="activo">Activo</SelectItem>
+                    <SelectItem value="inactivo">Inactivo</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[200px] flex-1">
+                <Label className="text-xs text-green-800">Proveedor</Label>
+                <Select value={proveedorFilter} onValueChange={setProveedorFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="__sin__">Sin proveedor</SelectItem>
+                    {proveedorOptions.map(([id, nombre]) => (
+                      <SelectItem key={id} value={String(id)}>
+                        {nombre}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-green-800 hover:bg-green-100"
+                  disabled={!hasActiveFilters && !searchTerm.trim()}
+                  onClick={() => {
+                    clearFilters();
+                    setSearchTerm("");
+                  }}
+                >
+                  Limpiar búsqueda y filtros
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
       <Card className="border-green-200">
         <CardHeader>
-          <CardTitle className="text-green-800">Servicios ({filteredAndSortedServices.length})</CardTitle>
+          <CardTitle className="text-green-800">
+            Servicios ({filteredServices.length}
+            {services.length !== filteredServices.length ? ` de ${services.length}` : ""})
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -556,6 +631,7 @@ export function ServiceManagement() {
                 <TableRow className="border-green-200">
                   <TableHead>Nombre</TableHead>
                   <TableHead>Descripción</TableHead>
+                  <TableHead>Ámbito</TableHead>
                   <TableHead>Precio</TableHead>
                   <TableHead>Proveedor</TableHead>
                   <TableHead>Estado</TableHead>
@@ -570,6 +646,18 @@ export function ServiceManagement() {
                       {service.descripcion || "—"}
                     </TableCell>
                     <TableCell>
+                      <Badge
+                        variant="secondary"
+                        className={
+                          normalizarAplicaServicio(service.aplica_a) === "finca"
+                            ? "bg-sky-100 text-sky-900 border-sky-200"
+                            : "bg-amber-50 text-amber-900 border-amber-200"
+                        }
+                      >
+                        {normalizarAplicaServicio(service.aplica_a) === "finca" ? "Finca" : "Ruta"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
                       {service.precio != null
                         ? `$${Number(service.precio).toLocaleString("es-CO")}`
                         : "—"}
@@ -582,7 +670,7 @@ export function ServiceManagement() {
                     </TableCell>
                     <TableCell>
                       <Switch
-                        checked={service.estado === true}
+                        checked={servicioEstaActivo(service)}
                         onCheckedChange={() => handleToggleEstado(service)}
                         disabled={!canEditService}
                         className="data-[state=checked]:bg-green-600"
@@ -615,9 +703,13 @@ export function ServiceManagement() {
                 ))}
                 {paginatedServices.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-gray-500">
+                    <TableCell colSpan={7} className="text-center py-8 text-gray-500">
                       <Settings className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                      <p>No hay servicios disponibles</p>
+                      <p>
+                        {services.length === 0
+                          ? "No hay servicios disponibles"
+                          : "Ningún servicio coincide con la búsqueda o los filtros"}
+                      </p>
                     </TableCell>
                   </TableRow>
                 )}
@@ -625,28 +717,35 @@ export function ServiceManagement() {
             </Table>
           )}
 
-          {Math.ceil(filteredAndSortedServices.length / itemsPerPage) > 1 && (
-            <div className="flex items-center justify-between mt-4 pt-4 border-t border-green-100">
+          {filteredServices.length > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4 pt-4 border-t border-green-100">
               <p className="text-sm text-gray-600">
-                Mostrando {(currentPage - 1) * itemsPerPage + 1} a {Math.min(currentPage * itemsPerPage, filteredAndSortedServices.length)} de {filteredAndSortedServices.length}
+                Mostrando {(currentPage - 1) * itemsPerPage + 1} a{" "}
+                {Math.min(currentPage * itemsPerPage, filteredServices.length)} de {filteredServices.length} resultado
+                {filteredServices.length === 1 ? "" : "s"}
+                {services.length !== filteredServices.length ? (
+                  <span className="text-gray-500"> (catálogo: {services.length})</span>
+                ) : null}
               </p>
-              <div className="flex gap-2">
-                <Button size="sm" variant="outline"
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="border-green-200 text-green-700">
-                  <ChevronLeft className="w-4 h-4" />
-                </Button>
-                <span className="text-sm text-gray-600 self-center">
-                  Página {currentPage} de {Math.ceil(filteredAndSortedServices.length / itemsPerPage)}
-                </span>
-                <Button size="sm" variant="outline"
-                  onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredAndSortedServices.length / itemsPerPage), p + 1))}
-                  disabled={currentPage === Math.ceil(filteredAndSortedServices.length / itemsPerPage)}
-                  className="border-green-200 text-green-700">
-                  <ChevronRight className="w-4 h-4" />
-                </Button>
-              </div>
+              {Math.ceil(filteredServices.length / itemsPerPage) > 1 ? (
+                <div className="flex gap-2 items-center">
+                  <Button size="sm" variant="outline"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="border-green-200 text-green-700">
+                    <ChevronLeft className="w-4 h-4" />
+                  </Button>
+                  <span className="text-sm text-gray-600">
+                    Página {currentPage} de {Math.ceil(filteredServices.length / itemsPerPage)}
+                  </span>
+                  <Button size="sm" variant="outline"
+                    onClick={() => setCurrentPage(p => Math.min(Math.ceil(filteredServices.length / itemsPerPage), p + 1))}
+                    disabled={currentPage === Math.ceil(filteredServices.length / itemsPerPage)}
+                    className="border-green-200 text-green-700">
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              ) : null}
             </div>
           )}
         </CardContent>
@@ -657,18 +756,9 @@ export function ServiceManagement() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-green-800">Crear Nuevo Servicio</DialogTitle>
-            <DialogDescription>Completa los campos para registrar un nuevo servicio.</DialogDescription>
+            <DialogDescription>Completa todos los campos obligatorios para registrar un nuevo servicio.</DialogDescription>
           </DialogHeader>
-          <ServiceFormFields
-            formData={formData}
-            formErrors={formErrors}
-            proveedores={proveedores}
-            onNombreChange={(value) => setFormData((f) => ({ ...f, nombre: sanitizeNombre(value) }))}
-            onPrecioChange={(value) => setFormData((f) => ({ ...f, precio: sanitizePrecio(value) }))}
-            onDescripcionChange={(value) => setFormData((f) => ({ ...f, descripcion: sanitizeDescripcion(value) }))}
-            onProveedorChange={(value) => setFormData((f) => ({ ...f, id_proveedores: value }))}
-            onEstadoChange={(value) => setFormData((f) => ({ ...f, estado: value }))}
-          />
+          <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleCreate}>
@@ -683,18 +773,9 @@ export function ServiceManagement() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-green-800">Editar Servicio</DialogTitle>
-            <DialogDescription>Modifica la información del servicio.</DialogDescription>
+            <DialogDescription>Modifica la información del servicio. Todos los campos son obligatorios.</DialogDescription>
           </DialogHeader>
-          <ServiceFormFields
-            formData={formData}
-            formErrors={formErrors}
-            proveedores={proveedores}
-            onNombreChange={(value) => setFormData((f) => ({ ...f, nombre: sanitizeNombre(value) }))}
-            onPrecioChange={(value) => setFormData((f) => ({ ...f, precio: sanitizePrecio(value) }))}
-            onDescripcionChange={(value) => setFormData((f) => ({ ...f, descripcion: sanitizeDescripcion(value) }))}
-            onProveedorChange={(value) => setFormData((f) => ({ ...f, id_proveedores: value }))}
-            onEstadoChange={(value) => setFormData((f) => ({ ...f, estado: value }))}
-          />
+          <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancelar</Button>
             <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleUpdate}>
@@ -715,9 +796,13 @@ export function ServiceManagement() {
               {[
                 { label: "Nombre", value: selectedService.nombre },
                 { label: "Descripción", value: selectedService.descripcion || "—" },
+                {
+                  label: "Ámbito",
+                  value: normalizarAplicaServicio(selectedService.aplica_a) === "finca" ? "Finca" : "Ruta",
+                },
                 { label: "Precio", value: selectedService.precio ? `$${Number(selectedService.precio).toLocaleString("es-CO")}` : "—" },
                 { label: "Proveedor", value: selectedService.proveedor_nombre || "Sin proveedor" },
-                { label: "Estado", value: selectedService.estado ? "Activo" : "Inactivo" },
+                { label: "Estado", value: servicioEstaActivo(selectedService) ? "Activo" : "Inactivo" },
                 { label: "Fecha creación", value: selectedService.fecha_creacion ? new Date(selectedService.fecha_creacion).toLocaleDateString('es-CO') : "—" },
               ].map(({ label, value }) => (
                 <div key={label} className="flex justify-between py-2 border-b border-green-100">
@@ -729,13 +814,35 @@ export function ServiceManagement() {
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowViewDialog(false)}>Cerrar</Button>
-            <Button className="bg-green-600 hover:bg-green-700 text-white"
-              onClick={() => { setShowViewDialog(false); if (selectedService) handleEdit(selectedService); }}>
-              <Edit className="w-4 h-4 mr-2" /> Editar
-            </Button>
+            {canEditService && (
+              <Button className="bg-green-600 hover:bg-green-700 text-white"
+                onClick={() => { setShowViewDialog(false); if (selectedService) handleEdit(selectedService); }}>
+                <Edit className="w-4 h-4 mr-2" /> Editar
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Alert Cambio de Estado */}
+      <AlertDialog open={showConfirmToggle} onOpenChange={setShowConfirmToggle}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar cambio de estado</AlertDialogTitle>
+            <AlertDialogDescription>
+              {serviceToToggle && servicioEstaActivo(serviceToToggle)
+                ? `¿Desactivar el servicio "${serviceToToggle.nombre}"? Los clientes no podrán verlo en las reservas.`
+                : `¿Activar el servicio "${serviceToToggle?.nombre}"? Estará disponible en las reservas.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmToggleEstado} className="bg-green-600 hover:bg-green-700">
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Dialog Eliminar */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>

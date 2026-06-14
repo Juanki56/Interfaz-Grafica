@@ -538,6 +538,22 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
       toast.success(decision === 'Aprobado' ? 'Comprobante aprobado correctamente' : 'Comprobante rechazado correctamente');
       await loadData();
       const updated = await pagosAPI.getById(installment.backendId);
+
+      const rid = Number(updated.id_reserva);
+      if (Number.isFinite(rid) && rid > 0) {
+        try {
+          if (decision === 'Rechazado') {
+            await reservasAPI.update(rid, {
+              motivo_desaprobacion_pago: reason?.trim() ? reason.trim() : null,
+            });
+          } else if (decision === 'Aprobado') {
+            await reservasAPI.update(rid, { motivo_desaprobacion_pago: null });
+          }
+        } catch (e) {
+          console.warn('No se pudo guardar motivo_desaprobacion_pago en la reserva:', e);
+        }
+      }
+
       const venta = await ventasAPI.getById(Number(updated.id_venta));
       const reserva = await reservasAPI.getById(Number(updated.id_reserva));
       setSelectedInstallment(mapPagoToInstallment(updated, venta, reserva));

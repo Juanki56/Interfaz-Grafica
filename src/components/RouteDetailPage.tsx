@@ -26,6 +26,7 @@ import {
 } from '../services/api';
 import { useAuth } from '../App';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 
 interface RouteDetailPageProps {
   routeId: string;
@@ -59,12 +60,6 @@ function orderGalleryUrls(urls: string[]): string[] {
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
-}
-
-function formatDurationDays(duracion_dias?: number | null): string {
-  if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
-  const days = Number(duracion_dias);
-  return days === 1 ? '1 día' : `${days} días`;
 }
 
 export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps) {
@@ -411,8 +406,8 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
               <div className="flex items-center space-x-3">
                 <Clock className="w-5 h-5 text-green-600 shrink-0" />
                 <div>
-                  <p className="text-sm text-gray-500">Duración</p>
-                  <p className="text-gray-800 font-medium">{formatDurationDays(route.duracion_dias)}</p>
+                  <p className="text-sm text-gray-500">Duración estimada</p>
+                  <p className="text-gray-800 font-medium">{formatRutaDuracionHoras(route.duracion_dias)}</p>
                 </div>
               </div>
 
@@ -710,7 +705,7 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           description: normalizeString(route.descripcion) || '—',
           price: price ?? 0,
           image: route.imagen_url || CATALOG_IMAGE_PLACEHOLDER,
-          duration: formatDurationDays(route.duracion_dias),
+          duration: formatRutaDuracionHoras(route.duracion_dias),
           difficulty,
           location: locationRaw || '—',
           capacity: capacity ?? 0,

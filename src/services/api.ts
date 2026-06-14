@@ -71,6 +71,17 @@ export interface Empleado {
   fecha_registro?: string | null;
 }
 
+/** Filas de `detalle_reserva_acompanante` incluidas en GET /api/reservas/:id */
+export interface DetalleReservaAcompanante {
+  id_detalle_reserva_acompanante?: number;
+  nombre?: string | null;
+  apellido?: string | null;
+  tipo_documento?: string | null;
+  numero_documento?: string | null;
+  telefono?: string | null;
+  fecha_nacimiento?: string | null;
+}
+
 export interface Reserva {
   id_reserva?: number;
   id?: number;
@@ -79,6 +90,10 @@ export interface Reserva {
   id_cliente: number;
   fecha_reserva: string;
   estado: string;
+  /** Cuándo se creó la reserva (si el backend lo envía). Sirve para ordenar “última reserva” en cliente. */
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+  fecha_registro?: string | null;
 
   // Totales (según implementación backend puede venir como total o monto_total)
   total?: number | string | null;
@@ -92,11 +107,19 @@ export interface Reserva {
   saldo_pendiente?: number | string | null;
   metodo_pago?: string | null;
 
+  /** Motivo mostrado al cliente cuando el equipo rechaza un comprobante / abono (persistido en la reserva). */
+  motivo_desaprobacion_pago?: string | null;
+
+  fecha_cancelacion?: string | null;
+  motivo_cancelacion?: string | null;
+
   // Campos de JOIN (si el backend devuelve vista enriquecida)
   cliente_nombre?: string | null;
   cliente_apellido?: string | null;
   cliente_email?: string | null;
   cliente_telefono?: string | null;
+
+  acompanantes?: DetalleReservaAcompanante[] | null;
 
   // Detalles opcionales (según implementación backend)
   id_programacion?: number | null;
@@ -123,12 +146,17 @@ export interface Ruta {
   ubicacion?: string | null;          // text/varchar NULL (según BD)
   capacidad_maxima?: number | null;   // int4 NULL (según BD)
   destacado?: boolean | null;         // bool NULL (según BD)
-  duracion_dias?: number | null;      // int4 NULL en BD
+  /** Horas de duración de la ruta (columna BD `duracion_dias`; valor = horas). */
+  duracion_dias?: number | null;
   precio_base?: number | null;        // numeric NULL en BD
   dificultad?: string | null;         // varchar NULL en BD
   imagen_url?: string | null;         // text NULL en BD
   estado?: boolean | null;            // bool NULL en BD
   fecha_creacion?: string | null;     // timestamp NULL en BD
+  /** Texto largo para participantes (cliente / público): qué llevar, hidratación, puntualidad, etc. */
+  recomendaciones_participantes?: string | null;
+  /** Briefing operativo solo para guías y equipo OCCITOUR (no mostrar en catálogo público). */
+  briefing_operativo_equipo?: string | null;
   servicios_predefinidos?: RutaServicioPredefinido[] | null;
   servicios_opcionales?: RutaServicioOpcional[] | null;
 }
@@ -411,8 +439,16 @@ export interface Programacion {
   precio_programacion?: number | string | null;
   estado?: string | null;
   es_personalizada?: boolean | null;
+  /** Si la salida proviene de aprobar una solicitud personalizada */
+  id_solicitud_personalizada?: number | null;
+  /**
+   * Guías de apoyo además del `id_empleado` principal (si el backend lo expone en GET/PUT).
+   */
+  guias_apoyo?: number[] | null;
 
   ruta_nombre?: string | null;
+  /** URL de imagen si el backend la incluye en el JOIN (p. ej. detalle de programación). */
+  ruta_imagen_url?: string | null;
   empleado_nombre?: string | null;
   empleado_apellido?: string | null;
 }
@@ -505,6 +541,24 @@ export interface SolicitudPersonalizada {
   id_empleado_cotizador?: number | null;
   id_programacion?: number | null;
 
+  /**
+   * Revisión operativa (staff, PATCH /cotizar). Si el backend las persiste, prevalecen
+   * sobre fecha_deseada / fecha_regreso_deseada al reabrir la solicitud.
+   */
+  fecha_salida_operativa?: string | null;
+  fecha_regreso_operativa?: string | null;
+  hora_salida_operativa?: string | null;
+  hora_regreso_operativa?: string | null;
+  /** Guía principal acordado antes de convertir (opcional hasta convertir). */
+  id_empleado_guia?: number | null;
+  /** Hasta un guía de apoyo adicional (2 guías en total con el principal). */
+  guias_apoyo_preasignados?: number[] | null;
+
+  /** Fecha de creación de la solicitud si el API la expone. */
+  fecha_creacion?: string | null;
+  created_at?: string | null;
+  fecha_registro?: string | null;
+
   // Campos enriquecidos (JOIN backend)
   reserva_codigo_qr?: string | null;
   reserva_estado?: string | null;
@@ -518,6 +572,8 @@ export interface SolicitudPersonalizada {
   id_venta?: number | null;
   venta_estado_pago?: string | null;
   venta_saldo_pendiente?: number | string | null;
+  venta_monto_total?: number | string | null;
+  venta_monto_pagado?: number | string | null;
 }
 
 export interface PagoSolicitud {
@@ -587,8 +643,17 @@ export interface Venta {
 // HELPER FUNCTIONS
 // =====================================================
 
-async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const token = localStorage.getItem('token');
+type FetchApiOptions = RequestInit & {
+  /**
+   * Evita adjuntar Authorization aunque exista `token`.
+   * Útil para endpoints públicos que fallan si se envía un JWT vencido.
+   */
+  skipAuth?: boolean;
+};
+
+async function fetchAPI<T = any>(endpoint: string, options: FetchApiOptions = {}): Promise<T> {
+  const { skipAuth, ...requestInit } = options;
+  const token = skipAuth ? null : localStorage.getItem('token');
   const isFormDataBody =
     typeof FormData !== 'undefined' && options?.body != null && options.body instanceof FormData;
 
@@ -598,7 +663,7 @@ async function fetchAPI<T = any>(endpoint: string, options: RequestInit = {}): P
   };
 
   const config: RequestInit = {
-    ...options,
+    ...requestInit,
     headers: {
       ...baseHeaders,
       ...(options.headers as Record<string, string> | undefined),
@@ -670,8 +735,36 @@ function unwrapApiArray<T>(payload: any): T[] {
   const data = payload?.data;
   if (Array.isArray(data)) return data as T[];
 
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const dataObj = data as Record<string, unknown>;
+    const nestedImagenes = dataObj.imagenes;
+    if (Array.isArray(nestedImagenes)) return nestedImagenes as T[];
+    const nestedUrls = dataObj.urls;
+    if (Array.isArray(nestedUrls)) return nestedUrls as T[];
+  }
+
   const nestedData = payload?.data?.data;
   if (Array.isArray(nestedData)) return nestedData as T[];
+
+  if (nestedData && typeof nestedData === 'object' && !Array.isArray(nestedData)) {
+    const nd = nestedData as Record<string, unknown>;
+    const ndImgs = nd.imagenes;
+    if (Array.isArray(ndImgs)) return ndImgs as T[];
+    const ndUrls = nd.urls;
+    if (Array.isArray(ndUrls)) return ndUrls as T[];
+  }
+
+  const rows = payload?.rows;
+  if (Array.isArray(rows)) return rows as T[];
+
+  const results = payload?.results;
+  if (Array.isArray(results)) return results as T[];
+
+  const records = payload?.records;
+  if (Array.isArray(records)) return records as T[];
+
+  const files = payload?.files;
+  if (Array.isArray(files)) return files as T[];
 
   const servicios = payload?.servicios;
   if (Array.isArray(servicios)) return servicios as T[];
@@ -682,7 +775,187 @@ function unwrapApiArray<T>(payload: any): T[] {
   const items = payload?.items;
   if (Array.isArray(items)) return items as T[];
 
+  const imagenes = payload?.imagenes;
+  if (Array.isArray(imagenes)) return imagenes as T[];
+
+  const urls = payload?.urls;
+  if (Array.isArray(urls)) return urls as T[];
+
   return [];
+}
+
+/** Normaliza entradas de GET .../imagenes (strings u objetos con url). */
+function normalizeImagenesListPayload(items: unknown[]): string[] {
+  const out: string[] = [];
+  for (const item of items) {
+    if (typeof item === 'string') {
+      const s = item.trim();
+      if (s) out.push(s);
+      continue;
+    }
+    if (item && typeof item === 'object') {
+      const o = item as Record<string, unknown>;
+      const s = String(
+        o.url ??
+          o.imagen_url ??
+          o.imagen ??
+          o.uri ??
+          o.path ??
+          o.file_url ??
+          o.publicUrl ??
+          o.signedUrl ??
+          o.link ??
+          o.href ??
+          o.src ??
+          ''
+      ).trim();
+      if (s) out.push(s);
+    }
+  }
+  return out;
+}
+
+/**
+ * Lista de URLs de GET .../imagenes: tolera envoltorios raros o un único objeto con `url`.
+ */
+function coerceImagenesApiResponseToUrls(payload: any): string[] {
+  const fromUnwrap = normalizeImagenesListPayload(unwrapApiArray<unknown>(payload));
+  if (fromUnwrap.length) return fromUnwrap;
+  if (typeof payload === 'string') {
+    const s = payload.trim();
+    return s ? [s] : [];
+  }
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    return normalizeImagenesListPayload([payload]);
+  }
+  return [];
+}
+
+// =====================================================
+// CACHE LIGERO (solo memoria) PARA LISTADOS PÚBLICOS
+// =====================================================
+
+type ApiMemoryCacheEntry<T> = {
+  expiresAt: number;
+  value: T;
+};
+
+const apiMemoryCache = new Map<string, ApiMemoryCacheEntry<any>>();
+const apiInFlight = new Map<string, Promise<any>>();
+
+function appendQuery(endpoint: string, query?: Record<string, unknown>): string {
+  if (!query) return endpoint;
+  const params = new URLSearchParams();
+  for (const [key, raw] of Object.entries(query)) {
+    if (raw == null) continue;
+    const value = typeof raw === 'string' ? raw.trim() : String(raw);
+    if (!value) continue;
+    params.set(key, value);
+  }
+
+  const qs = params.toString();
+  if (!qs) return endpoint;
+  return endpoint.includes('?') ? `${endpoint}&${qs}` : `${endpoint}?${qs}`;
+}
+
+async function fetchCached<T>(cacheKey: string, ttlMs: number, fetcher: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const cached = apiMemoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.value as T;
+
+  const inFlight = apiInFlight.get(cacheKey);
+  if (inFlight) return (await inFlight) as T;
+
+  const p = (async () => {
+    try {
+      const value = await fetcher();
+      if (ttlMs > 0) {
+        apiMemoryCache.set(cacheKey, { expiresAt: now + ttlMs, value });
+      }
+      return value;
+    } finally {
+      apiInFlight.delete(cacheKey);
+    }
+  })();
+
+  apiInFlight.set(cacheKey, p);
+  return (await p) as T;
+}
+
+/**
+ * Primera URL del listado GET .../imagenes (fotos en Storage).
+ */
+function firstPublicImageUrlFromList(imagenes: string[] | null | undefined): string | null {
+  const urls = (imagenes ?? []).map((u) => String(u || '').trim()).filter(Boolean);
+  return urls[0] ?? null;
+}
+
+/** Imagen externa explícita (no Supabase) — no la sustituimos por el bucket. */
+function isExplicitExternalImageUrl(url: string): boolean {
+  const s = String(url ?? '').trim();
+  return /^https?:\/\//i.test(s) && !/supabase\.co/i.test(s);
+}
+
+/**
+ * Cards / home: si hay archivos en Storage, usa la primera URL.
+ * Sustituye `imagen_url` rota o antigua de Supabase en BD; respeta solo URLs externas no-Supabase.
+ */
+async function enrichRutasImagenFromStorageIfMissing(
+  rutas: Ruta[],
+  skipAuthForImagenes: boolean
+): Promise<Ruta[]> {
+  if (!Array.isArray(rutas) || rutas.length === 0) return rutas;
+  return Promise.all(
+    rutas.map(async (r) => {
+      if (!r || typeof r !== 'object') return r;
+      const id = Number(r.id_ruta);
+      if (!Number.isFinite(id) || id <= 0) return r;
+      try {
+        const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`, {
+          skipAuth: skipAuthForImagenes,
+        });
+        const imgs = coerceImagenesApiResponseToUrls(response);
+        const fromStorage = firstPublicImageUrlFromList(imgs);
+        if (fromStorage) {
+          const dbUrl = String(r.imagen_url ?? '').trim();
+          if (isExplicitExternalImageUrl(dbUrl)) return r;
+          return { ...r, imagen_url: fromStorage };
+        }
+      } catch {
+        // ignorar
+      }
+      return r;
+    })
+  );
+}
+
+async function enrichFincasImagenFromStorageIfMissing(
+  fincas: Finca[],
+  skipAuthForImagenes: boolean
+): Promise<Finca[]> {
+  if (!Array.isArray(fincas) || fincas.length === 0) return fincas;
+  return Promise.all(
+    fincas.map(async (f) => {
+      if (!f || typeof f !== 'object') return f;
+      const id = Number(f.id_finca);
+      if (!Number.isFinite(id) || id <= 0) return f;
+      try {
+        const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`, {
+          skipAuth: skipAuthForImagenes,
+        });
+        const imgs = coerceImagenesApiResponseToUrls(response);
+        const fromStorage = firstPublicImageUrlFromList(imgs);
+        if (fromStorage) {
+          const dbUrl = String(f.imagen_principal ?? '').trim();
+          if (isExplicitExternalImageUrl(dbUrl)) return f;
+          return { ...f, imagen_principal: fromStorage };
+        }
+      } catch {
+        // ignorar
+      }
+      return f;
+    })
+  );
 }
 
 // =====================================================
@@ -924,14 +1197,72 @@ export const reservasAPI = {
     });
   },
 
-  cancelar: async (id: number, motivo: string) => {
+  cancelar: async (
+    id: number,
+    motivo: string,
+    options?: {
+      cancelado_por?: string;
+      /** Si el backend lo soporta, libera cupos / vínculo con programación al cancelar. */
+      liberar_programacion?: boolean;
+    },
+  ) => {
+    const body: Record<string, unknown> = {
+      motivo_cancelacion: motivo,
+      cancelado_por: options?.cancelado_por ?? 'Usuario',
+    };
+    if (options?.liberar_programacion) {
+      body.liberar_programacion = true;
+    }
     return fetchAPI(`/api/reservas/${id}/cancelar`, {
       method: 'POST',
-      body: JSON.stringify({
-        motivo_cancelacion: motivo,
-        cancelado_por: 'Usuario'
-      }),
+      body: JSON.stringify(body),
     });
+  },
+
+  /**
+   * Intenta eliminar cada vínculo reserva↔programación (detalle).
+   * Útil como refuerzo si el endpoint de cancelar aún no desvincula. Ignora fallos por fila.
+   */
+  liberarProgramacionesVinculadas: async (
+    idReserva: number,
+  ): Promise<{ intentos: number; eliminados: number }> => {
+    let intentos = 0;
+    let eliminados = 0;
+    let detalle: Reserva;
+    try {
+      detalle = await reservasAPI.getById(idReserva);
+    } catch {
+      return { intentos: 0, eliminados: 0 };
+    }
+    const lines = Array.isArray((detalle as any).programaciones) ? (detalle as any).programaciones : [];
+    for (const line of lines) {
+      const idDet = Number(line?.id_detalle_reserva_programacion ?? line?.id_detalle ?? line?.id ?? 0);
+      const idProg = Number(line?.id_programacion ?? 0);
+      let removed = false;
+      if (Number.isFinite(idDet) && idDet > 0) {
+        intentos += 1;
+        try {
+          await fetchAPI(`/api/reservas/${idReserva}/programacion/${idDet}`, { method: 'DELETE' });
+          removed = true;
+          eliminados += 1;
+        } catch {
+          /* intentar variante por id_programacion */
+        }
+      }
+      if (!removed && Number.isFinite(idProg) && idProg > 0) {
+        intentos += 1;
+        try {
+          await fetchAPI(`/api/reservas/${idReserva}/programacion`, {
+            method: 'DELETE',
+            body: JSON.stringify({ id_programacion: idProg }),
+          });
+          eliminados += 1;
+        } catch {
+          /* backend puede no exponer DELETE */
+        }
+      }
+    }
+    return { intentos, eliminados };
   },
 
   delete: async (id: number) => {
@@ -954,6 +1285,8 @@ export const reservasAPI = {
           id_programacion: number;
           cantidad_personas?: number;
           precio_unitario?: number | string | null;
+          /** Total esperado del grupo (titular + acompañantes); el backend puede ignorarlo si no lo usa. */
+          monto_total?: number | string | null;
         }
   ) => {
     const payload =
@@ -1008,6 +1341,8 @@ export const reservasAPI = {
   pagarCompleto: async (
     idReserva: number,
     payload: {
+      /** Monto que el cliente declara haber pagado (total de la salida); el backend puede ignorarlo si no lo usa. */
+      monto?: number | null;
       metodo_pago?: string | null;
       numero_transaccion?: string | null;
       comprobante_url: string;
@@ -1060,6 +1395,51 @@ export const ventasAPI = {
     return unwrapApiArray<Venta>(response);
   },
 };
+
+/** Respuesta GET /api/dashboard/resumen */
+export interface DashboardSerieBucket {
+  bucket_iso: string;
+  total?: number;
+  confirmadas?: number;
+  pendientes?: number;
+  canceladas?: number;
+  monto_total?: number;
+  monto_pagado?: number;
+  monto_aprobado?: number;
+}
+
+export interface DashboardResumenData {
+  periodo: {
+    fecha_inicio: string;
+    fecha_fin: string;
+    agrupacion: 'day' | 'week' | 'month';
+  };
+  reservas: {
+    pendientes: number;
+    confirmadas: number;
+    canceladas: number;
+    completadas: number;
+    total: number;
+    por_estado: Array<{ estado: string; total: number }>;
+    serie_temporal: DashboardSerieBucket[];
+  };
+  ventas: {
+    total_periodo: number;
+    ventas_mes: number;
+    monto_total_periodo: number;
+    monto_pagado_periodo: number;
+    por_estado_pago: Record<string, number>;
+    por_estado_tabla: Array<{ estado_pago: string; total: number }>;
+    serie_temporal: DashboardSerieBucket[];
+  };
+  pagos: {
+    dinero_recibido: number;
+    abonos_pendientes_monto: number;
+    abonos_pendientes_cantidad: number;
+    ingresos_serie: DashboardSerieBucket[];
+    ingresos_mensuales: Array<{ bucket_iso: string; monto_aprobado: number }>;
+  };
+}
 
 // =====================================================
 // PAGOS / ABONOS DE CLIENTES
@@ -1132,24 +1512,39 @@ export const pagosAPI = {
 export const rutasAPI = {
   getAll: async (): Promise<Ruta[]> => {
     const response = await fetchAPI<any>('/api/rutas');
-    return unwrapApiArray<Ruta>(response);
+    const list = unwrapApiArray<Ruta>(response);
+    return enrichRutasImagenFromStorageIfMissing(list, false);
   },
 
-  // Catálogo público (clientes / no autenticado)
-  getActivas: async (): Promise<Ruta[]> => {
-    const response = await fetchAPI<any>('/api/rutas/activas');
-    return unwrapApiArray<Ruta>(response);
+  // Catálogo público (clientes / no autenticado). Tras el listado, rellena imagen desde Storage (home, cards).
+  getActivas: async (opts?: { limit?: number; cacheTtlMs?: number }): Promise<Ruta[]> => {
+    const endpoint = appendQuery('/api/rutas/activas', { limit: opts?.limit });
+    const cacheKey = `GET:${endpoint}:catalog_img_v1`;
+    const ttlMs = opts?.cacheTtlMs ?? 0;
+    return fetchCached<Ruta[]>(
+      cacheKey,
+      ttlMs,
+      async () => {
+        const response = await fetchAPI<any>(endpoint, { skipAuth: true });
+        const raw = unwrapApiArray<Ruta>(response);
+        return enrichRutasImagenFromStorageIfMissing(raw, true);
+      },
+    );
   },
 
   getById: async (id: number): Promise<Ruta> => {
     const response = await fetchAPI<any>(`/api/rutas/${id}`);
-    return (response?.data ?? response) as Ruta;
+    const r = (response?.data ?? response) as Ruta;
+    const out = await enrichRutasImagenFromStorageIfMissing([r], false);
+    return out[0];
   },
 
   // Detalle público (solo si está activa)
   getActivaById: async (id: number): Promise<Ruta> => {
-    const response = await fetchAPI<any>(`/api/rutas/activas/${id}`);
-    return (response?.data ?? response) as Ruta;
+    const response = await fetchAPI<any>(`/api/rutas/activas/${id}`, { skipAuth: true });
+    const r = (response?.data ?? response) as Ruta;
+    const out = await enrichRutasImagenFromStorageIfMissing([r], true);
+    return out[0];
   },
 
   create: async (rutaData: Partial<Ruta>) => {
@@ -1174,7 +1569,7 @@ export const rutasAPI = {
 
   getImagenes: async (id: number): Promise<string[]> => {
     const response = await fetchAPI<any>(`/api/rutas/${id}/imagenes`);
-    return unwrapApiArray<string>(response);
+    return coerceImagenesApiResponseToUrls(response);
   },
 
   uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
@@ -1195,14 +1590,49 @@ export const rutasAPI = {
 // =====================================================
 
 export const fincasAPI = {
+  // Público: catálogo de fincas activas (sin token)
+  getPublicas: async (opts?: { limit?: number; cacheTtlMs?: number }): Promise<Finca[]> => {
+    const endpoint = appendQuery('/api/fincas/publicas', { limit: opts?.limit });
+    const cacheKey = `GET:${endpoint}:catalog_img_v1`;
+    const ttlMs = opts?.cacheTtlMs ?? 0;
+    return fetchCached<Finca[]>(
+      cacheKey,
+      ttlMs,
+      async () => {
+        const response = await fetchAPI<any>(endpoint, { skipAuth: true });
+        const raw = (response?.data ?? response) as Finca[];
+        const list = Array.isArray(raw) ? raw : [];
+        return enrichFincasImagenFromStorageIfMissing(list, true);
+      },
+    );
+  },
+
+  // Público: detalle de finca activa por id (sin token)
+  getPublicaById: async (id: number): Promise<Finca> => {
+    const response = await fetchAPI<any>(`/api/fincas/publicas/${id}`, { skipAuth: true });
+    const f = (response?.data ?? response) as Finca;
+    const out = await enrichFincasImagenFromStorageIfMissing([f], true);
+    return out[0];
+  },
+
+  /** Público: YYYY-MM-DD con noche ya reservada (Pendiente/Confirmada), para calendario de reserva */
+  getFechasOcupadasPublicas: async (id: number): Promise<string[]> => {
+    const response = await fetchAPI<any>(`/api/fincas/publicas/${id}/fechas-ocupadas`, { skipAuth: true });
+    return unwrapApiArray<string>(response);
+  },
+
   getAll: async (): Promise<Finca[]> => {
     const response = await fetchAPI<{ data: Finca[] }>('/api/fincas');
-    return response.data || [];
+    const list = response.data || [];
+    return enrichFincasImagenFromStorageIfMissing(list, false);
   },
 
   getById: async (id: number): Promise<Finca> => {
     const response = await fetchAPI<{ data: Finca }>(`/api/fincas/${id}`);
-    return response.data;
+    const f = response.data;
+    if (!f) return f as Finca;
+    const out = await enrichFincasImagenFromStorageIfMissing([f], false);
+    return out[0];
   },
 
   create: async (fincaData: Partial<Finca>) => {
@@ -1227,7 +1657,7 @@ export const fincasAPI = {
 
   getImagenes: async (id: number): Promise<string[]> => {
     const response = await fetchAPI<any>(`/api/fincas/${id}/imagenes`);
-    return unwrapApiArray<string>(response);
+    return coerceImagenesApiResponseToUrls(response);
   },
 
   uploadImagenes: async (id: number, files: File[]): Promise<string[]> => {
@@ -1246,41 +1676,197 @@ export const fincasAPI = {
 // =====================================================
 // PROPIETARIOS
 // =====================================================
+// Normalizador flexible para soportar distintos formatos/fields del backend
+function normalizePropietario(raw: any): Propietario {
+  if (!raw || typeof raw !== 'object') return raw as Propietario;
+
+  const id = Number(raw.id_propietario ?? raw.id ?? raw.id_owner ?? raw.idPropietario ?? raw.owner_id) || 0;
+  const nombre = raw.nombre ?? raw.nombre_propietario ?? raw.firstName ?? raw.name ?? '';
+  const apellido = raw.apellido ?? raw.lastName ?? raw.surname ?? '';
+  const numero_documento = raw.numero_documento ?? raw.numeroDocumento ?? raw.document_number ?? raw.documento ?? '';
+  const telefono = raw.telefono ?? raw.telefono_contacto ?? raw.phone ?? raw.contact_phone ?? '';
+  const email = raw.email ?? raw.correo ?? raw.propietario_email ?? '';
+  const direccion = raw.direccion ?? raw.address ?? raw.propietario_direccion ?? '';
+  const estado = raw.estado == null ? (raw.active ?? raw.estado_propietario ?? true) : Boolean(raw.estado);
+  const fecha_registro = raw.fecha_registro ?? raw.created_at ?? raw.fecha_creacion ?? null;
+
+  return {
+    id_propietario: id,
+    nombre,
+    apellido,
+    tipo_documento: raw.tipo_documento ?? raw.tipoDocumento ?? undefined,
+    numero_documento,
+    telefono,
+    email,
+    direccion,
+    estado,
+    fecha_registro,
+  } as Propietario;
+}
+
+// Intentar múltiples endpoints/fallbacks usados por diferentes versiones del backend
+async function tryEndpointsForJson<T = any>(endpoints: string[]): Promise<T> {
+  let lastError: any = null;
+  for (const ep of endpoints) {
+    try {
+      const res = await fetchAPI<T>(ep);
+      return res;
+    } catch (err) {
+      lastError = err;
+      // continue to next endpoint
+    }
+  }
+  throw lastError;
+}
 
 export const propietariosAPI = {
   getAll: async (): Promise<Propietario[]> => {
-    const response = await fetchAPI<{ data: Propietario[] }>('/api/propietarios');
-    return response.data || [];
+    try {
+      const response = await tryEndpointsForJson<any>(['/api/propietarios', '/api/owners']);
+      const arr = unwrapApiArray(response);
+      return arr.map(normalizePropietario);
+    } catch (err) {
+      console.error('Error fetching propietarios (getAll):', err);
+      throw err;
+    }
+  },
+
+  /**
+   * Obtener solo propietarios activos (para selects/relaciones)
+   */
+  getActive: async (): Promise<Propietario[]> => {
+    try {
+      const response = await tryEndpointsForJson<any>(['/api/propietarios', '/api/owners']);
+      const arr = unwrapApiArray(response);
+      return arr.map(normalizePropietario).filter((p: Propietario) => p.estado !== false);
+    } catch (err) {
+      console.error('Error fetching active propietarios (getActive):', err);
+      throw err;
+    }
   },
 
   getById: async (id: number): Promise<Propietario> => {
-    const response = await fetchAPI<{ data: Propietario }>(`/api/propietarios/${id}`);
-    return response.data;
+    try {
+      const response = await tryEndpointsForJson<any>([`/api/propietarios/${id}`, `/api/owners/${id}`]);
+      const payload = response?.data ?? response;
+      return normalizePropietario(payload as any);
+    } catch (err) {
+      console.error(`Error fetching propietario ${id}:`, err);
+      throw err;
+    }
   },
 
-  create: async (propietarioData: Partial<Propietario>) => {
-    return fetchAPI('/api/propietarios', {
-      method: 'POST',
-      body: JSON.stringify(propietarioData),
-    });
+  create: async (propietarioData: Partial<Propietario> | FormData) => {
+    // Soportar FormData si el caller ya la envía
+    const isForm = propietarioData instanceof FormData;
+    const body = isForm ? (propietarioData as FormData) : ((): any => {
+      // Si algún campo es File/Blob, convertir a FormData
+      const hasFile = Object.values(propietarioData as any).some(v => v instanceof File || v instanceof Blob);
+      if (hasFile) {
+        const fd = new FormData();
+        for (const key of Object.keys(propietarioData as any)) {
+          const val = (propietarioData as any)[key];
+          if (val != null) fd.append(key, val as any);
+        }
+        return fd;
+      }
+      return JSON.stringify(propietarioData);
+    })();
+
+    const endpoints = ['/api/propietarios', '/api/owners'];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, {
+          method: 'POST',
+          body,
+        });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'create', payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error('Error creating propietario:', lastError);
+    throw lastError;
   },
 
-  update: async (id: number, propietarioData: Partial<Propietario>) => {
-    return fetchAPI(`/api/propietarios/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(propietarioData),
-    });
+  update: async (id: number, propietarioData: Partial<Propietario> | FormData) => {
+    const isForm = propietarioData instanceof FormData;
+    const body = isForm ? propietarioData as FormData : ((): any => {
+      const hasFile = Object.values(propietarioData as any).some(v => v instanceof File || v instanceof Blob);
+      if (hasFile) {
+        const fd = new FormData();
+        for (const key of Object.keys(propietarioData as any)) {
+          const val = (propietarioData as any)[key];
+          if (val != null) fd.append(key, val as any);
+        }
+        return fd;
+      }
+      return JSON.stringify(propietarioData);
+    })();
+
+    const endpoints = [`/api/propietarios/${id}`, `/api/owners/${id}`];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, {
+          method: 'PUT',
+          body,
+        });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'update', id, payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error(`Error updating propietario ${id}:`, lastError);
+    throw lastError;
   },
 
   delete: async (id: number) => {
-    return fetchAPI(`/api/propietarios/${id}`, {
-      method: 'DELETE',
-    });
+    const endpoints = [`/api/propietarios/${id}`, `/api/owners/${id}`];
+    let lastError: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetchAPI(ep, { method: 'DELETE' });
+        try {
+          if (typeof window !== 'undefined' && (window as any).dispatchEvent) {
+            window.dispatchEvent(new CustomEvent('propietarios:changed', { detail: { action: 'delete', id, payload: res } }));
+          }
+        } catch (e) {
+          // ignore dispatch errors
+        }
+        return res;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    console.error(`Error deleting propietario ${id}:`, lastError);
+    throw lastError;
   },
 
   getFincas: async (id: number) => {
-    const response = await fetchAPI<{ data: Finca[] }>(`/api/propietarios/${id}/fincas`);
-    return response.data || [];
+    try {
+      const response = await tryEndpointsForJson<any>([`/api/propietarios/${id}/fincas`, `/api/owners/${id}/fincas`]);
+      const arr = unwrapApiArray(response);
+      return arr as Finca[];
+    } catch (err) {
+      console.error(`Error fetching fincas for propietario ${id}:`, err);
+      throw err;
+    }
   },
 };
 
@@ -1293,10 +1879,39 @@ export const dashboardAPI = {
     return fetchAPI('/api/dashboard/estadisticas');
   },
 
+  /** Mismo que getEstadisticas pero devuelve solo el objeto útil `data`. */
+  getEstadisticasGenerales: async (): Promise<Record<string, unknown>> => {
+    const response = await fetchAPI<any>('/api/dashboard/estadisticas');
+    return (response?.data ?? response) as Record<string, unknown>;
+  },
+
+  /** KPI y series para Analytics (filtro por fechas ISO YYYY-MM-DD). */
+  getResumen: async (params: {
+    fecha_inicio: string;
+    fecha_fin: string;
+    agrupacion?: 'day' | 'week' | 'month';
+  }): Promise<DashboardResumenData> => {
+    const qs = new URLSearchParams({
+      fecha_inicio: params.fecha_inicio,
+      fecha_fin: params.fecha_fin,
+    });
+    if (params.agrupacion) qs.set('agrupacion', params.agrupacion);
+    const response = await fetchAPI<{ success?: boolean; data: DashboardResumenData }>(
+      `/api/dashboard/resumen?${qs.toString()}`,
+    );
+    const wrapped = response as any;
+    if (wrapped?.data != null && typeof wrapped.data === 'object' && wrapped.data.periodo) {
+      return wrapped.data as DashboardResumenData;
+    }
+    return wrapped as DashboardResumenData;
+  },
+
+  /** Legado — el backend puede no exponer esta ruta. */
   getReservasRecientes: async () => {
     return fetchAPI('/api/dashboard/reservas-recientes');
   },
 
+  /** Legado — rutas reales del backend suelen ser `/api/dashboard/reservas-mes` / `ventas-mes`. */
   getVentasPorMes: async () => {
     return fetchAPI('/api/dashboard/ventas-por-mes');
   },
@@ -1412,6 +2027,20 @@ export const permisosAPI = {
       }
       return (response as any).data || [];
     }
+  },
+
+  /** Alta de permiso en catálogo (si el backend lo expone). Body típico: nombre, descripcion. */
+  create: async (payload: { nombre: string; descripcion?: string }): Promise<Permiso | null> => {
+    const response = await fetchAPI<Permiso | { data: Permiso }>('/api/permisos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response) return null;
+    if (typeof response === 'object' && 'data' in response && response.data) {
+      return response.data;
+    }
+    return response as Permiso;
   },
 };
 
@@ -1629,6 +2258,8 @@ export interface Servicio {
   telefono?: string | null;
   contacto?: string | null;
   fecha_creacion?: string | null;
+  /** 'ruta' | 'finca' — catálogo global; rutas además enlazan por ruta en el backend. */
+  aplica_a?: string | null;
 }
 
 // EXTENSIÓN para incluir proveedor en las filas:
@@ -1644,9 +2275,19 @@ export const serviciosAPI = {
     return unwrapApiArray<Servicio>(response);
   },
 
-  // Listar servicios DISPONIBLES solamente
-  getDisponibles: async (): Promise<Servicio[]> => {
-    const response = await fetchAPI<any>('/api/servicios/disponibles');
+  // Listar servicios DISPONIBLES (requiere sesión). Opcional: ?aplica_a=finca|ruta via query.
+  getDisponibles: async (opts?: { aplica_a?: 'finca' | 'ruta' }): Promise<Servicio[]> => {
+    const q =
+      opts?.aplica_a === 'finca' || opts?.aplica_a === 'ruta'
+        ? `?aplica_a=${opts.aplica_a}`
+        : '';
+    const response = await fetchAPI<any>(`/api/servicios/disponibles${q}`);
+    return unwrapApiArray<Servicio>(response);
+  },
+
+  /** Catálogo público para reserva de finca (sin JWT): solo activos con aplica_a=finca. */
+  getDisponiblesFincaPublicos: async (): Promise<Servicio[]> => {
+    const response = await fetchAPI<any>('/api/servicios/publicos/finca', { skipAuth: true });
     return unwrapApiArray<Servicio>(response);
   },
 
@@ -1740,7 +2381,7 @@ export const solicitudesPersonalizadasAPI = {
   crearPago: async (
     id: number,
     payload: {
-      monto: number;
+      monto?: number;
       metodo_pago?: string | null;
       numero_transaccion?: string | null;
       comprobante_url: string;
@@ -1749,9 +2390,11 @@ export const solicitudesPersonalizadasAPI = {
       observaciones?: string | null;
     }
   ) => {
+    const bodyPayload: any = { ...payload };
+    if (bodyPayload.monto === undefined) delete bodyPayload.monto;
     return fetchAPI(`/api/solicitudes-personalizadas/${id}/pagos`, {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify(bodyPayload),
     });
   },
 
@@ -1769,6 +2412,13 @@ export const solicitudesPersonalizadasAPI = {
     payload: {
       precio_cotizado?: number | null;
       estado?: string | null;
+      fecha_salida?: string | null;
+      fecha_regreso?: string | null;
+      hora_salida?: string | null;
+      hora_regreso?: string | null;
+      lugar_encuentro?: string | null;
+      id_empleado?: number | null;
+      guias_apoyo?: number[] | null;
     }
   ) => {
     return fetchAPI(`/api/solicitudes-personalizadas/${id}/cotizar`, {
@@ -1788,6 +2438,7 @@ export const solicitudesPersonalizadasAPI = {
       hora_regreso?: string | null;
       cupos_totales?: number | null;
       id_empleado?: number | null;
+      guias_apoyo?: number[] | null;
       lugar_encuentro?: string | null;
       precio_cotizado?: number | null;
     }
@@ -1803,6 +2454,52 @@ export const solicitudesPersonalizadasAPI = {
 // PROGRAMACION
 // =====================================================
 
+/** Todos los id_programacion asociados a una reserva (lista o detalle). */
+export function collectProgramacionIdsFromReservaPayload(r: unknown): number[] {
+  const ids = new Set<number>();
+  if (!r || typeof r !== 'object') return [];
+
+  const add = (v: unknown) => {
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) ids.add(n);
+  };
+
+  const o = r as Record<string, unknown>;
+
+  add(o.id_programacion);
+
+  const nestedProg = o.programacion;
+  if (nestedProg && typeof nestedProg === 'object') {
+    add((nestedProg as Record<string, unknown>).id_programacion);
+  }
+
+  const nestedDet = o.detalle_programacion;
+  if (nestedDet && typeof nestedDet === 'object') {
+    add((nestedDet as Record<string, unknown>).id_programacion);
+  }
+
+  const pushFromArray = (arr: unknown) => {
+    if (!Array.isArray(arr)) return;
+    for (const item of arr) {
+      if (item && typeof item === 'object') {
+        add((item as Record<string, unknown>).id_programacion);
+      }
+    }
+  };
+
+  pushFromArray(o.programaciones);
+  pushFromArray(o.detalles_programacion);
+  pushFromArray(o.detalle_reserva_programacion);
+
+  return [...ids];
+}
+
+/** @deprecated usar collectProgramacionIdsFromReservaPayload; se mantiene por compatibilidad */
+export function pickProgramacionIdFromReservaPayload(r: unknown): number | null {
+  const all = collectProgramacionIdsFromReservaPayload(r);
+  return all.length > 0 ? all[0]! : null;
+}
+
 export const programacionAPI = {
   getAll: async (): Promise<Programacion[]> => {
     const response = await fetchAPI<any>('/api/programaciones');
@@ -1810,8 +2507,15 @@ export const programacionAPI = {
   },
 
   // Público: programaciones activas/futuras para Home (sin token)
-  getPublicas: async (): Promise<Programacion[]> => {
-    const response = await fetchAPI<any>('/api/programaciones/publicas');
+  getPublicas: async (opts?: { limit?: number; cacheTtlMs?: number }): Promise<Programacion[]> => {
+    const endpoint = appendQuery('/api/programaciones/publicas', { limit: opts?.limit });
+    const cacheKey = `GET:${endpoint}`;
+    const ttlMs = opts?.cacheTtlMs ?? 0;
+    const response = await fetchCached<any>(
+      cacheKey,
+      ttlMs,
+      () => fetchAPI<any>(endpoint, { skipAuth: true }),
+    );
     return unwrapApiArray<Programacion>(response);
   },
 
@@ -1823,6 +2527,102 @@ export const programacionAPI = {
   getById: async (id: number): Promise<Programacion> => {
     const response = await fetchAPI<any>(`/api/programaciones/${id}`);
     return (response?.data ?? response) as Programacion;
+  },
+
+  /**
+   * Reservas vinculadas a una programación.
+   * - Si GET /api/programaciones/:id/reservas devuelve filas, se usan.
+   * - Si viene vacío o falla, se filtra GET /api/reservas (incluye filas con `programaciones[].id_programacion`).
+   * - Si el listado no trae la relación, se consulta getById por reserva (acotado por id_ruta si se indica).
+   */
+  getReservasForProgramacion: async (
+    idProgramacion: number,
+    opts?: { idRuta?: number | null },
+  ): Promise<Reserva[]> => {
+    let fromEndpoint: Reserva[] | undefined;
+    let reservasDesdeEndpoint = false;
+    try {
+      const response = await fetchAPI<any>(`/api/programaciones/${idProgramacion}/reservas`);
+      fromEndpoint = unwrapApiArray<Reserva>(response);
+      reservasDesdeEndpoint = true;
+    } catch {
+      fromEndpoint = undefined;
+      reservasDesdeEndpoint = false;
+    }
+
+    if (reservasDesdeEndpoint && Array.isArray(fromEndpoint)) {
+      return fromEndpoint;
+    }
+
+    const all = await reservasAPI.getAll();
+    const fromListFilter = all.filter((row) =>
+      collectProgramacionIdsFromReservaPayload(row).includes(idProgramacion),
+    );
+
+    if (fromListFilter.length > 0) {
+      return fromListFilter;
+    }
+
+    let idRutaProgramacion: number | null =
+      opts?.idRuta != null && Number(opts.idRuta) > 0 ? Number(opts.idRuta) : null;
+    if (idRutaProgramacion == null) {
+      try {
+        const prog = await programacionAPI.getById(idProgramacion);
+        const r = Number(prog?.id_ruta);
+        if (Number.isFinite(r) && r > 0) idRutaProgramacion = r;
+      } catch {
+        idRutaProgramacion = null;
+      }
+    }
+
+    const candidateIds: number[] = [];
+    const maxCandidates = 48;
+    for (const row of all) {
+      if (candidateIds.length >= maxCandidates) break;
+      if (collectProgramacionIdsFromReservaPayload(row).length > 0) continue;
+      const tipo = String((row as any).tipo_servicio || '').toLowerCase();
+      if (tipo.includes('finca')) continue;
+
+      if (idRutaProgramacion != null) {
+        const rutaRes = Number((row as any).id_ruta);
+        if (Number.isFinite(rutaRes) && rutaRes > 0 && rutaRes !== idRutaProgramacion) continue;
+      }
+
+      const rid = Number((row as any).id_reserva ?? (row as any).id);
+      if (!Number.isFinite(rid) || rid <= 0) continue;
+      candidateIds.push(rid);
+    }
+
+    const enriched: Reserva[] = [];
+    const seen = new Set<number>();
+    const chunkSize = 12;
+    for (let i = 0; i < candidateIds.length; i += chunkSize) {
+      const chunk = candidateIds.slice(i, i + chunkSize);
+      const results = await Promise.all(
+        chunk.map(async (rid) => {
+          try {
+            return await reservasAPI.getById(rid);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const full of results) {
+        if (!full) continue;
+        if (!collectProgramacionIdsFromReservaPayload(full).includes(idProgramacion)) continue;
+        const rid = Number((full as any).id_reserva ?? (full as any).id);
+        if (!Number.isFinite(rid) || rid <= 0 || seen.has(rid)) continue;
+        seen.add(rid);
+        enriched.push(full);
+      }
+    }
+
+    return enriched;
+  },
+
+  getMisAsignaciones: async (): Promise<Programacion[]> => {
+    const response = await fetchAPI<any>('/api/programaciones/mis-programaciones');
+    return unwrapApiArray<Programacion>(response);
   },
 
   create: async (data: Partial<Programacion>) => {

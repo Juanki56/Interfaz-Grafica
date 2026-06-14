@@ -1,36 +1,20 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  BarChart3,
-  TrendingUp,
-  Filter,
-  Download,
   Calendar,
-  Users,
-  Eye,
-  Search,
-  CheckCircle,
-  XCircle,
-  Clock,
+  Filter,
+  RefreshCw,
+  BarChart3,
   DollarSign,
   Package,
-  ChevronLeft,
-  ChevronRight,
-  LayoutGrid,
-  List,
-  Plus,
-  Edit,
-  Power,
-  Trash2,
-  Settings,
-  Target,
-  TrendingDown
+  CreditCard,
+  TrendingUp,
+  Users,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
-import { Badge } from './ui/badge';
 import { Input } from './ui/input';
-import { Switch } from './ui/switch';
+import { Label } from './ui/label';
 import {
   Select,
   SelectContent,
@@ -38,33 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from './ui/select';
-import { Label } from './ui/label';
-import { Checkbox } from './ui/checkbox';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from './ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from './ui/dialog';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from './ui/alert-dialog';
 import {
   BarChart,
   Bar,
@@ -81,973 +38,597 @@ import {
   Legend,
 } from 'recharts';
 import { toast } from 'sonner';
-import { mockBookings } from '../utils/adminMockData';
+import {
+  dashboardAPI,
+  type DashboardResumenData,
+  type DashboardSerieBucket,
+} from '../services/api';
+
+type Preset = 'week' | 'month' | 'quarter' | 'year' | 'custom';
+
+const PIE_COLORS = ['#22c55e', '#eab308', '#ef4444', '#3b82f6', '#a855f7', '#64748b'];
+
+function toYMDLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function addDaysLocal(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function startOfMonthLocal(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function startOfQuarterLocal(d: Date): Date {
+  const q = Math.floor(d.getMonth() / 3) * 3;
+  return new Date(d.getFullYear(), q, 1);
+}
+
+function startOfYearLocal(d: Date): Date {
+  return new Date(d.getFullYear(), 0, 1);
+}
+
+function resolvePresetRange(preset: Preset, customStart: string, customEnd: string): { desde: string; hasta: string } {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const hasta = toYMDLocal(today);
+
+  if (preset === 'custom') {
+    return {
+      desde: customStart || toYMDLocal(addDaysLocal(today, -30)),
+      hasta: customEnd || hasta,
+    };
+  }
+
+  if (preset === 'week') {
+    return { desde: toYMDLocal(addDaysLocal(today, -6)), hasta };
+  }
+
+  if (preset === 'month') {
+    return { desde: toYMDLocal(startOfMonthLocal(today)), hasta };
+  }
+
+  if (preset === 'quarter') {
+    return { desde: toYMDLocal(startOfQuarterLocal(today)), hasta };
+  }
+
+  /* year */
+  return { desde: toYMDLocal(startOfYearLocal(today)), hasta };
+}
+
+function formatMoneyCOP(value: number): string {
+  return `$${Math.round(Number(value || 0)).toLocaleString('es-CO')}`;
+}
+
+function formatBucketLabel(iso: string, agrupacion: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+
+  if (agrupacion === 'day') {
+    return d.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
+  }
+
+  if (agrupacion === 'week') {
+    return `Sem. ${d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' })}`;
+  }
+
+  return d.toLocaleDateString('es-CO', { month: 'short', year: 'numeric' });
+}
+
+function estadoReservaColor(estado: string): string {
+  const e = estado.trim().toLowerCase();
+  if (e === 'confirmada') return '#22c55e';
+  if (e === 'pendiente') return '#eab308';
+  if (e === 'cancelada') return '#ef4444';
+  if (e === 'completada') return '#3b82f6';
+  return '#64748b';
+}
+
+function estadoVentaColor(estado: string): string {
+  const e = estado.trim().toLowerCase();
+  if (e === 'pagado') return '#22c55e';
+  if (e === 'parcial') return '#eab308';
+  if (e === 'pendiente') return '#94a3b8';
+  if (e.includes('cancel')) return '#ef4444';
+  return '#3b82f6';
+}
+
+function mapSerieToChart(
+  rows: DashboardSerieBucket[],
+  agrupacion: string,
+  mapper: (r: DashboardSerieBucket) => Record<string, string | number | undefined>,
+) {
+  return rows.map((r) => ({
+    label: formatBucketLabel(r.bucket_iso, agrupacion),
+    ...mapper(r),
+  }));
+}
 
 export function DashboardAnalytics() {
-  const [viewMode, setViewMode] = useState<'table' | 'charts'>('table');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [dateFilter, setDateFilter] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [bookings, setBookings] = useState(mockBookings);
-  const [selectedBooking, setSelectedBooking] = useState<any>(null);
-  const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
-  const [bookingToDelete, setBookingToDelete] = useState<any>(null);
-  const [bookingToEdit, setBookingToEdit] = useState<any>(null);
-  const itemsPerPage = 10;
+  const today = useMemo(() => {
+    const t = new Date();
+    t.setHours(12, 0, 0, 0);
+    return t;
+  }, []);
 
-  // Estado para el formulario de creación de métrica
-  const [newMetric, setNewMetric] = useState({
-    // Configuración básica
-    metricName: '',
-    serviceType: '', // 'rutas' o 'fincas'
-    selectedServices: [] as string[],
-    reservationFilter: 'all', // 'Confirmadas', 'Canceladas', 'Pendientes', 'all'
-    dateRange: 'month', // 'week', 'fortnight', 'month', 'custom'
-    customDateStart: '',
-    customDateEnd: '',
-    clientType: 'all', // 'all', 'recurring', 'new'
-    // Variables a metricar
-    metrics: {
-      numberOfReservations: false,
-      generatedIncome: false,
-      averageOccupancy: false, // para fincas
-      averageAttendance: false, // para rutas
-      cancellationsVsConfirmations: false,
-    },
-    // Configuración de visualización
-    chartType: 'bars', // 'bars', 'lines', 'pie', 'table'
-    temporalGrouping: 'month', // 'week', 'fortnight', 'month'
-    comparison: 'none', // 'none', 'previous', 'yearAgo'
-  });
+  const defaultCustomStart = useMemo(() => toYMDLocal(addDaysLocal(today, -30)), [today]);
 
-  // Datos de servicios disponibles (mock - en producción vendrían de la BD)
-  const availableServices = {
-    rutas: ['Ruta del Café', 'Valle de Cocora', 'Salento Tour', 'Filandia Histórica'],
-    fincas: ['Finca El Paraíso', 'Finca La Esperanza', 'Hacienda El Ocaso', 'Villa Turística']
-  };
+  const [preset, setPreset] = useState<Preset>('month');
+  const [customStart, setCustomStart] = useState(defaultCustomStart);
+  const [customEnd, setCustomEnd] = useState(() => toYMDLocal(new Date()));
 
-  // Filtrar reservas (ahora usa bookings del estado local)
-  const filteredBookings = bookings.filter(booking => {
-    const matchesSearch = booking.clientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         booking.packageName.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || booking.status === statusFilter;
-    const matchesDate = !dateFilter || booking.date === dateFilter;
-    return matchesSearch && matchesStatus && matchesDate;
-  });
+  const [agrupManual, setAgrupManual] = useState<'auto' | 'day' | 'week' | 'month'>('auto');
 
-  // Paginación
-  const totalPages = Math.ceil(filteredBookings.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedBookings = filteredBookings.slice(startIndex, startIndex + itemsPerPage);
+  const [data, setData] = useState<DashboardResumenData | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastError, setLastError] = useState<string | null>(null);
 
-  // Calcular métricas
-  const metrics = {
-    total: filteredBookings.length,
-    confirmadas: filteredBookings.filter(b => b.status === 'Confirmada').length,
-    pendientes: filteredBookings.filter(b => b.status === 'Pendiente').length,
-    canceladas: filteredBookings.filter(b => b.status === 'Cancelada').length,
-    completadas: filteredBookings.filter(b => b.status === 'Completada').length,
-    ingresos: filteredBookings.reduce((sum, b) => sum + (b.total || 0), 0),
-  };
+  const period = useMemo(
+    () => resolvePresetRange(preset, customStart, customEnd),
+    [preset, customStart, customEnd],
+  );
 
-  // Datos para gráficas
-  const statusData = [
-    { name: 'Confirmada', value: metrics.confirmadas, color: '#22c55e' },
-    { name: 'Pendiente', value: metrics.pendientes, color: '#eab308' },
-    { name: 'Cancelada', value: metrics.canceladas, color: '#ef4444' },
-    { name: 'Completada', value: metrics.completadas, color: '#3b82f6' },
-  ];
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setLastError(null);
+    try {
+      const res = await dashboardAPI.getResumen({
+        fecha_inicio: period.desde,
+        fecha_fin: period.hasta,
+        agrupacion: agrupManual === 'auto' ? undefined : agrupManual,
+      });
+      setData(res);
+    } catch (e: any) {
+      const msg =
+        e?.message ||
+        'No se pudo cargar el resumen del dashboard. Verifica permiso dashboard.leer y el API.';
+      setLastError(msg);
+      toast.error(msg);
+      setData(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [period.desde, period.hasta, agrupManual]);
 
-  const monthlyData = [
-    { month: 'Ene', reservas: 42, ingresos: 8400000 },
-    { month: 'Feb', reservas: 38, ingresos: 7600000 },
-    { month: 'Mar', reservas: 51, ingresos: 10200000 },
-    { month: 'Abr', reservas: 45, ingresos: 9000000 },
-    { month: 'May', reservas: 58, ingresos: 11600000 },
-    { month: 'Jun', reservas: 62, ingresos: 12400000 },
-  ];
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
-  // Badge de estado
-  const getStatusBadge = (status: string) => {
-    const variants: { [key: string]: 'default' | 'secondary' | 'destructive' | 'outline' } = {
-      'Confirmada': 'default',
-      'Pendiente': 'outline',
-      'Cancelada': 'destructive',
-      'Completada': 'secondary',
-    };
-    const colors: { [key: string]: string } = {
-      'Confirmada': 'bg-green-500',
-      'Pendiente': 'bg-yellow-500',
-      'Cancelada': 'bg-red-500',
-      'Completada': 'bg-blue-500',
-    };
-    return (
-      <Badge variant={variants[status] || 'secondary'} className={`${colors[status]} text-white`}>
-        {status}
-      </Badge>
-    );
-  };
+  const agrupacionEfectiva = data?.periodo?.agrupacion ?? 'month';
 
-  // Cambiar estado de reserva
-  const handleChangeStatus = (bookingId: string, newStatus: string) => {
-    setBookings(bookings.map(b => 
-      b.id === bookingId ? { ...b, status: newStatus } : b
-    ));
-    toast.success(`Estado actualizado a ${newStatus}`);
-  };
+  const pieReservas = useMemo(() => {
+    if (!data) return [];
+    return data.reservas.por_estado
+      .filter((x) => x.total > 0)
+      .map((x, i) => ({
+        name: x.estado,
+        value: x.total,
+        color: estadoReservaColor(x.estado) || PIE_COLORS[i % PIE_COLORS.length],
+      }));
+  }, [data]);
+
+  const pieVentas = useMemo(() => {
+    if (!data) return [];
+    return data.ventas.por_estado_tabla
+      .filter((x) => x.total > 0)
+      .map((x, i) => ({
+        name: x.estado_pago,
+        value: x.total,
+        color: estadoVentaColor(x.estado_pago) || PIE_COLORS[i % PIE_COLORS.length],
+      }));
+  }, [data]);
+
+  const barReservas = useMemo(() => {
+    if (!data) return [];
+    return mapSerieToChart(data.reservas.serie_temporal, agrupacionEfectiva, (r) => ({
+      reservas: r.total ?? 0,
+      confirmadas: r.confirmadas ?? 0,
+    }));
+  }, [data, agrupacionEfectiva]);
+
+  const barVentas = useMemo(() => {
+    if (!data) return [];
+    return mapSerieToChart(data.ventas.serie_temporal, agrupacionEfectiva, (r) => ({
+      ventas: r.total ?? 0,
+      monto: Number(r.monto_total ?? 0),
+    }));
+  }, [data, agrupacionEfectiva]);
+
+  const lineIngresos = useMemo(() => {
+    if (!data) return [];
+    return mapSerieToChart(data.pagos.ingresos_serie, agrupacionEfectiva, (r) => ({
+      ingresos: Number(r.monto_aprobado ?? 0),
+    }));
+  }, [data, agrupacionEfectiva]);
+
+  const lineIngresosMensualExtra = useMemo(() => {
+    if (!data || !data.pagos.ingresos_mensuales.length) return [];
+    return data.pagos.ingresos_mensuales.map((m) => ({
+      label: formatBucketLabel(m.bucket_iso, 'month'),
+      mensual: m.monto_aprobado,
+    }));
+  }, [data]);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="flex items-center justify-between"
-      >
-        <div>
-          <h2 className="text-green-800">Dashboard Avanzado</h2>
-          <p className="text-gray-600">Métricas y estadísticas del sistema</p>
-        </div>
-        <div className="flex gap-2">
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-4">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-green-800 tracking-tight">Dashboard</h2>
+            <p className="text-gray-600 mt-1">
+              Estadísticas en vivo de reservas, ventas e ingresos por abonos (según el período seleccionado).
+            </p>
+          </div>
           <Button
             variant="outline"
-            onClick={() => toast.success('Reporte descargado correctamente')}
-            className="border-green-600 text-green-600 hover:bg-green-50"
+            disabled={loading}
+            onClick={() => void fetchData()}
+            className="border-green-600 text-green-700 hover:bg-green-50 shrink-0"
           >
-            <Download className="w-4 h-4 mr-2" />
-            Exportar
+            <RefreshCw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+            Actualizar
           </Button>
         </div>
-      </motion.div>
 
-      {/* Gráficas de Métricas */}
-      {true && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="grid grid-cols-1 lg:grid-cols-2 gap-6"
-        >
-          {/* Distribución por Estado */}
-          <Card className="border-green-200">
-            <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
-              <CardTitle className="text-green-800">Distribución por Estado</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    outerRadius={80}
-                    fill="#8884d8"
-                    dataKey="value"
-                  >
-                    {statusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Reservas Mensuales */}
-          <Card className="border-green-200">
-            <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
-              <CardTitle className="text-green-800">Reservas Mensuales</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={monthlyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="reservas" fill="#22c55e" name="Reservas" />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          {/* Ingresos Mensuales */}
-          <Card className="border-green-200 lg:col-span-2">
-            <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
-              <CardTitle className="text-green-800">Tendencia de Ingresos</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6">
-              <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={monthlyData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip formatter={(value: any) => `$${(value / 1000000).toFixed(1)}M`} />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="ingresos"
-                    stroke="#22c55e"
-                    strokeWidth={2}
-                    name="Ingresos"
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
-      {/* Diálogo de Detalles */}
-      <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="text-green-800">Detalles de Reserva</DialogTitle>
-            <DialogDescription>
-              Información detallada de la reserva seleccionada.
-            </DialogDescription>
-          </DialogHeader>
-          {selectedBooking && (
-            <div className="space-y-6">
-              {/* Información del Cliente */}
-              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                <h3 className="text-green-800 mb-3">Información del Cliente</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Nombre</p>
-                    <p className="text-green-800">{selectedBooking.clientName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">ID Reserva</p>
-                    <p className="text-green-800">{selectedBooking.id}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Detalles de la Reserva */}
-              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                <h3 className="text-green-800 mb-3">Detalles de la Reserva</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Servicio/Paquete</p>
-                    <p className="text-green-800">{selectedBooking.packageName}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Fecha</p>
-                    <p className="text-green-800">{selectedBooking.date}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Participantes Totales</p>
-                    <p className="text-green-800">{selectedBooking.participants}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Desglose</p>
-                    <div className="flex gap-2">
-                      <Badge variant="outline" className="bg-white">
-                        {selectedBooking.adults} Adultos
-                      </Badge>
-                      <Badge variant="outline" className="bg-white">
-                        {selectedBooking.children} Niños
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Estado y Pago */}
-              <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                <h3 className="text-green-800 mb-3">Estado y Pago</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm text-gray-600">Estado de Reserva</p>
-                    <div className="mt-1">{getStatusBadge(selectedBooking.status)}</div>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Estado de Pago</p>
-                    <div className="mt-1">
-                      <Badge variant={selectedBooking.paymentStatus === 'Pagado' ? 'default' : 'outline'} className={selectedBooking.paymentStatus === 'Pagado' ? 'bg-green-500' : ''}>
-                        {selectedBooking.paymentStatus}
-                      </Badge>
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Total a Pagar</p>
-                    <p className="text-green-800">${selectedBooking.total.toLocaleString()}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Acciones */}
-              <div className="flex justify-end gap-2 pt-4 border-t border-green-200">
-                <Button
-                  variant="outline"
-                  onClick={() => setIsDetailDialogOpen(false)}
-                  className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                >
-                  Cerrar
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    toast.info('Función de edición en desarrollo');
-                  }}
-                  className="border-green-600 text-green-600 hover:bg-green-50"
-                >
-                  <Edit className="w-4 h-4 mr-2" />
-                  Editar
-                </Button>
-              </div>
+        <Card className="border-green-100 shadow-sm">
+          <CardHeader className="pb-3 flex flex-row items-center gap-2">
+            <Filter className="h-5 w-5 text-green-700" />
+            <CardTitle className="text-lg text-green-900">Filtros de período</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div className="space-y-2">
+              <Label>Período</Label>
+              <Select value={preset} onValueChange={(v) => setPreset(v as Preset)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecciona" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="week">Semanal (últimos 7 días)</SelectItem>
+                  <SelectItem value="month">Mensual (mes en curso)</SelectItem>
+                  <SelectItem value="quarter">Trimestral (trimestre en curso)</SelectItem>
+                  <SelectItem value="year">Anual (año en curso)</SelectItem>
+                  <SelectItem value="custom">Rango personalizado</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Diálogo de Eliminación */}
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Eliminar Reserva</AlertDialogTitle>
-            <AlertDialogDescription>
-              ¿Estás seguro de que quieres eliminar esta reserva? Esta acción no se puede deshacer.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => setIsDeleteDialogOpen(false)}
-              className="border-gray-300 text-gray-700 hover:bg-gray-50"
-            >
-              Cancelar
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setBookings(bookings.filter(b => b.id !== bookingToDelete.id));
-                toast.success('Reserva eliminada correctamente');
-                setIsDeleteDialogOpen(false);
-              }}
-              className="bg-red-500 hover:bg-red-600"
-            >
-              Eliminar
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Diálogo de Edición */}
-      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle className="text-green-800">Editar reserva</DialogTitle>
-            <DialogDescription>
-              Modifica la información de la reserva seleccionada.
-            </DialogDescription>
-          </DialogHeader>
-          {bookingToEdit && (
-            <div className="space-y-4 py-4">
-              {/* Fila 1: Nombre del cliente y Servicio/Paquete */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-clientName">Nombre del cliente *</Label>
-                  <Input
-                    id="edit-clientName"
-                    defaultValue={bookingToEdit.clientName}
-                    onChange={(e) => setBookingToEdit({ ...bookingToEdit, clientName: e.target.value })}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-packageName">Servicio/Paquete *</Label>
-                  <Input
-                    id="edit-packageName"
-                    defaultValue={bookingToEdit.packageName}
-                    onChange={(e) => setBookingToEdit({ ...bookingToEdit, packageName: e.target.value })}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-              </div>
-
-              {/* Fila 2: Fecha y Total */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-date">Fecha *</Label>
-                  <Input
-                    id="edit-date"
-                    type="date"
-                    defaultValue={bookingToEdit.date}
-                    onChange={(e) => setBookingToEdit({ ...bookingToEdit, date: e.target.value })}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-total">Total *</Label>
-                  <Input
-                    id="edit-total"
-                    type="number"
-                    defaultValue={bookingToEdit.total}
-                    onChange={(e) => setBookingToEdit({ ...bookingToEdit, total: parseInt(e.target.value) })}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-              </div>
-
-              {/* Fila 3: Adultos y Niños */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-adults">Adultos</Label>
-                  <Input
-                    id="edit-adults"
-                    type="number"
-                    defaultValue={bookingToEdit.adults}
-                    onChange={(e) => {
-                      const adults = parseInt(e.target.value) || 0;
-                      setBookingToEdit({ 
-                        ...bookingToEdit, 
-                        adults,
-                        participants: adults + (bookingToEdit.children || 0)
-                      });
-                    }}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-children">Niños</Label>
-                  <Input
-                    id="edit-children"
-                    type="number"
-                    defaultValue={bookingToEdit.children}
-                    onChange={(e) => {
-                      const children = parseInt(e.target.value) || 0;
-                      setBookingToEdit({ 
-                        ...bookingToEdit, 
-                        children,
-                        participants: (bookingToEdit.adults || 0) + children
-                      });
-                    }}
-                    className="bg-gray-50 border-gray-300"
-                  />
-                </div>
-              </div>
-
-              {/* Fila 4: Estado de Reserva y Estado de Pago */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-status">Estado de reserva</Label>
-                  <Select
-                    value={bookingToEdit.status}
-                    onValueChange={(value) => setBookingToEdit({ ...bookingToEdit, status: value })}
-                  >
-                    <SelectTrigger id="edit-status" className="bg-gray-50 border-gray-300">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Confirmada">Confirmada</SelectItem>
-                      <SelectItem value="Pendiente">Pendiente</SelectItem>
-                      <SelectItem value="Cancelada">Cancelada</SelectItem>
-                      <SelectItem value="Completada">Completada</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-paymentStatus">Estado de pago</Label>
-                  <Select
-                    value={bookingToEdit.paymentStatus}
-                    onValueChange={(value) => setBookingToEdit({ ...bookingToEdit, paymentStatus: value })}
-                  >
-                    <SelectTrigger id="edit-paymentStatus" className="bg-gray-50 border-gray-300">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="Pagado">Pagado</SelectItem>
-                      <SelectItem value="Pendiente">Pendiente</SelectItem>
-                      <SelectItem value="Parcial">Parcial</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {/* ID Reserva (solo lectura) */}
-              <div className="space-y-2">
-                <Label htmlFor="edit-id">ID Reserva</Label>
-                <Input
-                  id="edit-id"
-                  defaultValue={bookingToEdit.id}
-                  disabled
-                  className="bg-gray-100 border-gray-300"
-                />
-              </div>
-
-              {/* Acciones */}
-              <div className="flex justify-end gap-2 pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => setIsEditDialogOpen(false)}
-                  className="border-gray-300 text-gray-700 hover:bg-gray-50"
-                >
-                  Cancelar
-                </Button>
-                <Button
-                  onClick={() => {
-                    // Actualizar la reserva en el estado
-                    const updatedBookings = bookings.map(booking => 
-                      booking.id === bookingToEdit.id ? bookingToEdit : booking
-                    );
-                    setBookings(updatedBookings);
-                    toast.success('Reserva actualizada correctamente');
-                    setIsEditDialogOpen(false);
-                  }}
-                  className="bg-green-600 hover:bg-green-700"
-                >
-                  Guardar cambios
-                </Button>
-              </div>
+            <div className="space-y-2">
+              <Label>Agrupación de gráficas</Label>
+              <Select value={agrupManual} onValueChange={(v) => setAgrupManual(v as typeof agrupManual)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Automática</SelectItem>
+                  <SelectItem value="day">Por día</SelectItem>
+                  <SelectItem value="week">Por semana</SelectItem>
+                  <SelectItem value="month">Por mes</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Diálogo de Creación de Métrica */}
-      <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-green-800 flex items-center gap-2">
-              <Target className="w-6 h-6" />
-              Crear Métrica Personalizada
-            </DialogTitle>
-            <DialogDescription>
-              Configure una métrica personalizada para analizar el rendimiento de sus servicios turísticos.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-6 py-4">
-            {/* Paso 1: Configuración Básica */}
-            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-              <h3 className="text-green-800 mb-4 flex items-center gap-2">
-                <Settings className="w-5 h-5" />
-                Paso 1: Configuración Básica
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {preset === 'custom' && (
+              <>
                 <div className="space-y-2">
-                  <Label htmlFor="metricName">Nombre de la métrica *</Label>
-                  <Input
-                    id="metricName"
-                    placeholder="Ej: Ingresos Mensuales Fincas"
-                    value={newMetric.metricName}
-                    onChange={(e) => setNewMetric({ ...newMetric, metricName: e.target.value })}
-                    className="border-green-300 focus:border-green-500"
-                  />
+                  <Label htmlFor="dash-finicio">Desde</Label>
+                  <Input id="dash-finicio" type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="serviceType">Tipo de reserva *</Label>
-                  <Select
-                    value={newMetric.serviceType}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, serviceType: value, selectedServices: [] })}
-                  >
-                    <SelectTrigger id="serviceType" className="border-green-300">
-                      <SelectValue placeholder="Seleccione el tipo" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="rutas">Rutas turísticas</SelectItem>
-                      <SelectItem value="fincas">Fincas en alquiler</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="dash-ffin">Hasta</Label>
+                  <Input id="dash-ffin" type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} />
                 </div>
+              </>
+            )}
+            {preset !== 'custom' && (
+              <div className="md:col-span-2 lg:col-span-2 flex items-center gap-2 text-sm text-gray-600">
+                <Calendar className="w-4 h-4 shrink-0 text-green-700" />
+                <span>
+                  <strong>Rango aplicado:</strong> {period.desde} → {period.hasta}
+                </span>
               </div>
+            )}
+          </CardContent>
+        </Card>
 
-              {newMetric.serviceType && (
-                <div className="mt-4 space-y-2">
-                  <Label>Servicios incluidos en el análisis *</Label>
-                  <div className="bg-white p-4 rounded border border-green-300 max-h-40 overflow-y-auto">
-                    {availableServices[newMetric.serviceType as 'rutas' | 'fincas']?.map((service) => (
-                      <div key={service} className="flex items-center space-x-2 mb-2">
-                        <Checkbox
-                          id={`service-${service}`}
-                          checked={newMetric.selectedServices.includes(service)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setNewMetric({
-                                ...newMetric,
-                                selectedServices: [...newMetric.selectedServices, service]
-                              });
-                            } else {
-                              setNewMetric({
-                                ...newMetric,
-                                selectedServices: newMetric.selectedServices.filter(s => s !== service)
-                              });
-                            }
-                          }}
-                        />
-                        <label
-                          htmlFor={`service-${service}`}
-                          className="text-sm cursor-pointer text-gray-700"
-                        >
-                          {service}
-                        </label>
+        {lastError && (
+          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            {lastError}
+          </div>
+        )}
+
+        {loading && !data && (
+          <div className="text-center py-16 text-gray-500">Cargando métricas del dashboard...</div>
+        )}
+
+        {data && (
+          <>
+            {/* KPI */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+              <Card className="border-green-100">
+                <CardContent className="pt-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        <Users className="w-4 h-4" /> Reservas (período)
+                      </p>
+                      <p className="text-2xl font-bold text-green-800 mt-1">{data.reservas.total}</p>
+                      <div className="mt-3 flex flex-wrap gap-3 text-xs text-gray-600">
+                        <span>
+                          Pend. <strong className="text-amber-600">{data.reservas.pendientes}</strong>
+                        </span>
+                        <span>
+                          Conf. <strong className="text-green-700">{data.reservas.confirmadas}</strong>
+                        </span>
+                        <span>
+                          Canc. <strong className="text-red-600">{data.reservas.canceladas}</strong>
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Paso 2: Filtros de Análisis */}
-            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-              <h3 className="text-green-800 mb-4 flex items-center gap-2">
-                <Filter className="w-5 h-5" />
-                Paso 2: Filtros de Análisis
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="reservationFilter">Filtro de reservas *</Label>
-                  <Select
-                    value={newMetric.reservationFilter}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, reservationFilter: value })}
-                  >
-                    <SelectTrigger id="reservationFilter" className="border-green-300">
-                      <SelectValue placeholder="Todas las reservas" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todas las reservas</SelectItem>
-                      <SelectItem value="Confirmada">Solo confirmadas</SelectItem>
-                      <SelectItem value="Cancelada">Solo canceladas</SelectItem>
-                      <SelectItem value="Pendiente">Solo pendientes</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="dateRange">Rango de fechas *</Label>
-                  <Select
-                    value={newMetric.dateRange}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, dateRange: value })}
-                  >
-                    <SelectTrigger id="dateRange" className="border-green-300">
-                      <SelectValue placeholder="Seleccione el rango" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="week">Semana</SelectItem>
-                      <SelectItem value="fortnight">Quincena</SelectItem>
-                      <SelectItem value="month">Mes</SelectItem>
-                      <SelectItem value="custom">Rango personalizado</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="clientType">Clientes incluidos *</Label>
-                  <Select
-                    value={newMetric.clientType}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, clientType: value })}
-                  >
-                    <SelectTrigger id="clientType" className="border-green-300">
-                      <SelectValue placeholder="Todos los clientes" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Todos</SelectItem>
-                      <SelectItem value="recurring">Solo recurrentes</SelectItem>
-                      <SelectItem value="new">Solo nuevos</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              {newMetric.dateRange === 'custom' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="customDateStart">Fecha inicial</Label>
-                    <Input
-                      id="customDateStart"
-                      type="date"
-                      value={newMetric.customDateStart}
-                      onChange={(e) => setNewMetric({ ...newMetric, customDateStart: e.target.value })}
-                      className="border-green-300 focus:border-green-500"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="customDateEnd">Fecha final</Label>
-                    <Input
-                      id="customDateEnd"
-                      type="date"
-                      value={newMetric.customDateEnd}
-                      onChange={(e) => setNewMetric({ ...newMetric, customDateEnd: e.target.value })}
-                      className="border-green-300 focus:border-green-500"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Paso 3: Variables a Metricar */}
-            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-              <h3 className="text-green-800 mb-4 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" />
-                Paso 3: Variables a Metricar
-              </h3>
-              <p className="text-sm text-gray-600 mb-4">Seleccione las métricas que desea incluir en el análisis</p>
-              <div className="space-y-3">
-                <div className="flex items-center space-x-3 p-3 bg-white rounded border border-green-200 hover:border-green-400 transition-colors">
-                  <Checkbox
-                    id="numberOfReservations"
-                    checked={newMetric.metrics.numberOfReservations}
-                    onCheckedChange={(checked) => setNewMetric({
-                      ...newMetric,
-                      metrics: { ...newMetric.metrics, numberOfReservations: checked as boolean }
-                    })}
-                  />
-                  <label htmlFor="numberOfReservations" className="cursor-pointer flex-1">
-                    <span className="text-gray-900">Número de reservas</span>
-                    <p className="text-xs text-gray-500">Total de reservas en el período seleccionado</p>
-                  </label>
-                </div>
-
-                <div className="flex items-center space-x-3 p-3 bg-white rounded border border-green-200 hover:border-green-400 transition-colors">
-                  <Checkbox
-                    id="generatedIncome"
-                    checked={newMetric.metrics.generatedIncome}
-                    onCheckedChange={(checked) => setNewMetric({
-                      ...newMetric,
-                      metrics: { ...newMetric.metrics, generatedIncome: checked as boolean }
-                    })}
-                  />
-                  <label htmlFor="generatedIncome" className="cursor-pointer flex-1">
-                    <span className="text-gray-900">Ingresos generados</span>
-                    <p className="text-xs text-gray-500">Suma total de ingresos del período</p>
-                  </label>
-                </div>
-
-                {newMetric.serviceType === 'fincas' && (
-                  <div className="flex items-center space-x-3 p-3 bg-white rounded border border-green-200 hover:border-green-400 transition-colors">
-                    <Checkbox
-                      id="averageOccupancy"
-                      checked={newMetric.metrics.averageOccupancy}
-                      onCheckedChange={(checked) => setNewMetric({
-                        ...newMetric,
-                        metrics: { ...newMetric.metrics, averageOccupancy: checked as boolean }
-                      })}
-                    />
-                    <label htmlFor="averageOccupancy" className="cursor-pointer flex-1">
-                      <span className="text-gray-900">Ocupación promedio</span>
-                      <p className="text-xs text-gray-500">Porcentaje de ocupación de las fincas</p>
-                    </label>
-                  </div>
-                )}
-
-                {newMetric.serviceType === 'rutas' && (
-                  <div className="flex items-center space-x-3 p-3 bg-white rounded border border-green-200 hover:border-green-400 transition-colors">
-                    <Checkbox
-                      id="averageAttendance"
-                      checked={newMetric.metrics.averageAttendance}
-                      onCheckedChange={(checked) => setNewMetric({
-                        ...newMetric,
-                        metrics: { ...newMetric.metrics, averageAttendance: checked as boolean }
-                      })}
-                    />
-                    <label htmlFor="averageAttendance" className="cursor-pointer flex-1">
-                      <span className="text-gray-900">Asistencia promedio</span>
-                      <p className="text-xs text-gray-500">Promedio de asistentes por ruta</p>
-                    </label>
-                  </div>
-                )}
-
-                <div className="flex items-center space-x-3 p-3 bg-white rounded border border-green-200 hover:border-green-400 transition-colors">
-                  <Checkbox
-                    id="cancellationsVsConfirmations"
-                    checked={newMetric.metrics.cancellationsVsConfirmations}
-                    onCheckedChange={(checked) => setNewMetric({
-                      ...newMetric,
-                      metrics: { ...newMetric.metrics, cancellationsVsConfirmations: checked as boolean }
-                    })}
-                  />
-                  <label htmlFor="cancellationsVsConfirmations" className="cursor-pointer flex-1">
-                    <span className="text-gray-900">Cancelaciones vs Confirmaciones</span>
-                    <p className="text-xs text-gray-500">Ratio de reservas canceladas vs confirmadas</p>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {/* Paso 4: Configuración de Visualización */}
-            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-              <h3 className="text-green-800 mb-4 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5" />
-                Paso 4: Configuración de Visualización
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="chartType">Tipo de gráfico *</Label>
-                  <Select
-                    value={newMetric.chartType}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, chartType: value })}
-                  >
-                    <SelectTrigger id="chartType" className="border-green-300">
-                      <SelectValue placeholder="Seleccione el tipo" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="bars">Barras</SelectItem>
-                      <SelectItem value="lines">Líneas</SelectItem>
-                      <SelectItem value="pie">Torta</SelectItem>
-                      <SelectItem value="table">Tabla dinámica</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="temporalGrouping">Agrupación temporal *</Label>
-                  <Select
-                    value={newMetric.temporalGrouping}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, temporalGrouping: value })}
-                  >
-                    <SelectTrigger id="temporalGrouping" className="border-green-300">
-                      <SelectValue placeholder="Seleccione la agrupación" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="week">Semana</SelectItem>
-                      <SelectItem value="fortnight">Quincena</SelectItem>
-                      <SelectItem value="month">Mes</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="comparison">Comparación</Label>
-                  <Select
-                    value={newMetric.comparison}
-                    onValueChange={(value) => setNewMetric({ ...newMetric, comparison: value })}
-                  >
-                    <SelectTrigger id="comparison" className="border-green-300">
-                      <SelectValue placeholder="Sin comparación" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">Sin comparación</SelectItem>
-                      <SelectItem value="previous">Contra período anterior</SelectItem>
-                      <SelectItem value="yearAgo">Contra mismo período año pasado</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-
-            {/* Resumen y Control */}
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-              <div className="flex items-start gap-3">
-                <CheckCircle className="w-5 h-5 text-blue-600 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-blue-900 mb-2">Resumen de la métrica</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-blue-700">
-                    <div>
-                      <span className="font-medium">Nombre:</span> {newMetric.metricName || 'Sin nombre'}
-                    </div>
-                    <div>
-                      <span className="font-medium">Tipo:</span> {newMetric.serviceType === 'rutas' ? 'Rutas turísticas' : newMetric.serviceType === 'fincas' ? 'Fincas en alquiler' : 'No seleccionado'}
-                    </div>
-                    <div>
-                      <span className="font-medium">Servicios incluidos:</span> {newMetric.selectedServices.length || 0}
-                    </div>
-                    <div>
-                      <span className="font-medium">Gráfico:</span> {newMetric.chartType === 'bars' ? 'Barras' : newMetric.chartType === 'lines' ? 'Líneas' : newMetric.chartType === 'pie' ? 'Torta' : newMetric.chartType === 'table' ? 'Tabla' : 'No seleccionado'}
                     </div>
                   </div>
-                  <p className="text-xs text-blue-600 mt-3">
-                    <span className="font-medium">Usuario:</span> Administrador • 
-                    <span className="font-medium"> Fecha de creación:</span> {new Date().toLocaleDateString()}
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-100">
+                <CardContent className="pt-6">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1">
+                        <Package className="w-4 h-4" /> Ventas totales (período)
+                      </p>
+                      <p className="text-2xl font-bold text-green-800 mt-1">{data.ventas.total_periodo}</p>
+                      <p className="text-xs text-gray-600 mt-2 flex items-center gap-1 flex-wrap">
+                        <TrendingUp className="w-3.5 h-3.5 shrink-0" />
+                        Este mes hasta fin de período:
+                        <strong>{data.ventas.ventas_mes}</strong> ventas
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Facturación: <strong>{formatMoneyCOP(data.ventas.monto_total_periodo)}</strong> · Cobrado:{' '}
+                        <strong>{formatMoneyCOP(data.ventas.monto_pagado_periodo)}</strong>
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-100">
+                <CardContent className="pt-6">
+                  <div>
+                    <p className="text-sm text-muted-foreground flex items-center gap-1">
+                      <CreditCard className="w-4 h-4" /> Abonos / ingresos
+                    </p>
+                    <p className="text-lg font-semibold text-gray-700 mt-1">Estado ventas</p>
+                    <div className="mt-2 space-y-1 text-xs">
+                      {(data.ventas.por_estado_tabla ?? []).slice(0, 6).map((r) => (
+                        <div key={r.estado_pago} className="flex justify-between border-b border-green-50 py-1">
+                          <span>{r.estado_pago}</span>
+                          <strong>{r.total}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-100 bg-gradient-to-br from-green-50/80 to-white">
+                <CardContent className="pt-6">
+                  <p className="text-sm text-muted-foreground flex items-center gap-1">
+                    <DollarSign className="w-4 h-4" /> Dinero recibido (abonos aprobados · período)
                   </p>
-                </div>
-              </div>
+                  <p className="text-2xl font-bold text-green-900 mt-1">{formatMoneyCOP(data.pagos.dinero_recibido)}</p>
+                  <div className="mt-4 text-xs text-gray-700 space-y-1">
+                    <p>
+                      Abonos pendientes: <strong>{data.pagos.abonos_pendientes_cantidad}</strong> (
+                      <strong>{formatMoneyCOP(data.pagos.abonos_pendientes_monto)}</strong>)
+                    </p>
+                    <p className="text-muted-foreground">
+                      Agrupación activa en gráficas: <strong>{data.periodo.agrupacion}</strong>
+                    </p>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
-          </div>
 
-          {/* Acciones */}
-          <div className="flex justify-end gap-2 pt-4 border-t border-green-200">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setIsCreateDialogOpen(false);
-                // Limpiar formulario
-                setNewMetric({
-                  metricName: '',
-                  serviceType: '',
-                  selectedServices: [],
-                  reservationFilter: 'all',
-                  dateRange: 'month',
-                  customDateStart: '',
-                  customDateEnd: '',
-                  clientType: 'all',
-                  metrics: {
-                    numberOfReservations: false,
-                    generatedIncome: false,
-                    averageOccupancy: false,
-                    averageAttendance: false,
-                    cancellationsVsConfirmations: false,
-                  },
-                  chartType: 'bars',
-                  temporalGrouping: 'month',
-                  comparison: 'none',
-                });
-              }}
-              className="border-gray-300 text-gray-700 hover:bg-gray-50"
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={() => {
-                // Validar campos requeridos
-                if (!newMetric.metricName) {
-                  toast.error('Por favor ingrese un nombre para la métrica');
-                  return;
-                }
-                if (!newMetric.serviceType) {
-                  toast.error('Por favor seleccione el tipo de servicio');
-                  return;
-                }
-                if (newMetric.selectedServices.length === 0) {
-                  toast.error('Por favor seleccione al menos un servicio');
-                  return;
-                }
-                
-                const hasMetrics = Object.values(newMetric.metrics).some(v => v);
-                if (!hasMetrics) {
-                  toast.error('Por favor seleccione al menos una variable para metricar');
-                  return;
-                }
+            {/* Charts row 1: pies */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="border-green-200">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800 flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5" />
+                    Distribución por estado — Reservas
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {!pieReservas.length ? (
+                    <p className="text-sm text-gray-500 py-16 text-center">Sin datos para el período.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <PieChart>
+                        <Pie
+                          data={pieReservas}
+                          dataKey="value"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={110}
+                          label={({ name, percent }) =>
+                            `${name} ${percent != null ? (percent * 100).toFixed(0) : 0}%`
+                          }
+                          labelLine={false}
+                        >
+                          {pieReservas.map((e, idx) => (
+                            <Cell key={e.name + idx} fill={e.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => [Number(v || 0), 'Cantidad']} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
 
-                // Aquí se guardaría la métrica - por ahora solo mostramos confirmación
-                toast.success(`✅ Métrica "${newMetric.metricName}" creada exitosamente`);
-                toast.info(`Se generó un widget de ${newMetric.chartType === 'bars' ? 'barras' : newMetric.chartType === 'lines' ? 'líneas' : newMetric.chartType === 'pie' ? 'torta' : 'tabla'} en el dashboard`);
-                
-                setIsCreateDialogOpen(false);
-                
-                // Limpiar formulario
-                setNewMetric({
-                  metricName: '',
-                  serviceType: '',
-                  selectedServices: [],
-                  reservationFilter: 'all',
-                  dateRange: 'month',
-                  customDateStart: '',
-                  customDateEnd: '',
-                  clientType: 'all',
-                  metrics: {
-                    numberOfReservations: false,
-                    generatedIncome: false,
-                    averageOccupancy: false,
-                    averageAttendance: false,
-                    cancellationsVsConfirmations: false,
-                  },
-                  chartType: 'bars',
-                  temporalGrouping: 'month',
-                  comparison: 'none',
-                });
-              }}
-              className="bg-green-600 hover:bg-green-700"
-            >
-              <Target className="w-4 h-4 mr-2" />
-              Generar Métrica
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+              <Card className="border-green-200">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800 flex items-center gap-2">
+                    <BarChart3 className="w-5 h-5" />
+                    Distribución por estado — Ventas
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {!pieVentas.length ? (
+                    <p className="text-sm text-gray-500 py-16 text-center">Sin datos para el período.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <PieChart>
+                        <Pie
+                          data={pieVentas}
+                          dataKey="value"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={110}
+                          label={({ name, percent }) =>
+                            `${name} ${percent != null ? (percent * 100).toFixed(0) : 0}%`
+                          }
+                          labelLine={false}
+                        >
+                          {pieVentas.map((e, idx) => (
+                            <Cell key={e.name + idx} fill={e.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(v: number) => [Number(v || 0), 'Ventas']} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Line ingresos + monthly aggregate */}
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+              <Card className="border-green-200 xl:col-span-2">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800">Ingresos / Abonos aprobados (línea)</CardTitle>
+                  <p className="text-sm font-normal text-muted-foreground">
+                    Por fecha de verificación del comprobante (o fecha de envío si aplica).
+                  </p>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {!lineIngresos.length ? (
+                    <p className="text-sm text-gray-500 py-12 text-center">Sin ingresos aprobados en el período.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <LineChart data={lineIngresos}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `$${(Number(v) / 1e6).toFixed(1)}M`} />
+                        <Tooltip
+                          formatter={(v: number) => [formatMoneyCOP(Number(v || 0)), 'Ingreso']}
+                          labelFormatter={(_, payload) =>
+                            payload && payload[0]?.payload?.label ? String(payload[0].payload.label) : ''
+                          }
+                        />
+                        <Legend />
+                        <Line
+                          type="monotone"
+                          dataKey="ingresos"
+                          name="Abonos aprobados"
+                          stroke="#059669"
+                          strokeWidth={2}
+                          dot={{ r: 3 }}
+                          activeDot={{ r: 6 }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-100">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base text-green-900">Ingresos mensuales (dentro del período)</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm space-y-2 max-h-[360px] overflow-y-auto">
+                  {!lineIngresosMensualExtra.length ? (
+                    <p className="text-gray-500">Sin datos mensuales.</p>
+                  ) : (
+                    lineIngresosMensualExtra.map((row, i) => (
+                      <div
+                        key={i}
+                        className="flex justify-between border-b border-green-100 py-1.5 last:border-0"
+                      >
+                        <span className="text-gray-700">{row.label}</span>
+                        <span className="font-semibold text-green-800">{formatMoneyCOP(row.mensual)}</span>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Bars reservas y ventas */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <Card className="border-green-200">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800">Reservas por período (barras)</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {!barReservas.length ? (
+                    <p className="text-sm text-gray-500 py-12 text-center">Sin reservas en el período.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <BarChart data={barReservas}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={agrupacionEfectiva === 'day' ? 2 : 0} />
+                        <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                        <Tooltip />
+                        <Legend />
+                        <Bar dataKey="reservas" name="Total reservas" fill="#059669" radius={[6, 6, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border-green-200">
+                <CardHeader className="bg-gradient-to-r from-green-50 to-emerald-50">
+                  <CardTitle className="text-green-800">Ventas por período (barras)</CardTitle>
+                </CardHeader>
+                <CardContent className="pt-6">
+                  {!barVentas.length ? (
+                    <p className="text-sm text-gray-500 py-12 text-center">Sin ventas en el período.</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <BarChart data={barVentas}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} interval={agrupacionEfectiva === 'day' ? 2 : 0} />
+                        <YAxis yAxisId="left" orientation="left" tick={{ fontSize: 11 }} allowDecimals={false} />
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fontSize: 11 }}
+                          tickFormatter={(v) => `$${(Number(v) / 1e6).toFixed(1)}M`}
+                        />
+                        <Tooltip
+                          formatter={(value: unknown, key: unknown) =>
+                            key === 'monto' ? formatMoneyCOP(Number(value ?? 0)) : value
+                          }
+                        />
+                        <Legend />
+                        <Bar yAxisId="left" dataKey="ventas" name="Nº ventas" fill="#0369a1" radius={[4, 4, 0, 0]} />
+                        <Bar yAxisId="right" dataKey="monto" name="Facturación" fill="#eab308" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          </>
+        )}
+      </motion.div>
     </div>
   );
 }

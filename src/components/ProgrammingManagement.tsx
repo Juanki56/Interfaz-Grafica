@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Calendar,
@@ -23,7 +23,8 @@ import {
   Bus,
   ChevronDown,
   ChevronUp,
-  ClipboardList
+  ClipboardList,
+  CheckCircle2,
 } from 'lucide-react';
 import { ProgrammingFormImproved } from './ProgrammingFormImproved';
 import { Button } from './ui/button';
@@ -59,6 +60,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
 import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
@@ -71,13 +73,93 @@ import {
   programacionAPI,
   reservasAPI,
   rutasAPI,
+  serviciosAPI,
   solicitudesPersonalizadasAPI,
   type Ruta,
   type Empleado as EmpleadoBackend,
   type Programacion as ProgramacionBackend,
   type Reserva,
+  type Servicio,
   type SolicitudPersonalizada,
 } from '../services/api';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+
+/** Borrador de revisión de solicitud personalizada (staff). Sobrevive cambiar de módulo en la misma pestaña. */
+type SolicitudRevisionEditRow = {
+  fecha_salida: string;
+  fecha_regreso: string;
+  hora_salida: string;
+  hora_regreso: string;
+  precio_programacion: string;
+  lugar_encuentro: string;
+  id_empleado: string;
+  id_empleado_apoyo: string;
+};
+
+const SOLICITUD_REVISION_SESSION_KEY = 'occitour:staff:solicitud-revision-draft:v2';
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v != null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function parseSolicitudRevisionSessionDrafts(): Record<number, SolicitudRevisionEditRow> {
+  if (typeof sessionStorage === 'undefined') return {};
+  try {
+    const raw = sessionStorage.getItem(SOLICITUD_REVISION_SESSION_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isPlainObject(parsed)) return {};
+    const out: Record<number, SolicitudRevisionEditRow> = {};
+    for (const [k, val] of Object.entries(parsed)) {
+      const id = Number(k);
+      if (!Number.isFinite(id) || id <= 0 || !isPlainObject(val)) continue;
+      const row = val;
+      out[id] = {
+        fecha_salida: typeof row.fecha_salida === 'string' ? row.fecha_salida : '',
+        fecha_regreso: typeof row.fecha_regreso === 'string' ? row.fecha_regreso : '',
+        hora_salida: typeof row.hora_salida === 'string' ? row.hora_salida : '',
+        hora_regreso: typeof row.hora_regreso === 'string' ? row.hora_regreso : '',
+        precio_programacion: typeof row.precio_programacion === 'string' ? row.precio_programacion : '',
+        lugar_encuentro: typeof row.lugar_encuentro === 'string' ? row.lugar_encuentro : '',
+        id_empleado: typeof row.id_empleado === 'string' ? row.id_empleado : '__none__',
+        id_empleado_apoyo: typeof row.id_empleado_apoyo === 'string' ? row.id_empleado_apoyo : '__none__',
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function persistSolicitudRevisionSessionDrafts(drafts: Record<number, SolicitudRevisionEditRow>) {
+  if (typeof sessionStorage === 'undefined') return;
+  try {
+    sessionStorage.setItem(SOLICITUD_REVISION_SESSION_KEY, JSON.stringify(drafts));
+  } catch {
+    /* Quota / modo privado */
+  }
+}
+
+/** Superpone borradores guardados en sesión sobre lo que viene del API (por si el backend aún no persiste PATCH /cotizar). */
+function mergeBaseSolicitudEditsWithSessionDrafts(
+  base: Record<number, SolicitudRevisionEditRow>
+): Record<number, SolicitudRevisionEditRow> {
+  const stored = parseSolicitudRevisionSessionDrafts();
+  const next = { ...base };
+  for (const [rawId, draft] of Object.entries(stored)) {
+    const id = Number(rawId);
+    if (!next[id]) continue;
+    next[id] = { ...next[id], ...draft };
+  }
+  return next;
+}
+
+function removeSolicitudRevisionSessionDraft(id: number) {
+  const stored = parseSolicitudRevisionSessionDrafts();
+  if (!(id in stored)) return;
+  delete stored[id];
+  persistSolicitudRevisionSessionDrafts(stored);
+}
 
 // Interfaces
 interface Companion {
@@ -146,12 +228,63 @@ interface Programming {
   totalSeats?: number;
   availableSeats?: number;
   occupiedSeats?: number;
+  isPersonalizada?: boolean;
 }
 
 interface ProgrammingManagementProps {
   role: 'admin' | 'advisor' | 'guide' | 'client';
   userId?: string;
   userName?: string;
+}
+
+/** Coerción segura desde API/BD (evita `"false"` → truthy). */
+function normalizeEsPersonalizada(raw: unknown): boolean {
+  if (raw === true || raw === 1) return true;
+  if (raw === false || raw === 0 || raw === null || raw === undefined) return false;
+  if (typeof raw === 'string') {
+    const s = raw.trim().toLowerCase();
+    if (!s || s === 'false' || s === 'f' || s === 'no' || s === '0') return false;
+    if (s === 'true' || s === 't' || s === '1' || s === 'yes' || s === 'si' || s === 'sí') return true;
+  }
+  return false;
+}
+
+/** Flag efectivo si el backend no envía `es_personalizada` pero sí hay solicitud vinculada. */
+function esPersonalizadaPorProgramacion(
+  row?: Pick<ProgramacionBackend, 'es_personalizada' | 'id_solicitud_personalizada'> | null,
+): boolean {
+  if (!row) return false;
+  const solicitudId = Number(row.id_solicitud_personalizada);
+  if (Number.isFinite(solicitudId) && solicitudId > 0) return true;
+  return normalizeEsPersonalizada(row.es_personalizada);
+}
+
+/** Etiqueta por fila: evita Badge base con overflow-hidden; usa tonos violeta incluidos en el CSS compilado (indigo-* no está en el bundle). */
+function SalidaTipoProgramacionBadge({ esPersonalizada }: { esPersonalizada: boolean }) {
+  if (esPersonalizada) {
+    return (
+      <span
+        title="Ruta personalizada / cotizada o convertida desde solicitud"
+        className={cn(
+          'mx-auto inline-flex min-w-max shrink-0 max-w-none select-none rounded-md px-2.5 py-1 text-[11px] font-semibold leading-tight whitespace-nowrap shadow-sm',
+          'border border-purple-500 bg-purple-100 text-purple-900',
+        )}
+      >
+        Personalizada
+      </span>
+    );
+  }
+  return (
+    <span
+      title="Salida del calendario de rutas (catálogo)"
+      className={cn(
+        'mx-auto inline-flex min-w-max shrink-0 max-w-none select-none rounded-md px-2.5 py-1 text-[11px] font-semibold leading-tight whitespace-nowrap',
+        'border border-emerald-600 bg-emerald-50 text-emerald-900',
+      )}
+    >
+      Programada
+    </span>
+  );
 }
 
 interface BackendProgrammingFormState {
@@ -187,7 +320,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     permissions.hasPermission('programacion.actualizar');
   const canDeleteProgramming = programmingPerms.canDelete() || permissions.hasPermission('programacion.eliminar');
 
-  const canUseBackend = isStaffRole && !permissions.loadingRoles && canViewProgramming;
+  const canUseBackendStaff = isStaffRole && !permissions.loadingRoles && canViewProgramming;
+  const canUseBackendGuide = role === 'guide';
+  const canUseBackend = canUseBackendStaff || canUseBackendGuide;
 
   const isGuideEmployee = (employee: EmpleadoBackend) => {
     const cargo = String(employee.cargo || '').toLowerCase();
@@ -199,6 +334,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return '—';
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(numeric);
+  };
+
+  const normalizeContratoFecha = (value?: string | null) => {
+    if (value == null) return '';
+    const s = String(value).trim();
+    return s ? s.slice(0, 10) : '';
   };
 
   // Mock data - Rutas disponibles
@@ -651,6 +792,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [currentPage, setCurrentPage] = useState(1);
   const [staffActiveTab, setStaffActiveTab] = useState<'programaciones' | 'solicitudes'>('programaciones');
   const [expandedSolicitudId, setExpandedSolicitudId] = useState<number | null>(null);
+  const [solicitudesSearchTerm, setSolicitudesSearchTerm] = useState('');
+  const [solicitudesEstadoFilter, setSolicitudesEstadoFilter] = useState<
+    'todas' | 'por_revisar' | 'pago_habilitado' | 'listas_convertir'
+  >('todas');
+  const [solicitudesPage, setSolicitudesPage] = useState(1);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isViewModalOpen, setIsViewModalOpen] = useState(false);
@@ -666,8 +812,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [backendEmpleados, setBackendEmpleados] = useState<EmpleadoBackend[]>([]);
   const [backendProgramaciones, setBackendProgramaciones] = useState<ProgramacionBackend[]>([]);
   const [backendRutas, setBackendRutas] = useState<Ruta[]>([]);
-  const [backendEdits, setBackendEdits] = useState<Record<number, { id_empleado: string; lugar_encuentro: string }>>({});
-  const [backendSavingId, setBackendSavingId] = useState<number | null>(null);
+  const [backendServiciosById, setBackendServiciosById] = useState<Record<number, Pick<Servicio, 'nombre' | 'precio'>>>({});
 
   const [backendCreateSaving, setBackendCreateSaving] = useState(false);
   const [backendCreateStep, setBackendCreateStep] = useState<1 | 2>(1);
@@ -704,20 +849,18 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const [backendEditRouteQuery, setBackendEditRouteQuery] = useState('');
   const [backendEditGuideQuery, setBackendEditGuideQuery] = useState('');
   const [backendEditCommittedSeats, setBackendEditCommittedSeats] = useState(0);
+  /** Fechas de salida/regreso pactadas con el cliente (personalizadas); no deben cambiar al editar. */
+  const [backendEditContratoFechas, setBackendEditContratoFechas] = useState<{
+    fecha_salida: string;
+    fecha_regreso: string;
+  } | null>(null);
+  /** Ids de empleados guía de apoyo (además del guía principal). Requiere que el backend persista `guias_apoyo`. */
+  const [backendEditGuiaApoyoIds, setBackendEditGuiaApoyoIds] = useState<string[]>([]);
 
   const [backendSolicitudes, setBackendSolicitudes] = useState<SolicitudPersonalizada[]>([]);
-  const [backendSolicitudEdits, setBackendSolicitudEdits] = useState<
-    Record<
-      number,
-      {
-        fecha_salida: string;
-        fecha_regreso: string;
-        hora_salida: string;
-        hora_regreso: string;
-        precio_programacion: string;
-      }
-    >
-  >({});
+  const [backendSolicitudEdits, setBackendSolicitudEdits] = useState<Record<number, SolicitudRevisionEditRow>>({});
+  const [solicitudRevMainGuideQuery, setSolicitudRevMainGuideQuery] = useState('');
+  const [solicitudRevApoyoGuideQuery, setSolicitudRevApoyoGuideQuery] = useState('');
   const [backendConvertingId, setBackendConvertingId] = useState<number | null>(null);
   const [backendSolicitudSavingId, setBackendSolicitudSavingId] = useState<number | null>(null);
   const [backendViewDetail, setBackendViewDetail] = useState<ProgramacionBackend | null>(null);
@@ -814,73 +957,134 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const selectedEditRoute = backendRutas.find((route) => String(route.id_ruta) === backendEditForm.id_ruta);
   const selectedCreateGuide = backendGuides.find((guide) => String(guide.id_empleado) === backendCreateForm.id_empleado);
   const selectedEditGuide = backendGuides.find((guide) => String(guide.id_empleado) === backendEditForm.id_empleado);
+
+  const backendEditContext = useMemo(() => {
+    if (!backendEditTargetId) return null;
+    const row = backendProgramaciones.find((r) => r.id_programacion === backendEditTargetId);
+    if (!row) return null;
+    const sid = row.id_solicitud_personalizada;
+    return {
+      isPersonalizada: esPersonalizadaPorProgramacion(row),
+      idSolicitud:
+        sid != null && String(sid).trim() !== '' && Number.isFinite(Number(sid)) ? Number(sid) : null,
+      rutaNombre: row.ruta_nombre ?? null,
+    };
+  }, [backendEditTargetId, backendProgramaciones]);
+
+  const isBackendEditPersonalizada = Boolean(backendEditContext?.isPersonalizada);
+
+  const personalizadaSalidaVigenteCliente = useMemo(() => {
+    if (!isBackendEditPersonalizada) return false;
+    const k = backendEditForm.estado.toLowerCase();
+    if (k.includes('cancel')) return false;
+    return k.includes('program') || k.includes('progres');
+  }, [isBackendEditPersonalizada, backendEditForm.estado]);
+
   const selectedViewRoute = backendViewDetail
     ? backendRutas.find((route) => route.id_ruta === backendViewDetail.id_ruta)
     : undefined;
+  /** Con guías no cargamos el listado global de empleados: sintetizamos desde el backend de la programación. */
   const selectedViewGuide = backendViewDetail?.id_empleado
     ? backendEmpleados.find((guide) => guide.id_empleado === backendViewDetail.id_empleado)
     : undefined;
+  const displayViewGuide: EmpleadoBackend | undefined = useMemo(() => {
+    if (selectedViewGuide) return selectedViewGuide;
+    const d = backendViewDetail;
+    if (!d?.id_empleado) return undefined;
+    const nom = String((d as any).empleado_nombre ?? '').trim();
+    const ape = String((d as any).empleado_apellido ?? '').trim();
+    const tel = String((d as any).empleado_telefono ?? '').trim();
+    if (!nom && !ape) return undefined;
+    return {
+      id_empleado: d.id_empleado as number,
+      nombre: nom || '—',
+      apellido: ape,
+      cargo: undefined,
+      rol_nombre: undefined,
+      correo: undefined,
+      telefono: tel || undefined,
+    } as unknown as EmpleadoBackend;
+  }, [selectedViewGuide, backendViewDetail]);
+
+  const pickSolicitudFechaSalidaRevision = (s: SolicitudPersonalizada) =>
+    normalizeDateInputValue(s.fecha_salida_operativa) ||
+    normalizeDateInputValue((s as Record<string, unknown>)['fecha_operativa_salida'] as string) ||
+    normalizeDateInputValue(s.fecha_deseada);
+
+  const pickSolicitudFechaRegresoRevision = (s: SolicitudPersonalizada) =>
+    normalizeDateInputValue(s.fecha_regreso_operativa) ||
+    normalizeDateInputValue((s as Record<string, unknown>)['fecha_operativa_regreso'] as string) ||
+    normalizeDateInputValue(s.fecha_regreso_deseada || s.fecha_deseada || '');
+
+  const pickSolicitudHoraSalidaRevision = (s: SolicitudPersonalizada) =>
+    normalizeTimeInputValue(s.hora_salida_operativa) ||
+    normalizeTimeInputValue((s as Record<string, unknown>)['hora_operativa_salida'] as string) ||
+    normalizeTimeInputValue(s.hora_deseada);
+
+  const pickSolicitudHoraRegresoRevision = (s: SolicitudPersonalizada) =>
+    normalizeTimeInputValue(s.hora_regreso_operativa) ||
+    normalizeTimeInputValue((s as Record<string, unknown>)['hora_operativa_regreso'] as string) ||
+    normalizeTimeInputValue(s.hora_regreso_deseada);
 
   const buildSolicitudEditState = (solicitudes: SolicitudPersonalizada[]) => {
-    const nextState: Record<
-      number,
-      {
-        fecha_salida: string;
-        fecha_regreso: string;
-        hora_salida: string;
-        hora_regreso: string;
-        precio_programacion: string;
-      }
-    > = {};
+    const nextState: Record<number, SolicitudRevisionEditRow> = {};
 
     for (const s of solicitudes) {
       const id = Number(s?.id_solicitud_personalizada);
       if (!Number.isFinite(id) || id <= 0) continue;
 
+      const mainGuia = s.id_empleado_guia ?? (s as Record<string, unknown>)['id_empleado_preasignado'];
+      const mainStr =
+        mainGuia != null && Number.isFinite(Number(mainGuia)) && Number(mainGuia) > 0
+          ? String(mainGuia)
+          : '__none__';
+
+      const apoyoRaw = s.guias_apoyo_preasignados ?? (s as Record<string, unknown>)['guias_apoyo_solicitud'];
+      const apoyoArr = Array.isArray(apoyoRaw) ? apoyoRaw : [];
+      const firstApoyo = apoyoArr.map((v) => Number(v)).find((n) => Number.isFinite(n) && n > 0);
+      const apoyoStr =
+        firstApoyo != null && firstApoyo !== Number(mainGuia) ? String(firstApoyo) : '__none__';
+
       nextState[id] = {
-        fecha_salida: normalizeDateInputValue(s.fecha_deseada),
-        fecha_regreso: normalizeDateInputValue((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
-        hora_salida: normalizeTimeInputValue(s.hora_deseada),
-        hora_regreso: normalizeTimeInputValue((s as any).hora_regreso_deseada || ''),
+        fecha_salida: pickSolicitudFechaSalidaRevision(s),
+        fecha_regreso: pickSolicitudFechaRegresoRevision(s),
+        hora_salida: pickSolicitudHoraSalidaRevision(s),
+        hora_regreso: pickSolicitudHoraRegresoRevision(s),
         precio_programacion:
           s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
+        lugar_encuentro: s.lugar_encuentro != null ? String(s.lugar_encuentro) : '',
+        id_empleado: mainStr,
+        id_empleado_apoyo: apoyoStr,
       };
     }
 
     return nextState;
   };
 
-  const refreshBackendSolicitudes = async () => {
+  const refreshBackendSolicitudes = async (justSavedId?: number | null) => {
     const refreshed = await solicitudesPersonalizadasAPI.listAll();
     setBackendSolicitudes(refreshed);
     setBackendSolicitudEdits((prev) => {
       const base = buildSolicitudEditState(refreshed);
+      const withSession = mergeBaseSolicitudEditsWithSessionDrafts(base);
+      const saved = justSavedId != null ? Number(justSavedId) : null;
+      const next = { ...withSession };
       for (const [rawId, currentEdit] of Object.entries(prev)) {
         const id = Number(rawId);
-        if (!base[id]) continue;
-        base[id] = {
-          ...base[id],
+        if (!next[id]) continue;
+        if (saved != null && Number.isFinite(saved) && id === saved) continue;
+        next[id] = {
+          ...next[id],
           ...currentEdit,
         };
       }
-      return base;
+      return next;
     });
     return refreshed;
   };
 
   const syncBackendProgramaciones = (programaciones: ProgramacionBackend[]) => {
     setBackendProgramaciones(programaciones);
-    setBackendEdits((prev) => {
-      const next: Record<number, { id_empleado: string; lugar_encuentro: string }> = {};
-      for (const p of programaciones) {
-        if (!p?.id_programacion) continue;
-        next[p.id_programacion] = {
-          id_empleado: prev[p.id_programacion]?.id_empleado ?? (p.id_empleado ? String(p.id_empleado) : ''),
-          lugar_encuentro: prev[p.id_programacion]?.lugar_encuentro ?? (p.lugar_encuentro ? String(p.lugar_encuentro) : ''),
-        };
-      }
-      return next;
-    });
   };
 
   useEffect(() => {
@@ -899,21 +1103,46 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         setBackendLoading(true);
         setBackendError(null);
 
-        const [empleados, programaciones, solicitudes, rutas] = await Promise.all([
-          empleadosAPI.getAll(),
-          programacionAPI.getAll(),
-          solicitudesPersonalizadasAPI.listAll(),
-          rutasAPI.getActivas(),
-        ]);
+        if (role === 'guide') {
+          const programaciones = await programacionAPI.getMisAsignaciones();
+          if (cancelled) return;
+          syncBackendProgramaciones(programaciones);
+          setBackendEmpleados([]);
+          setBackendSolicitudes([]);
+          setBackendRutas([]);
+          setBackendServiciosById({});
+          setBackendSolicitudEdits({});
+        } else {
+          const [empleados, programaciones, solicitudes, rutas, servicios] = await Promise.all([
+            empleadosAPI.getAll(),
+            programacionAPI.getAll(),
+            solicitudesPersonalizadasAPI.listAll(),
+            rutasAPI.getActivas(),
+            serviciosAPI.getAll().catch(() => [] as Servicio[]),
+          ]);
 
-        if (cancelled) return;
+          if (cancelled) return;
 
-        setBackendEmpleados(empleados);
-        syncBackendProgramaciones(programaciones);
-        setBackendSolicitudes(solicitudes);
-        setBackendRutas(rutas);
+          setBackendEmpleados(empleados);
+          syncBackendProgramaciones(programaciones);
+          setBackendSolicitudes(solicitudes);
+          setBackendRutas(rutas);
 
-        setBackendSolicitudEdits(buildSolicitudEditState(solicitudes));
+          const serviciosIndex: Record<number, Pick<Servicio, 'nombre' | 'precio'>> = {};
+          for (const s of servicios || []) {
+            const id = Number((s as any)?.id_servicio);
+            if (!Number.isFinite(id) || id <= 0) continue;
+            serviciosIndex[id] = {
+              nombre: String((s as any)?.nombre || ''),
+              precio: (s as any)?.precio,
+            };
+          }
+          setBackendServiciosById(serviciosIndex);
+
+          setBackendSolicitudEdits(
+            mergeBaseSolicitudEditsWithSessionDrafts(buildSolicitudEditState(solicitudes))
+          );
+        }
       } catch (e: any) {
         if (cancelled) return;
         setBackendError(e?.message || 'No se pudo cargar programación desde el backend');
@@ -926,22 +1155,76 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     return () => {
       cancelled = true;
     };
-  }, [canUseBackend]);
+  }, [canUseBackend, role]);
 
   useEffect(() => {
-    if (!canUseBackend || staffActiveTab !== 'programaciones') return;
+    if (!canUseBackend || backendLoading) return;
+    if (Object.keys(backendSolicitudEdits).length === 0) return;
+    persistSolicitudRevisionSessionDrafts(backendSolicitudEdits);
+  }, [canUseBackend, backendLoading, backendSolicitudEdits]);
+
+  useEffect(() => {
+    if (!canUseBackend || backendLoading) return;
+    if (isStaffRole && staffActiveTab !== 'programaciones') return;
 
     const intervalId = window.setInterval(async () => {
       try {
-        const programaciones = await programacionAPI.getAll();
-        syncBackendProgramaciones(programaciones);
+        if (role === 'guide') {
+          const programaciones = await programacionAPI.getMisAsignaciones();
+          syncBackendProgramaciones(programaciones);
+        } else {
+          const programaciones = await programacionAPI.getAll();
+          syncBackendProgramaciones(programaciones);
+        }
       } catch {
         // Ignore silent refresh errors; the manual state/error already covers initial load.
       }
     }, 15000);
 
     return () => window.clearInterval(intervalId);
-  }, [canUseBackend, staffActiveTab]);
+  }, [canUseBackend, staffActiveTab, backendLoading, isStaffRole, role]);
+
+  useEffect(() => {
+    if (!isEditModalOpen || !backendEditTargetId) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const full = await programacionAPI.getById(backendEditTargetId);
+        if (cancelled) return;
+        const apoyo = (full as ProgramacionBackend).guias_apoyo;
+        if (Array.isArray(apoyo)) {
+          setBackendEditGuiaApoyoIds(apoyo.map((x) => String(x)).filter((x) => Number(x) > 0));
+        }
+      } catch {
+        //
+      }
+    })();
+
+    (async () => {
+      const p = backendProgramaciones.find((r) => r.id_programacion === backendEditTargetId);
+      if (!p?.es_personalizada || !p.id_solicitud_personalizada) return;
+      try {
+        const s = await solicitudesPersonalizadasAPI.getById(Number(p.id_solicitud_personalizada));
+        if (cancelled) return;
+        const contratoSalida = normalizeContratoFecha(s.fecha_deseada) || normalizeContratoFecha(p.fecha_salida);
+        const contratoRegreso =
+          normalizeContratoFecha(s.fecha_regreso_deseada) || normalizeContratoFecha(p.fecha_regreso);
+        setBackendEditContratoFechas({ fecha_salida: contratoSalida, fecha_regreso: contratoRegreso });
+        setBackendEditForm((prev) => ({
+          ...prev,
+          fecha_salida: contratoSalida,
+          fecha_regreso: contratoRegreso,
+        }));
+      } catch {
+        //
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditModalOpen, backendEditTargetId]);
   
   const itemsPerPage = 4; // Paginación de 4 items
 
@@ -986,7 +1269,6 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
     };
 
     const backendAsProgrammings: Programming[] = (backendProgramaciones || [])
-      .filter((p) => !p?.es_personalizada)
       .map((p) => {
         const id = String(p.id_programacion);
         const prettyId = String(p.id_programacion).padStart(3, '0');
@@ -1020,6 +1302,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           totalSeats,
           availableSeats,
           occupiedSeats,
+          isPersonalizada: esPersonalizadaPorProgramacion(p),
         };
       });
 
@@ -1032,9 +1315,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       );
     }
 
-    // Si es guía, solo ver las programaciones asignadas a él
+    // Si es guía, solo las programaciones donde es id_empleado principal (fallback por compatibilidad)
     if (role === 'guide') {
-      filtered = filtered.filter(p => p.guideName === userName);
+      const gid = Number(userId);
+      if (Number.isFinite(gid) && gid > 0) {
+        filtered = filtered.filter((p) => Number(p.guideId) === gid);
+      }
     }
 
     // Aplicar filtros
@@ -1070,6 +1356,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const closeEditProgrammingPage = () => {
     setIsEditModalOpen(false);
     setBackendEditTargetId(null);
+    setBackendEditContratoFechas(null);
+    setBackendEditGuiaApoyoIds([]);
   };
 
   const handleView = async (programming: Programming) => {
@@ -1263,10 +1551,49 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
     setBackendEditTargetId(idProgramacion);
     setBackendEditCommittedSeats(Math.max(0, Number(p.cupos_totales ?? 0) - Number(p.cupos_disponibles ?? 0)));
+
+    const apoyoDelBackend = (p as ProgramacionBackend).guias_apoyo;
+    const apoyoInicial = Array.isArray(apoyoDelBackend)
+      ? apoyoDelBackend.map((x) => String(x)).filter((x) => Number(x) > 0)
+      : [];
+    setBackendEditGuiaApoyoIds(apoyoInicial);
+
+    let fechaSalidaEdicion = String(p.fecha_salida ?? '');
+    let fechaRegresoEdicion = String(p.fecha_regreso ?? '');
+
+    if (p.es_personalizada) {
+      const solicitudVinculada =
+        backendSolicitudes.find(
+          (s) =>
+            Number(s.id_programacion) === idProgramacion ||
+            (p.id_solicitud_personalizada != null &&
+              Number(s.id_solicitud_personalizada) === Number(p.id_solicitud_personalizada)),
+        ) ?? null;
+
+      const desdeSolicitudSalida = normalizeContratoFecha(solicitudVinculada?.fecha_deseada);
+      const desdeSolicitudRegreso = normalizeContratoFecha(
+        solicitudVinculada?.fecha_regreso_deseada != null
+          ? solicitudVinculada.fecha_regreso_deseada
+          : null,
+      );
+
+      const contratoSalida = desdeSolicitudSalida || normalizeContratoFecha(p.fecha_salida);
+      const contratoRegreso = desdeSolicitudRegreso || normalizeContratoFecha(p.fecha_regreso);
+
+      setBackendEditContratoFechas({
+        fecha_salida: contratoSalida,
+        fecha_regreso: contratoRegreso,
+      });
+      fechaSalidaEdicion = contratoSalida;
+      fechaRegresoEdicion = contratoRegreso;
+    } else {
+      setBackendEditContratoFechas(null);
+    }
+
     setBackendEditForm({
       id_ruta: String(p.id_ruta ?? ''),
-      fecha_salida: String(p.fecha_salida ?? ''),
-      fecha_regreso: String(p.fecha_regreso ?? ''),
+      fecha_salida: fechaSalidaEdicion,
+      fecha_regreso: fechaRegresoEdicion,
       hora_salida: String(p.hora_salida ?? ''),
       hora_regreso: String(p.hora_regreso ?? ''),
       cupos_totales: p.cupos_totales != null ? String(p.cupos_totales) : '',
@@ -1348,7 +1675,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
             <div className="rounded-lg bg-white p-3 border border-green-100">
               <p className="text-gray-500 text-xs">Duración</p>
-              <p className="font-medium text-gray-900">{route.duracion_dias ? `${route.duracion_dias} días` : '—'}</p>
+              <p className="font-medium text-gray-900">{formatRutaDuracionHoras(route.duracion_dias)}</p>
             </div>
             <div className="rounded-lg bg-white p-3 border border-green-100">
               <p className="text-gray-500 text-xs">Precio base</p>
@@ -1449,7 +1776,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                 </Badge>
               </div>
               <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
-                <span>{route.duracion_dias ? `${route.duracion_dias} días` : '—'}</span>
+                <span>{formatRutaDuracionHoras(route.duracion_dias)}</span>
                 <span>•</span>
                 <span>{formatCurrency(route.precio_base)}</span>
                 <span>•</span>
@@ -1521,7 +1848,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
   const formatDisplayDate = (value?: string | null) => {
     if (!value) return 'Sin definir';
-    const parsed = new Date(value);
+    const raw = String(value).trim();
+    const match = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+    // Evita desfase por zona horaria cuando el backend envía fecha-only.
+    const parsed = match ? new Date(`${match[1]}T00:00:00`) : new Date(raw);
     if (Number.isNaN(parsed.getTime())) return String(value);
     return parsed.toLocaleDateString('es-CO', {
       weekday: 'short',
@@ -1534,7 +1864,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   const formatDisplayDateTime = (date?: string | null, time?: string | null) => {
     const dateLabel = formatDisplayDate(date);
     if (!time) return dateLabel;
-    return `${dateLabel} · ${time}`;
+    const normalized = String(time).trim();
+    const match = normalized.match(/^(\d{2}:\d{2})/);
+    return `${dateLabel} · ${match ? match[1] : normalized}`;
   };
 
   const normalizeDateInputValue = (value?: string | null) => {
@@ -1668,7 +2000,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
             <p className="text-xs text-gray-500">{guide?.correo || guide?.telefono || 'Asigna un guía para mejorar el control operativo de la salida.'}</p>
             <div className="pt-2 border-t border-green-100 text-xs text-gray-600 space-y-1">
               <p>Encuentro: {form.lugar_encuentro?.trim() || 'Sin definir todavía'}</p>
-              <p>Duración estimada: {route?.duracion_dias ? `${route.duracion_dias} días` : 'No definida'}</p>
+              <p>
+                Duración estimada:{' '}
+                {route?.duracion_dias != null && Number(route.duracion_dias) > 0
+                  ? formatRutaDuracionHoras(route.duracion_dias)
+                  : 'No definida'}
+              </p>
               <p>Servicios de la ruta: {servicesCount}</p>
             </div>
           </div>
@@ -1723,8 +2060,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
   };
 
   const solicitudHabilitadaParaPago = (status?: string | null) => {
-    const normalized = String(status || '').trim().toLowerCase();
-    return normalized === 'aprobadaparapago' || normalized === 'cotizada';
+    const normalized = String(status || '').trim().toLowerCase().replace(/\s+/g, '');
+    return normalized.includes('aprobadaparapago') || normalized === 'cotizada';
   };
 
   const formatRequestedOptionalServices = (value: unknown) => {
@@ -1734,7 +2071,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         const idServicio = Number(item?.id_servicio ?? item?.idServicio ?? item?.id);
         const cantidad = Math.max(1, Number(item?.cantidad ?? item?.cantidad_default ?? item?.cantidadDefault ?? 1));
         if (!Number.isFinite(idServicio) || idServicio <= 0) return null;
-        return `Servicio #${idServicio} x${cantidad}`;
+        const info = backendServiciosById[idServicio];
+        const label = info?.nombre?.trim() ? info.nombre.trim() : `Servicio #${idServicio}`;
+        return `${label} x${cantidad}`;
       })
       .filter(Boolean);
     return items.length > 0 ? items.join(', ') : 'Sin servicios opcionales seleccionados.';
@@ -2105,7 +2444,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
 
 
   const renderStaffOperativeDetailBody = () => {
-    const routeTexts = viewModalRuta ?? selectedViewRoute;
+    const routeDetail = viewModalRuta ?? selectedViewRoute ?? undefined;
+    const routeTexts = routeDetail;
     const txtParticipantes = String(routeTexts?.recomendaciones_participantes ?? '').trim();
     const txtBriefing = String(routeTexts?.briefing_operativo_equipo ?? '').trim();
 
@@ -2132,16 +2472,16 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               <div className="flex flex-wrap items-center gap-2">
                                 <Badge className="bg-green-700 text-white hover:bg-green-700">{selectedProgramming.programId}</Badge>
                                 {getStatusBadge(selectedProgramming.status)}
-                                <Badge variant="outline" className="border-green-300 text-green-700">
-                                  {backendViewDetail.es_personalizada ? 'Personalizada' : 'Estándar'}
-                                </Badge>
+                                <SalidaTipoProgramacionBadge esPersonalizada={esPersonalizadaPorProgramacion(backendViewDetail)} />
                               </div>
                               <div>
                                 <h3 className="text-2xl font-semibold leading-snug text-gray-900">
-                                  {backendViewDetail.ruta_nombre || selectedViewRoute?.nombre || 'Programación'}
+                                  {backendViewDetail.ruta_nombre || routeDetail?.nombre || 'Programación'}
                                 </h3>
                                 <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                                  {selectedViewRoute?.descripcion || (backendViewDetail as any).ruta_descripcion || 'Sin descripción registrada para esta ruta.'}
+                                  {routeDetail?.descripcion ||
+                                    (backendViewDetail as any).ruta_descripcion ||
+                                    'Sin descripción registrada para esta ruta.'}
                                 </p>
                               </div>
                             </div>
@@ -2187,15 +2527,17 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               <div>
                                 <Label className="text-gray-500">Duración</Label>
                                 <p className="font-medium text-gray-900">
-                                  {selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias
-                                    ? `${selectedViewRoute?.duracion_dias || (backendViewDetail as any).duracion_dias} días`
-                                    : 'Sin definir'}
+                                  {(() => {
+                                    const h =
+                                      routeDetail?.duracion_dias ?? (backendViewDetail as any).duracion_dias;
+                                    return h != null && Number(h) > 0 ? formatRutaDuracionHoras(h) : 'Sin definir';
+                                  })()}
                                 </p>
                               </div>
                               <div>
                                 <Label className="text-gray-500">Dificultad</Label>
                                 <p className="font-medium text-gray-900">
-                                  {selectedViewRoute?.dificultad || (backendViewDetail as any).dificultad || 'Sin definir'}
+                                  {routeDetail?.dificultad || (backendViewDetail as any).dificultad || 'Sin definir'}
                                 </p>
                               </div>
                               <div>
@@ -2213,12 +2555,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 space-y-2">
                               <p className="font-semibold text-gray-900">Servicios vinculados a la ruta</p>
                               <p className="text-sm text-gray-600">
-                                {(Array.isArray(selectedViewRoute?.servicios_predefinidos) ? selectedViewRoute?.servicios_predefinidos.length : 0) || 0} predefinidos
+                                {(Array.isArray(routeDetail?.servicios_predefinidos) ? routeDetail?.servicios_predefinidos.length : 0) || 0} predefinidos
                                 {' · '}
-                                {(Array.isArray(selectedViewRoute?.servicios_opcionales) ? selectedViewRoute?.servicios_opcionales.length : 0) || 0} opcionales
+                                {(Array.isArray(routeDetail?.servicios_opcionales) ? routeDetail?.servicios_opcionales.length : 0) || 0} opcionales
                               </p>
                               <div className="flex flex-wrap gap-2">
-                                {(selectedViewRoute?.servicios_predefinidos || []).slice(0, 4).map((servicio) => (
+                                {(routeDetail?.servicios_predefinidos || []).slice(0, 4).map((servicio) => (
                                   <Badge
                                     key={servicio.id_ruta_servicio_predefinido ?? `pre-${servicio.id_servicio}`}
                                     variant="outline"
@@ -2227,7 +2569,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     {servicio.servicio?.nombre || `Servicio #${servicio.id_servicio}`}
                                   </Badge>
                                 ))}
-                                {(selectedViewRoute?.servicios_opcionales || []).slice(0, 4).map((servicio) => (
+                                {(routeDetail?.servicios_opcionales || []).slice(0, 4).map((servicio) => (
                                   <Badge
                                     key={servicio.id_ruta_servicio_opcional ?? `opc-${servicio.id_servicio}`}
                                     variant="outline"
@@ -2255,19 +2597,19 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                   <User className="w-6 h-6 text-orange-700" />
                                 </div>
                                 <div>
-                                  <p className="font-semibold text-gray-900">{getGuideDisplayName(selectedViewGuide)}</p>
-                                  <p className="text-sm text-gray-600">{selectedViewGuide?.cargo || selectedViewGuide?.rol_nombre || 'Sin asignación operativa'}</p>
+                                  <p className="font-semibold text-gray-900">{getGuideDisplayName(displayViewGuide)}</p>
+                                  <p className="text-sm text-gray-600">{displayViewGuide?.cargo || displayViewGuide?.rol_nombre || 'Guía turístico'}</p>
                                 </div>
                               </div>
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                                 <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
                                   <p className="text-xs text-gray-500">Correo</p>
-                                  <p className="font-medium text-gray-900 break-all">{selectedViewGuide?.correo || 'Sin correo registrado'}</p>
+                                  <p className="font-medium text-gray-900 break-all">{displayViewGuide?.correo || 'Sin correo registrado'}</p>
                                 </div>
                                 <div className="rounded-lg border border-orange-100 bg-orange-50/40 p-3">
                                   <p className="text-xs text-gray-500">Teléfono</p>
                                   <p className="font-medium text-gray-900">
-                                    {selectedViewGuide?.telefono || (backendViewDetail as any).empleado_telefono || 'Sin teléfono registrado'}
+                                    {displayViewGuide?.telefono || (backendViewDetail as any).empleado_telefono || 'Sin teléfono registrado'}
                                   </p>
                                 </div>
                               </div>
@@ -2309,7 +2651,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <CardHeader className="bg-emerald-50">
                             <CardTitle className="text-lg flex items-center gap-2">
                               <Users className="w-5 h-5" />
-                              Recomendaciones para participantes
+                              {role === 'guide'
+                                ? 'Indicaciones para participantes'
+                                : 'Recomendaciones para participantes'}
                             </CardTitle>
                           </CardHeader>
                           <CardContent className="p-6">
@@ -2324,12 +2668,14 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <CardHeader className="bg-amber-50">
                             <CardTitle className="text-lg flex items-center gap-2">
                               <ClipboardList className="w-5 h-5" />
-                              Briefing operativo (equipo)
+                              {role === 'guide' ? 'Recomendaciones para el guía (briefing operativo)' : 'Briefing operativo (equipo)'}
                             </CardTitle>
                           </CardHeader>
                           <CardContent className="p-6">
                             <p className="text-xs text-amber-900/80 mb-3">
-                              Uso interno OCCITOUR; comparte con el grupo operativo antes de la salida.
+                              {role === 'guide'
+                                ? 'Información práctica para la guianza (logística, puntos críticos, coordinación OCCITOUR). Si hay dudas, confirma con operaciones.'
+                                : 'Uso interno OCCITOUR; comparte con el grupo operativo antes de la salida.'}
                             </p>
                             <p className="text-sm text-gray-800 whitespace-pre-wrap leading-relaxed">
                               {txtBriefing}
@@ -2367,7 +2713,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     <TableHead>Estado</TableHead>
                                     <TableHead>Pago</TableHead>
                                     <TableHead className="min-w-[140px]">Notas (resumen)</TableHead>
-                                    <TableHead className="w-[120px] text-right">Acción</TableHead>
+                                    {role !== 'guide' ? <TableHead className="w-[120px] text-right">Acción</TableHead> : null}
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -2400,6 +2746,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             {truncateResumenNotas(notas, 90)}
                                           </span>
                                         </TableCell>
+                                        {role !== 'guide' ? (
                                         <TableCell className="text-right">
                                           <Button
                                             type="button"
@@ -2412,6 +2759,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             Ver reserva
                                           </Button>
                                         </TableCell>
+                                        ) : null}
                                       </TableRow>
                                     );
                                   })}
@@ -2421,6 +2769,69 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           )}
                         </CardContent>
                       </Card>
+                      {role === 'guide' && backendViewReservas.length > 0 && (
+                        <Card className="border-violet-200">
+                          <CardHeader className="bg-violet-50">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                              <Users className="w-5 h-5" />
+                              Clientes y acompañantes (detalle por reserva)
+                            </CardTitle>
+                          </CardHeader>
+                          <CardContent className="p-6 space-y-5">
+                            {backendViewReservas.map((row, ri) => {
+                              const rid = getReservaRowId(row);
+                              const comps = getReservaAcompanantes(row);
+                              return (
+                                <div
+                                  key={rid != null ? `guide-acomp-${rid}` : `guide-acomp-${ri}`}
+                                  className="rounded-lg border border-violet-100 bg-white p-4 space-y-2"
+                                >
+                                  <div className="flex flex-wrap items-baseline gap-2 justify-between">
+                                    <p className="font-semibold text-gray-900">{getReservaClienteLabel(row)}</p>
+                                    {rid != null ? (
+                                      <Badge variant="outline" className="border-violet-300 text-violet-800">
+                                        Reserva #{rid}
+                                      </Badge>
+                                    ) : null}
+                                  </div>
+                                  <div className="text-sm text-gray-600 grid gap-1 sm:grid-cols-2">
+                                    {row.cliente_email ? (
+                                      <span className="break-all">Correo: {row.cliente_email}</span>
+                                    ) : null}
+                                    {row.cliente_telefono ? <span>Tel.: {row.cliente_telefono}</span> : null}
+                                  </div>
+                                  {comps.length > 0 ? (
+                                    <div>
+                                      <Label className="text-violet-900">Acompañantes ({comps.length})</Label>
+                                      <ul className="mt-2 space-y-1 text-sm">
+                                        {comps.map((ac, i) => (
+                                          <li
+                                            key={String(ac.id_detalle_reserva_acompanante ?? i)}
+                                            className="rounded bg-violet-50/70 px-2 py-1.5"
+                                          >
+                                            <span className="font-medium text-gray-900">
+                                              {[ac.nombre, ac.apellido].filter(Boolean).join(' ').trim() ||
+                                                'Sin nombre'}
+                                            </span>
+                                            {ac.numero_documento
+                                              ? ` · Doc.: ${String(ac.numero_documento)}`
+                                              : ''}
+                                            {ac.telefono ? ` · Tel.: ${String(ac.telefono)}` : ''}
+                                          </li>
+                                        ))}
+                                      </ul>
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-gray-500">
+                                      Esta reserva no tiene acompañantes registrados (solo titular/es).
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </CardContent>
+                        </Card>
+                      )}
                     </>
                   ) : (
                     <Card className="border-gray-200">
@@ -2496,7 +2907,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
             </TabsList>
             <div className="flex flex-wrap gap-2 text-xs">
               <Badge variant="outline" className="border-green-300 text-green-700">
-                {(backendProgramaciones || []).filter((p) => !p?.es_personalizada).length} salidas operativas
+                {(backendProgramaciones || []).length} salidas (operativas + personalizadas)
               </Badge>
               <Badge variant="outline" className="border-amber-300 text-amber-700">
                 {backendSolicitudes.filter((s) => !s?.id_programacion).length} solicitudes activas
@@ -2519,6 +2930,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                     <TableHeader>
                       <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
                         <TableHead className="w-24">ID</TableHead>
+                        <TableHead className="min-w-[9rem] w-auto text-center whitespace-nowrap">Tipo</TableHead>
                         <TableHead className="w-32">Ruta Principal</TableHead>
                         <TableHead className="w-28">Fecha</TableHead>
                         <TableHead className="w-32">Guía</TableHead>
@@ -2535,6 +2947,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             <TableCell className="font-semibold text-green-700">
                               {prog.programId}
                             </TableCell>
+                            <TableCell className="overflow-visible px-3 text-center align-middle">
+                              <div className="flex justify-center overflow-visible">
+                                <SalidaTipoProgramacionBadge esPersonalizada={normalizeEsPersonalizada(prog.isPersonalizada)} />
+                              </div>
+                            </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-1">
                                 <Route className="w-3 h-3 text-green-600 flex-shrink-0" />
@@ -2547,7 +2964,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             <TableCell>
                               {prog.routes.length > 0 && (
                                 <div className="text-sm">
-                                  {new Date(prog.routes[0].date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                                  {formatDisplayDate(prog.routes[0].date)}
                                 </div>
                               )}
                             </TableCell>
@@ -2639,7 +3056,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                         ))
                       ) : (
                         <TableRow>
-                          <TableCell colSpan={8} className="text-center py-12">
+                          <TableCell colSpan={9} className="text-center py-12">
                             <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                             <p className="text-gray-500">No se encontraron programaciones</p>
                           </TableCell>
@@ -2718,7 +3135,12 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                 <CardContent className="p-4">
                   <p className="text-xs uppercase tracking-wide text-blue-700 font-semibold">Listas para convertir</p>
                   <p className="text-2xl font-bold text-gray-900 mt-2">
-                    {backendSolicitudes.filter((s) => !s?.id_programacion && String(s.venta_estado_pago || '') === 'Pagado').length}
+                    {backendSolicitudes.filter(
+                      (s) =>
+                        !s?.id_programacion &&
+                        solicitudHabilitadaParaPago(s.estado) &&
+                        String(s.venta_estado_pago || '') === 'Pagado'
+                    ).length}
                   </p>
                   <p className="text-sm text-gray-600 mt-1">Ya pagadas y listas para pasar a programación operativa.</p>
                 </CardContent>
@@ -2739,16 +3161,86 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                   <div className="p-6 text-sm text-red-600">{backendError}</div>
                 ) : (() => {
                   const pendientes = backendSolicitudes.filter((s) => !s?.id_programacion);
-                  if (pendientes.length === 0) {
+                  const query = solicitudesSearchTerm.trim().toLowerCase();
+                  const filteredPendientes = pendientes.filter((s) => {
+                    const id = Number(s?.id_solicitud_personalizada);
+                    const cliente = `${s?.cliente_nombre || ''} ${s?.cliente_apellido || ''}`.trim().toLowerCase();
+                    const ruta = String(s?.ruta_nombre || '').toLowerCase();
+                    const estado = String(s?.estado || '').toLowerCase();
+                    const pago = String(s?.venta_estado_pago || '').toLowerCase();
+
+                    const matchesQuery =
+                      !query ||
+                      String(id).includes(query) ||
+                      cliente.includes(query) ||
+                      ruta.includes(query) ||
+                      estado.includes(query) ||
+                      pago.includes(query);
+
+                    if (!matchesQuery) return false;
+
+                    if (solicitudesEstadoFilter === 'todas') return true;
+                    const pagoHabilitado = solicitudHabilitadaParaPago(s.estado);
+                    const pagoAprobado = String(s.venta_estado_pago || '') === 'Pagado';
+
+                    if (solicitudesEstadoFilter === 'por_revisar') return !pagoHabilitado;
+                    if (solicitudesEstadoFilter === 'pago_habilitado') return pagoHabilitado && !pagoAprobado;
+                    if (solicitudesEstadoFilter === 'listas_convertir') return pagoHabilitado && pagoAprobado;
+                    return true;
+                  });
+
+                  const itemsPerPageSolicitudes = 8;
+                  const totalPagesSolicitudes = Math.max(1, Math.ceil(filteredPendientes.length / itemsPerPageSolicitudes));
+                  const safePage = Math.min(Math.max(1, solicitudesPage), totalPagesSolicitudes);
+                  const start = (safePage - 1) * itemsPerPageSolicitudes;
+                  const pageItems = filteredPendientes.slice(start, start + itemsPerPageSolicitudes);
+
+                  if (filteredPendientes.length === 0) {
                     return (
                       <div className="p-6 text-sm text-gray-600">
-                        No hay solicitudes pendientes por revisar.
+                        No hay solicitudes que coincidan con el filtro.
                       </div>
                     );
                   }
 
                   return (
-                    <div className="overflow-x-auto">
+                    <div className="space-y-3">
+                      <div className="px-4 pt-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="relative w-full md:max-w-md">
+                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-green-700 w-4 h-4" />
+                          <Input
+                            placeholder="Buscar por cliente, ruta, estado, ID..."
+                            value={solicitudesSearchTerm}
+                            onChange={(e) => {
+                              setSolicitudesSearchTerm(e.target.value);
+                              setSolicitudesPage(1);
+                            }}
+                            className="pl-10 border-green-300"
+                          />
+                        </div>
+
+                        <div className="w-full md:w-[260px]">
+                          <Select
+                            value={solicitudesEstadoFilter}
+                            onValueChange={(value: any) => {
+                              setSolicitudesEstadoFilter(value);
+                              setSolicitudesPage(1);
+                            }}
+                          >
+                            <SelectTrigger className="h-9">
+                              <SelectValue placeholder="Filtrar solicitudes" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="todas">Todas</SelectItem>
+                              <SelectItem value="por_revisar">Por revisar</SelectItem>
+                              <SelectItem value="pago_habilitado">Pago habilitado</SelectItem>
+                              <SelectItem value="listas_convertir">Listas para convertir</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+
+                      <div className="overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
@@ -2761,15 +3253,25 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {pendientes.map((s) => {
+                          {pageItems.map((s) => {
                             const id = Number(s.id_solicitud_personalizada);
-                            const edit = backendSolicitudEdits[id] || {
-                              fecha_salida: normalizeDateInputValue(s.fecha_deseada),
-                              fecha_regreso: normalizeDateInputValue((s as any).fecha_regreso_deseada || s.fecha_deseada || ''),
-                              hora_salida: normalizeTimeInputValue(s.hora_deseada),
-                              hora_regreso: normalizeTimeInputValue((s as any).hora_regreso_deseada || ''),
-                              precio_programacion: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? String(s.precio_cotizado) : '',
-                            };
+                            const edit =
+                              backendSolicitudEdits[id] ??
+                              buildSolicitudEditState([s])[id] ?? {
+                                fecha_salida: normalizeDateInputValue(s.fecha_deseada),
+                                fecha_regreso: normalizeDateInputValue(
+                                  (s as any).fecha_regreso_deseada || s.fecha_deseada || ''
+                                ),
+                                hora_salida: normalizeTimeInputValue(s.hora_deseada),
+                                hora_regreso: normalizeTimeInputValue((s as any).hora_regreso_deseada || ''),
+                                precio_programacion:
+                                  s.precio_cotizado !== null && s.precio_cotizado !== undefined
+                                    ? String(s.precio_cotizado)
+                                    : '',
+                                lugar_encuentro: s.lugar_encuentro != null ? String(s.lugar_encuentro) : '',
+                                id_empleado: '__none__',
+                                id_empleado_apoyo: '__none__',
+                              };
                             const solicitudAprobada = solicitudHabilitadaParaPago(s.estado);
                             const pagoAprobado = String(s.venta_estado_pago || '') === 'Pagado';
                             const isExpanded = expandedSolicitudId === id;
@@ -2782,6 +3284,53 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               }
                               return precio;
                             };
+
+                            const revisionCotizarPayload = (precio: number, estado: string) => {
+                              const mainId =
+                                edit.id_empleado !== '__none__' ? Number(edit.id_empleado) : null;
+                              const apoyoId =
+                                edit.id_empleado_apoyo !== '__none__'
+                                  ? Number(edit.id_empleado_apoyo)
+                                  : null;
+                              if (
+                                mainId &&
+                                apoyoId &&
+                                Number.isFinite(mainId) &&
+                                Number.isFinite(apoyoId) &&
+                                mainId === apoyoId
+                              ) {
+                                toast.error('El guía de apoyo debe ser distinto al guía principal');
+                                return null;
+                              }
+                              return {
+                                precio_cotizado: precio,
+                                estado,
+                                fecha_salida: edit.fecha_salida || null,
+                                fecha_regreso: edit.fecha_regreso || null,
+                                hora_salida: edit.hora_salida || null,
+                                hora_regreso: edit.hora_regreso || null,
+                                lugar_encuentro: edit.lugar_encuentro?.trim() || null,
+                                id_empleado: Number.isFinite(Number(mainId)) && Number(mainId) > 0 ? mainId : null,
+                                guias_apoyo:
+                                  apoyoId && Number.isFinite(apoyoId) && apoyoId > 0 ? [apoyoId] : null,
+                              };
+                            };
+
+                            const qRevMain = solicitudRevMainGuideQuery.trim().toLowerCase();
+                            const filteredRevMainGuides = backendGuides.filter((guide) => {
+                              if (!qRevMain) return true;
+                              return [guide.nombre, guide.apellido, guide.cargo, guide.rol_nombre, guide.correo]
+                                .filter(Boolean)
+                                .some((value) => String(value).toLowerCase().includes(qRevMain));
+                            });
+                            const qRevApoyo = solicitudRevApoyoGuideQuery.trim().toLowerCase();
+                            const filteredRevApoyoGuides = backendGuides.filter((guide) => {
+                              if (String(guide.id_empleado) === edit.id_empleado) return false;
+                              if (!qRevApoyo) return true;
+                              return [guide.nombre, guide.apellido, guide.cargo, guide.rol_nombre, guide.correo]
+                                .filter(Boolean)
+                                .some((value) => String(value).toLowerCase().includes(qRevApoyo));
+                            });
 
                             return (
                               <React.Fragment key={id}>
@@ -2840,14 +3389,17 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                           try {
                                             const precio = validarPrecio();
                                             if (precio === null) return;
+                                            const payload = revisionCotizarPayload(
+                                              precio,
+                                              s.estado || 'PendienteRevision'
+                                            );
+                                            if (!payload) return;
                                             setBackendSolicitudSavingId(id);
-                                        await solicitudesPersonalizadasAPI.cotizar(id, {
-                                              precio_cotizado: precio,
-                                              estado: s.estado || 'PendienteRevision',
-                                            });
-                                        await refreshBackendSolicitudes();
+                                            await solicitudesPersonalizadasAPI.cotizar(id, payload);
+                                            await refreshBackendSolicitudes(id);
                                             toast.success('Revisión guardada', {
-                                              description: 'Se actualizó la cotización de la solicitud y, si hacía falta, se dejó lista la venta asociada.',
+                                              description:
+                                                'Quedaron guardados precio, fechas/horas operativas, punto de encuentro y guías en la solicitud (si el servidor los acepta).',
                                             });
                                           } catch (e: any) {
                                             toast.error('No se pudo guardar la revisión', {
@@ -2869,12 +3421,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                           try {
                                             const precio = validarPrecio();
                                             if (precio === null) return;
+                                            const payload = revisionCotizarPayload(precio, 'AprobadaParaPago');
+                                            if (!payload) return;
                                             setBackendSolicitudSavingId(id);
-                                        await solicitudesPersonalizadasAPI.cotizar(id, {
-                                              precio_cotizado: precio,
-                                              estado: 'AprobadaParaPago',
-                                            });
-                                        await refreshBackendSolicitudes();
+                                            await solicitudesPersonalizadasAPI.cotizar(id, payload);
+                                            await refreshBackendSolicitudes(id);
                                             toast.success('Pago habilitado para el cliente');
                                           } catch (e: any) {
                                             toast.error('No se pudo habilitar el pago', {
@@ -2912,6 +3463,23 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                             const precio = validarPrecio();
                                             if (precio === null) return;
 
+                                            const mainId =
+                                              edit.id_empleado !== '__none__' ? Number(edit.id_empleado) : null;
+                                            const apoyoId =
+                                              edit.id_empleado_apoyo !== '__none__'
+                                                ? Number(edit.id_empleado_apoyo)
+                                                : null;
+                                            if (
+                                              mainId &&
+                                              apoyoId &&
+                                              Number.isFinite(mainId) &&
+                                              Number.isFinite(apoyoId) &&
+                                              mainId === apoyoId
+                                            ) {
+                                              toast.error('El guía de apoyo debe ser distinto al guía principal');
+                                              return;
+                                            }
+
                                             setBackendConvertingId(id);
 
                                             const resp: any = await solicitudesPersonalizadasAPI.convertirAProgramacion(id, {
@@ -2921,21 +3489,67 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                               hora_regreso: edit.hora_regreso || null,
                                               cupos_totales: Number(s.cantidad_personas || 1),
                                               precio_programacion: precio,
-                                              precio_cotizado: s.precio_cotizado !== null && s.precio_cotizado !== undefined ? Number(s.precio_cotizado) : precio,
+                                              precio_cotizado: precio,
+                                              lugar_encuentro: edit.lugar_encuentro?.trim() || null,
+                                              id_empleado:
+                                                Number.isFinite(Number(mainId)) && Number(mainId) > 0 ? mainId : null,
+                                              guias_apoyo:
+                                                apoyoId && Number.isFinite(apoyoId) && apoyoId > 0 ? [apoyoId] : null,
                                             });
 
                                             const programacionNueva = resp?.data?.programacion as ProgramacionBackend | undefined;
                                             const solicitudNueva = resp?.data?.solicitud as SolicitudPersonalizada | undefined;
 
-                                            if (programacionNueva?.id_programacion) {
+                                            const progId = Number(
+                                              programacionNueva?.id_programacion ?? resp?.data?.id_programacion
+                                            );
+
+                                            if (Number.isFinite(progId) && progId > 0) {
+                                              try {
+                                                const cuposTot = Number(s.cantidad_personas || 1);
+                                                const dispRaw = programacionNueva?.cupos_disponibles;
+                                                const dispNum =
+                                                  dispRaw != null && dispRaw !== ''
+                                                    ? Number(dispRaw)
+                                                    : NaN;
+                                                const cuposDisponibles = Number.isFinite(dispNum) ? dispNum : 0;
+
+                                                await programacionAPI.update(progId, {
+                                                  id_ruta: s.id_ruta,
+                                                  fecha_salida: edit.fecha_salida,
+                                                  fecha_regreso: edit.fecha_regreso,
+                                                  hora_salida: edit.hora_salida || null,
+                                                  hora_regreso: edit.hora_regreso || null,
+                                                  cupos_totales: cuposTot,
+                                                  cupos_disponibles: cuposDisponibles,
+                                                  precio_programacion: precio,
+                                                  estado: (programacionNueva?.estado as string) || 'Programado',
+                                                  id_empleado:
+                                                    Number.isFinite(Number(mainId)) && Number(mainId) > 0
+                                                      ? mainId
+                                                      : null,
+                                                  lugar_encuentro: edit.lugar_encuentro?.trim() || null,
+                                                  guias_apoyo:
+                                                    apoyoId && Number.isFinite(apoyoId) && apoyoId > 0 ? [apoyoId] : [],
+                                                } as any);
+
+                                                const fresh = await programacionAPI.getById(progId);
+                                                setBackendProgramaciones((prev) => {
+                                                  const rest = prev.filter((p) => p.id_programacion !== progId);
+                                                  return [fresh as ProgramacionBackend, ...rest];
+                                                });
+                                              } catch (syncErr: any) {
+                                                toast.warning('Salida creada; no se reforzaron todos los datos en la programación', {
+                                                  description:
+                                                    syncErr?.message ||
+                                                    'Revisa la salida en edición o intenta actualizarla de nuevo.',
+                                                });
+                                                if (programacionNueva?.id_programacion) {
+                                                  setBackendProgramaciones((prev) => [programacionNueva, ...prev]);
+                                                }
+                                              }
+                                            } else if (programacionNueva?.id_programacion) {
                                               setBackendProgramaciones((prev) => [programacionNueva, ...prev]);
-                                              setBackendEdits((prev) => ({
-                                                ...prev,
-                                                [programacionNueva.id_programacion]: {
-                                                  id_empleado: programacionNueva.id_empleado ? String(programacionNueva.id_empleado) : '',
-                                                  lugar_encuentro: programacionNueva.lugar_encuentro ? String(programacionNueva.lugar_encuentro) : '',
-                                                },
-                                              }));
                                             }
 
                                             setBackendSolicitudes((prev) =>
@@ -2946,7 +3560,17 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                               )
                                             );
 
+                                            removeSolicitudRevisionSessionDraft(id);
+                                            setBackendSolicitudEdits((prev) => {
+                                              const next = { ...prev };
+                                              delete next[id];
+                                              persistSolicitudRevisionSessionDrafts(next);
+                                              return next;
+                                            });
+
                                             toast.success('Solicitud convertida a programación');
+                                            setStaffActiveTab('programaciones');
+                                            setCurrentPage(1);
                                           } catch (e: any) {
                                             toast.error('No se pudo convertir la solicitud', {
                                               description: e?.message || 'Error desconocido',
@@ -2983,7 +3607,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                                   Participantes: {s.cantidad_personas} en total
                                                 </p>
                                                 <p className="text-sm text-gray-900">
-                                                  Observaciones: {s.observaciones?.trim() || 'Sin observaciones registradas.'}
+                                                  <span className="font-medium">Observaciones:</span>{' '}
+                                                  <span className="whitespace-pre-wrap break-words max-h-24 overflow-auto inline-block align-top">
+                                                    {s.observaciones?.trim() || 'Sin observaciones registradas.'}
+                                                  </span>
                                                 </p>
                                               </div>
 
@@ -2993,7 +3620,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                                   {formatRequestedOptionalServices((s as any).servicios_opcionales)}
                                                 </p>
                                                 <p className="text-xs text-gray-500">
-                                                  Los acompañantes se registran en la reserva asociada y el punto de encuentro se define al convertir a programación.
+                                                  Los acompañantes quedan en la reserva asociada. El punto de encuentro y la logística operativa puedes guardarlos en la revisión (y se reutilizan al convertir).
                                                 </p>
                                               </div>
                                             </div>
@@ -3002,7 +3629,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                               <div>
                                                 <p className="text-xs uppercase tracking-wide text-green-700 font-semibold">Revisión operativa</p>
                                                 <p className="text-sm text-gray-600 mt-1">
-                                                  `Guardar revisión` actualiza la cotización sin habilitar pago todavía. `Aprobar y habilitar pago` deja lista la solicitud para que el cliente suba el comprobante.
+                                                  Guardar revisión persiste cotización, fechas/horas operativas, punto de encuentro y guías (1 principal y hasta 1 de apoyo) sin habilitar pago. Aprobar y habilitar pago deja lista la solicitud para que el cliente suba el comprobante. Al convertir se usan los mismos datos de esta sección.
+                                                </p>
+                                                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded-md px-2 py-1.5 mt-2">
+                                                  Mientras el servidor no devuelva estos datos al recargar, la app los guarda en <strong>esta sesión del navegador</strong> al cambiar de módulo y los reaplica al volver. Al convertir a programación se envían al servidor y se borra el borrador local de esta solicitud.
                                                 </p>
                                               </div>
 
@@ -3060,6 +3690,80 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                                   />
                                                 </div>
                                               </div>
+
+                                              <div>
+                                                <Label>Punto de encuentro confirmado</Label>
+                                                <Textarea
+                                                  rows={2}
+                                                  className="mt-1 resize-y min-h-[72px]"
+                                                  value={edit.lugar_encuentro}
+                                                  onChange={(e) =>
+                                                    setBackendSolicitudEdits((prev) => ({
+                                                      ...prev,
+                                                      [id]: { ...edit, lugar_encuentro: e.target.value },
+                                                    }))
+                                                  }
+                                                  placeholder="Dirección o referencia acordada con el cliente"
+                                                />
+                                              </div>
+
+                                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                <div className="space-y-2 min-w-0">
+                                                  <Label>Guía principal</Label>
+                                                  <Input
+                                                    className="h-9"
+                                                    placeholder="Buscar guía…"
+                                                    value={solicitudRevMainGuideQuery}
+                                                    onChange={(e) => setSolicitudRevMainGuideQuery(e.target.value)}
+                                                  />
+                                                  {renderCompactGuideList(
+                                                    filteredRevMainGuides,
+                                                    edit.id_empleado,
+                                                    (guideId) =>
+                                                      setBackendSolicitudEdits((prev) => {
+                                                        const cur = prev[id];
+                                                        if (!cur) return prev;
+                                                        return {
+                                                          ...prev,
+                                                          [id]: {
+                                                            ...cur,
+                                                            id_empleado: guideId,
+                                                            id_empleado_apoyo:
+                                                              cur.id_empleado_apoyo === guideId
+                                                                ? '__none__'
+                                                                : cur.id_empleado_apoyo,
+                                                          },
+                                                        };
+                                                      }),
+                                                    'No hay guías registrados',
+                                                    'max-h-52'
+                                                  )}
+                                                </div>
+                                                <div className="space-y-2 min-w-0">
+                                                  <Label>Guía de apoyo (opcional, segundo guía)</Label>
+                                                  <Input
+                                                    className="h-9"
+                                                    placeholder="Buscar guía…"
+                                                    value={solicitudRevApoyoGuideQuery}
+                                                    onChange={(e) => setSolicitudRevApoyoGuideQuery(e.target.value)}
+                                                  />
+                                                  {renderCompactGuideList(
+                                                    filteredRevApoyoGuides,
+                                                    edit.id_empleado_apoyo,
+                                                    (guideId) =>
+                                                      setBackendSolicitudEdits((prev) => {
+                                                        const cur = prev[id];
+                                                        if (!cur) return prev;
+                                                        return {
+                                                          ...prev,
+                                                          [id]: { ...cur, id_empleado_apoyo: guideId },
+                                                        };
+                                                      }),
+                                                    'No hay otro guía disponible',
+                                                    'max-h-52'
+                                                  )}
+                                                </div>
+                                              </div>
                                             </div>
                                           </div>
 
@@ -3101,153 +3805,34 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           })}
                         </TableBody>
                       </Table>
-                    </div>
-                  );
-                })()}
-              </CardContent>
-            </Card>
-
-            <Card className="shadow-lg border-green-200">
-              <CardHeader>
-                <CardTitle className="text-green-800">Programaciones personalizadas</CardTitle>
-                <p className="text-sm text-gray-600">
-                  Cuando la solicitud ya fue pagada y convertida, aquí dejas lista la salida final con guía y punto de encuentro.
-                </p>
-              </CardHeader>
-              <CardContent className="p-0">
-                {backendLoading ? (
-                  <div className="p-6 text-sm text-gray-600">Cargando programaciones desde el backend…</div>
-                ) : backendError ? (
-                  <div className="p-6 text-sm text-red-600">{backendError}</div>
-                ) : (() => {
-                  const personalizadas = backendProgramaciones.filter((p) => Boolean(p?.es_personalizada));
-                  if (personalizadas.length === 0) {
-                    return (
-                      <div className="p-6 text-sm text-gray-600">
-                        No hay programaciones personalizadas todavía.
                       </div>
-                    );
-                  }
 
-                  return (
-                    <Table>
-                      <TableHeader>
-                        <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
-                          <TableHead className="w-20">ID</TableHead>
-                          <TableHead>Ruta</TableHead>
-                          <TableHead className="w-40">Fecha/Hora</TableHead>
-                          <TableHead className="w-64">Guía</TableHead>
-                          <TableHead>Punto de encuentro</TableHead>
-                          <TableHead className="w-32 text-center">Acción</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {personalizadas.map((p) => {
-                          const edit = backendEdits[p.id_programacion] || { id_empleado: '', lugar_encuentro: '' };
-                          const currentGuideLabel =
-                            p.empleado_nombre || p.empleado_apellido
-                              ? `${p.empleado_nombre || ''} ${p.empleado_apellido || ''}`.trim()
-                              : '—';
-
-                          return (
-                            <TableRow key={p.id_programacion} className="hover:bg-green-50/50">
-                              <TableCell className="font-semibold text-green-700">#{p.id_programacion}</TableCell>
-                              <TableCell>
-                                <div className="text-sm font-medium text-gray-900">{p.ruta_nombre || `Ruta ${p.id_ruta}`}</div>
-                                <div className="text-xs text-gray-500">Estado: {p.estado || '—'}</div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="text-sm">
-                                  {p.fecha_salida ? new Date(p.fecha_salida).toLocaleDateString('es-ES') : '—'}
-                                </div>
-                                <div className="text-xs text-gray-500">{p.hora_salida || '—'}</div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="text-xs text-gray-500 mb-1">Actual: {currentGuideLabel}</div>
-                                <Select
-                                  value={edit.id_empleado || '__none__'}
-                                  onValueChange={(value) =>
-                                    setBackendEdits((prev) => ({
-                                      ...prev,
-                                      [p.id_programacion]: { ...edit, id_empleado: value },
-                                    }))
-                                  }
-                                >
-                                  <SelectTrigger className="h-9">
-                                    <SelectValue placeholder="Selecciona guía" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="__none__">Sin asignar</SelectItem>
-                                    {backendEmpleados.map((emp) => (
-                                      <SelectItem key={emp.id_empleado} value={String(emp.id_empleado)}>
-                                        {`${emp.nombre} ${emp.apellido}`.trim()} ({emp.cargo})
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </TableCell>
-                              <TableCell>
-                                <Input
-                                  value={edit.lugar_encuentro}
-                                  onChange={(e) =>
-                                    setBackendEdits((prev) => ({
-                                      ...prev,
-                                      [p.id_programacion]: { ...edit, lugar_encuentro: e.target.value },
-                                    }))
-                                  }
-                                  placeholder="Ej: Parque principal / Entrada finca…"
-                                />
-                              </TableCell>
-                              <TableCell className="text-center">
-                                <Button
-                                  size="sm"
-                                  className="bg-green-700 hover:bg-green-800"
-                                  disabled={backendSavingId === p.id_programacion}
-                                  onClick={async () => {
-                                    try {
-                                      setBackendSavingId(p.id_programacion);
-
-                                      const idEmpleado = Number(edit.id_empleado);
-                                      const payload: any = {
-                                        id_empleado: Number.isFinite(idEmpleado) && idEmpleado > 0 ? idEmpleado : null,
-                                        lugar_encuentro: edit.lugar_encuentro?.trim() ? edit.lugar_encuentro.trim() : null,
-                                      };
-
-                                      await programacionAPI.update(p.id_programacion, payload);
-
-                                      const empleado = backendEmpleados.find((emp) => emp.id_empleado === payload.id_empleado);
-                                      setBackendProgramaciones((prev) =>
-                                        prev.map((row) =>
-                                          row.id_programacion === p.id_programacion
-                                            ? {
-                                                ...row,
-                                                id_empleado: payload.id_empleado,
-                                                lugar_encuentro: payload.lugar_encuentro,
-                                                empleado_nombre: empleado?.nombre ?? row.empleado_nombre,
-                                                empleado_apellido: empleado?.apellido ?? row.empleado_apellido,
-                                              }
-                                            : row
-                                        )
-                                      );
-
-                                      toast.success('Programación actualizada');
-                                    } catch (e: any) {
-                                      toast.error('No se pudo actualizar programación', {
-                                        description: e?.message || 'Error desconocido',
-                                      });
-                                    } finally {
-                                      setBackendSavingId(null);
-                                    }
-                                  }}
-                                >
-                                  {backendSavingId === p.id_programacion ? 'Guardando…' : 'Guardar'}
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                      </TableBody>
-                    </Table>
+                      {totalPagesSolicitudes > 1 ? (
+                        <div className="px-4 pb-4 flex items-center justify-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSolicitudesPage((p) => Math.max(1, p - 1))}
+                            disabled={safePage === 1}
+                            className="border-green-300"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </Button>
+                          <span className="text-xs text-gray-600">
+                            Página {safePage} de {totalPagesSolicitudes}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setSolicitudesPage((p) => Math.min(totalPagesSolicitudes, p + 1))}
+                            disabled={safePage === totalPagesSolicitudes}
+                            className="border-green-300"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
                   );
                 })()}
               </CardContent>
@@ -3267,6 +3852,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                   <TableHeader>
                     <TableRow className="bg-gradient-to-r from-green-50 to-emerald-50 hover:from-green-50 hover:to-emerald-50">
                       <TableHead className="w-24">ID</TableHead>
+                      <TableHead className="min-w-[9rem] w-auto text-center whitespace-nowrap">Tipo</TableHead>
                       <TableHead className="w-32">Ruta Principal</TableHead>
                       <TableHead className="w-28">Fecha</TableHead>
                       <TableHead className="w-32">Guía</TableHead>
@@ -3283,6 +3869,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <TableCell className="font-semibold text-green-700">
                             {prog.programId}
                           </TableCell>
+                          <TableCell className="overflow-visible px-3 text-center align-middle">
+                            <div className="flex justify-center overflow-visible">
+                              <SalidaTipoProgramacionBadge esPersonalizada={normalizeEsPersonalizada(prog.isPersonalizada)} />
+                            </div>
+                          </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-1">
                               <Route className="w-3 h-3 text-green-600 flex-shrink-0" />
@@ -3295,7 +3886,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <TableCell>
                             {prog.routes.length > 0 && (
                               <div className="text-sm">
-                                {new Date(prog.routes[0].date).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' })}
+                                {formatDisplayDate(prog.routes[0].date)}
                               </div>
                             )}
                           </TableCell>
@@ -3355,7 +3946,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                       ))
                     ) : (
                       <TableRow>
-                        <TableCell colSpan={8} className="text-center py-12">
+                        <TableCell colSpan={9} className="text-center py-12">
                           <Calendar className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                           <p className="text-gray-500">
                             {role === 'guide' ? 'No tienes programaciones asignadas' :
@@ -3804,13 +4395,23 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         open={isEditModalOpen}
         onOpenChange={(open) => {
           setIsEditModalOpen(open);
-          if (!open) setBackendEditTargetId(null);
+          if (!open) {
+            setBackendEditTargetId(null);
+            setBackendEditContratoFechas(null);
+            setBackendEditGuiaApoyoIds([]);
+          }
         }}
       >
         <DialogContent className="max-w-7xl w-[96vw] h-[95vh] max-h-[95vh] overflow-hidden flex flex-col min-h-0">
           <DialogHeader className="shrink-0">
-            <DialogTitle className="text-green-800">Editar Programación</DialogTitle>
-            <DialogDescription>Modifique los datos de la programación paso a paso</DialogDescription>
+            <DialogTitle className="text-green-800">
+              {isBackendEditPersonalizada ? 'Editar salida personalizada' : 'Editar Programación'}
+            </DialogTitle>
+            <DialogDescription>
+              {isBackendEditPersonalizada
+                ? 'Las fechas de salida y regreso son las pactadas con el cliente (no se cambian aquí). Puedes ajustar horarios, punto de encuentro, estado, guía principal y guías de apoyo.'
+                : 'Modifique los datos de la programación paso a paso'}
+            </DialogDescription>
           </DialogHeader>
                       {isStaffRole ? (
                         <form
@@ -3831,7 +4432,16 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 toast.error('Ruta inválida');
                                 return;
                               }
-                              if (!backendEditForm.fecha_salida || !backendEditForm.fecha_regreso) {
+                              const fechaSalidaEnvio =
+                                isBackendEditPersonalizada && backendEditContratoFechas
+                                  ? backendEditContratoFechas.fecha_salida
+                                  : backendEditForm.fecha_salida;
+                              const fechaRegresoEnvio =
+                                isBackendEditPersonalizada && backendEditContratoFechas
+                                  ? backendEditContratoFechas.fecha_regreso
+                                  : backendEditForm.fecha_regreso;
+
+                              if (!fechaSalidaEnvio || !fechaRegresoEnvio) {
                                 toast.error('Fechas incompletas');
                                 return;
                               }
@@ -3860,11 +4470,15 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                   ? Number(backendEditForm.id_empleado)
                                   : null;
 
+                              const guiasApoyoPayload = backendEditGuiaApoyoIds
+                                .map((id) => Number(id))
+                                .filter((n) => Number.isFinite(n) && n > 0);
+
                               setBackendEditSaving(true);
                               await programacionAPI.update(backendEditTargetId, {
                                 id_ruta: idRuta,
-                                fecha_salida: backendEditForm.fecha_salida,
-                                fecha_regreso: backendEditForm.fecha_regreso,
+                                fecha_salida: fechaSalidaEnvio,
+                                fecha_regreso: fechaRegresoEnvio,
                                 hora_salida: backendEditForm.hora_salida || null,
                                 hora_regreso: backendEditForm.hora_regreso || null,
                                 cupos_totales: cuposTotales,
@@ -3872,7 +4486,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 precio_programacion: precio,
                                 estado: backendEditForm.estado,
                                 id_empleado: Number.isFinite(Number(idEmpleado)) ? idEmpleado : null,
-                                lugar_encuentro: backendEditForm.lugar_encuentro?.trim() ? backendEditForm.lugar_encuentro.trim() : null,
+                                lugar_encuentro: backendEditForm.lugar_encuentro?.trim()
+                                  ? backendEditForm.lugar_encuentro.trim()
+                                  : null,
+                                guias_apoyo: guiasApoyoPayload,
                               } as any);
 
                               const refreshed = await programacionAPI.getAll();
@@ -3891,55 +4508,146 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pr-2 pb-2">
                             <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_0.85fr] gap-5">
                             <div className="space-y-5 min-w-0">
-                              <div className="space-y-3">
-                                <div className="flex items-end justify-between gap-4">
-                                  <div>
-                                    <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
-                                    <p className="text-sm text-gray-600">Edita la ruta y revisa nuevamente sus servicios.</p>
+                              {!isBackendEditPersonalizada ? (
+                                <div className="space-y-3">
+                                  <div className="flex items-end justify-between gap-4">
+                                    <div>
+                                      <Label className="text-base font-semibold text-gray-900">Ruta *</Label>
+                                      <p className="text-sm text-gray-600">Edita la ruta y revisa nuevamente sus servicios.</p>
+                                    </div>
+                                    {selectedEditRoute && (
+                                      <Badge variant="outline" className="border-green-300 text-green-700">
+                                        Vista previa activa
+                                      </Badge>
+                                    )}
                                   </div>
-                                  {selectedEditRoute && (
-                                    <Badge variant="outline" className="border-green-300 text-green-700">Vista previa activa</Badge>
+
+                                  <Input
+                                    value={backendEditRouteQuery}
+                                    onChange={(e) => setBackendEditRouteQuery(e.target.value)}
+                                    placeholder="Buscar ruta, descripción o dificultad..."
+                                  />
+
+                                  {renderCompactRouteList(
+                                    filteredEditRoutes,
+                                    backendEditForm.id_ruta,
+                                    (routeId) => setBackendEditForm((prev) => ({ ...prev, id_ruta: routeId })),
+                                    'No hay rutas que coincidan con la búsqueda.'
                                   )}
+
+                                  {renderRoutePreview(selectedEditRoute)}
                                 </div>
+                              ) : (
+                                <>
+                                  <Alert className="border-violet-200 bg-violet-50/80 text-violet-900 [&>svg]:text-violet-700">
+                                    <AlertTriangle />
+                                    <AlertTitle>Salida personalizada (grupo cerrado)</AlertTitle>
+                                    <AlertDescription className="text-violet-900/85">
+                                      No uses la lógica de cupos públicos de catálogo: la capacidad y el precio quedaron pactados con el cliente.
+                                      {backendEditContext?.idSolicitud != null
+                                        ? ` Esta programación proviene de la solicitud personalizada #${backendEditContext.idSolicitud}.`
+                                        : null}
+                                    </AlertDescription>
+                                  </Alert>
 
-                                <Input
-                                  value={backendEditRouteQuery}
-                                  onChange={(e) => setBackendEditRouteQuery(e.target.value)}
-                                  placeholder="Buscar ruta, descripción o dificultad..."
-                                />
-
-                                {renderCompactRouteList(
-                                  filteredEditRoutes,
-                                  backendEditForm.id_ruta,
-                                  (routeId) => setBackendEditForm((prev) => ({ ...prev, id_ruta: routeId })),
-                                  'No hay rutas que coincidan con la búsqueda.'
-                                )}
-
-                                {renderRoutePreview(selectedEditRoute)}
-                              </div>
+                                  <div className="space-y-3">
+                                    <div>
+                                      <Label className="text-base font-semibold text-gray-900">Ruta</Label>
+                                      <p className="text-sm text-gray-600">
+                                        La ruta no se modifica desde esta pantalla; conservamos la misma para el envío al guardar.
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-green-200 bg-white p-4 shadow-sm">
+                                      <p className="text-xs uppercase tracking-wide text-gray-500">Ruta asignada</p>
+                                      <p className="text-lg font-semibold text-gray-900">
+                                        {selectedEditRoute?.nombre || backendEditContext?.rutaNombre || 'Ruta'}
+                                      </p>
+                                    </div>
+                                    {renderRoutePreview(selectedEditRoute)}
+                                  </div>
+                                </>
+                              )}
 
                               <Card className="border-green-200 shadow-sm">
                                 <CardHeader className="pb-3">
                                   <CardTitle className="text-base text-green-900">Calendario y operación</CardTitle>
                                 </CardHeader>
                                 <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                  <div>
-                                    <Label>Fecha salida *</Label>
-                                    <Input
-                                      type="date"
-                                      value={backendEditForm.fecha_salida}
-                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, fecha_salida: e.target.value }))}
-                                    />
-                                  </div>
+                                  {isBackendEditPersonalizada && personalizadaSalidaVigenteCliente ? (
+                                    <div className="md:col-span-2">
+                                      <Alert className="border-green-200 bg-green-50/90 text-green-900 [&>svg]:text-green-700">
+                                        <CheckCircle2 />
+                                        <AlertTitle>Itinerario confirmado con el cliente</AlertTitle>
+                                        <AlertDescription className="text-green-900/85">
+                                          La salida está vigente en operación: el cliente puede presentarse en las fechas acordadas
+                                          {backendEditForm.hora_salida?.trim()
+                                            ? ` (hora de encuentro/salida: ${String(backendEditForm.hora_salida).slice(0, 5)})`
+                                            : ''}
+                                          . Ajusta hora o punto de encuentro solo con coordinación previa con el cliente.
+                                        </AlertDescription>
+                                      </Alert>
+                                    </div>
+                                  ) : null}
 
-                                  <div>
-                                    <Label>Fecha regreso *</Label>
-                                    <Input
-                                      type="date"
-                                      value={backendEditForm.fecha_regreso}
-                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))}
-                                    />
-                                  </div>
+                                  {isBackendEditPersonalizada &&
+                                  backendEditForm.estado.toLowerCase().includes('cancel') ? (
+                                    <div className="md:col-span-2">
+                                      <Alert variant="destructive">
+                                        <AlertTriangle />
+                                        <AlertTitle>Salida cancelada</AlertTitle>
+                                        <AlertDescription>
+                                          Esta programación no está vigente; el cliente no debe asumir que el servicio se realizará.
+                                        </AlertDescription>
+                                      </Alert>
+                                    </div>
+                                  ) : null}
+
+                                  {isBackendEditPersonalizada && backendEditContratoFechas ? (
+                                    <>
+                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                        <Label>Fecha salida (pactada con el cliente)</Label>
+                                        <p className="font-semibold text-gray-900 mt-1">
+                                          {formatDisplayDate(backendEditContratoFechas.fecha_salida)}
+                                        </p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          No editable aquí: se mantiene igual que en la solicitud.
+                                        </p>
+                                      </div>
+                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                        <Label>Fecha regreso (pactada con el cliente)</Label>
+                                        <p className="font-semibold text-gray-900 mt-1">
+                                          {formatDisplayDate(backendEditContratoFechas.fecha_regreso)}
+                                        </p>
+                                        <p className="text-xs text-gray-500 mt-1">
+                                          No editable aquí: se mantiene igual que en la solicitud (o la definida al convertir).
+                                        </p>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <div>
+                                        <Label>Fecha salida *</Label>
+                                        <Input
+                                          type="date"
+                                          value={backendEditForm.fecha_salida}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, fecha_salida: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <Label>Fecha regreso *</Label>
+                                        <Input
+                                          type="date"
+                                          value={backendEditForm.fecha_regreso}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, fecha_regreso: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+                                    </>
+                                  )}
 
                                   <div>
                                     <Label>Hora salida</Label>
@@ -3959,38 +4667,46 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     />
                                   </div>
 
-                                  <div>
-                                    <Label>Cupos totales</Label>
-                                    <Input
-                                      type="number"
-                                      value={backendEditForm.cupos_totales}
-                                      onChange={(e) => handleBackendEditCuposTotalesChange(e.target.value)}
-                                    />
-                                    <p className="mt-1 text-xs text-gray-500">
-                                      Si cambias este valor, los cupos disponibles se recalculan con base en {backendEditCommittedSeats} cupos comprometidos.
-                                    </p>
-                                  </div>
+                                  {!isBackendEditPersonalizada ? (
+                                    <>
+                                      <div>
+                                        <Label>Cupos totales</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.cupos_totales}
+                                          onChange={(e) => handleBackendEditCuposTotalesChange(e.target.value)}
+                                        />
+                                        <p className="mt-1 text-xs text-gray-500">
+                                          Si cambias este valor, los cupos disponibles se recalculan con base en{' '}
+                                          {backendEditCommittedSeats} cupos comprometidos.
+                                        </p>
+                                      </div>
 
-                                  <div>
-                                    <Label>Cupos disponibles</Label>
-                                    <Input
-                                      type="number"
-                                      value={backendEditForm.cupos_disponibles}
-                                      onChange={(e) => handleBackendEditCuposDisponiblesChange(e.target.value)}
-                                    />
-                                    <p className="mt-1 text-xs text-gray-500">
-                                      Máximo editable ahora: {Math.max(0, Number(backendEditForm.cupos_totales || 0) - backendEditCommittedSeats)}.
-                                    </p>
-                                  </div>
+                                      <div>
+                                        <Label>Cupos disponibles</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.cupos_disponibles}
+                                          onChange={(e) => handleBackendEditCuposDisponiblesChange(e.target.value)}
+                                        />
+                                        <p className="mt-1 text-xs text-gray-500">
+                                          Máximo editable ahora:{' '}
+                                          {Math.max(0, Number(backendEditForm.cupos_totales || 0) - backendEditCommittedSeats)}.
+                                        </p>
+                                      </div>
 
-                                  <div>
-                                    <Label>Precio</Label>
-                                    <Input
-                                      type="number"
-                                      value={backendEditForm.precio_programacion}
-                                      onChange={(e) => setBackendEditForm((prev) => ({ ...prev, precio_programacion: e.target.value }))}
-                                    />
-                                  </div>
+                                      <div>
+                                        <Label>Precio</Label>
+                                        <Input
+                                          type="number"
+                                          value={backendEditForm.precio_programacion}
+                                          onChange={(e) =>
+                                            setBackendEditForm((prev) => ({ ...prev, precio_programacion: e.target.value }))
+                                          }
+                                        />
+                                      </div>
+                                    </>
+                                  ) : null}
 
                                   <div>
                                     <Label>Estado</Label>
@@ -4011,6 +4727,39 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                   </div>
                                 </CardContent>
                               </Card>
+
+                              {isBackendEditPersonalizada ? (
+                                <Card className="border-violet-100 bg-violet-50/40 shadow-sm">
+                                  <CardHeader className="pb-3">
+                                    <CardTitle className="text-base text-violet-900">Cupo y tarifa acordados</CardTitle>
+                                  </CardHeader>
+                                  <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Cupos totales</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.cupos_totales.trim() || '—'}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Cupos disponibles</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.cupos_disponibles.trim() || '—'}
+                                      </p>
+                                      <p className="text-xs text-gray-500 mt-1">
+                                        Comprometidos en esta salida: {backendEditCommittedSeats}
+                                      </p>
+                                    </div>
+                                    <div className="rounded-lg border border-violet-100 bg-white p-3">
+                                      <p className="text-xs text-gray-500">Precio de la salida</p>
+                                      <p className="font-semibold text-gray-900">
+                                        {backendEditForm.precio_programacion.trim()
+                                          ? formatCurrency(backendEditForm.precio_programacion)
+                                          : '—'}
+                                      </p>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              ) : null}
 
                               <Card className="border-green-200 shadow-sm">
                                 <CardHeader className="pb-3">
@@ -4034,7 +4783,11 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                             <div className="space-y-5 min-w-0">
                               <div>
                                 <Label className="text-base font-semibold text-gray-900">Guía turístico</Label>
-                                <p className="text-sm text-gray-600">Reasigna el guía desde el mismo flujo de edición.</p>
+                                <p className="text-sm text-gray-600">
+                                  {isBackendEditPersonalizada
+                                    ? 'Reasigna el guía si la operación del grupo cerrado lo requiere.'
+                                    : 'Reasigna el guía desde el mismo flujo de edición.'}
+                                </p>
                               </div>
                               <Input
                                 value={backendEditGuideQuery}
@@ -4045,7 +4798,10 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                               {renderCompactGuideList(
                                 filteredEditGuides,
                                 backendEditForm.id_empleado,
-                                (guideId) => setBackendEditForm((prev) => ({ ...prev, id_empleado: guideId })),
+                                (guideId) => {
+                                  setBackendEditForm((prev) => ({ ...prev, id_empleado: guideId }));
+                                  setBackendEditGuiaApoyoIds((prev) => prev.filter((id) => id !== guideId));
+                                },
                                 'No hay guías que coincidan con la búsqueda.'
                               )}
 
@@ -4055,9 +4811,52 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 'Si cambias el guía aquí, quedará actualizado directamente en la programación.'
                               )}
 
+                              <Card className="border-blue-100 bg-blue-50/30 shadow-sm">
+                                <CardHeader className="pb-3">
+                                  <CardTitle className="text-base text-blue-900">Guías de apoyo (opcional)</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-3">
+                                  <p className="text-sm text-gray-700">
+                                    Marca guías adicionales para refuerzo en campo. El guía principal sigue siendo el responsable en sistema.
+                                  </p>
+                                  <div className="max-h-44 overflow-y-auto space-y-2 pr-1">
+                                    {filteredEditGuides
+                                      .filter((g) => String(g.id_empleado) !== String(backendEditForm.id_empleado))
+                                      .map((g) => {
+                                        const gid = String(g.id_empleado);
+                                        return (
+                                          <label
+                                            key={gid}
+                                            className="flex items-center gap-3 rounded-md border border-blue-100 bg-white px-3 py-2 text-sm cursor-pointer"
+                                          >
+                                            <Checkbox
+                                              checked={backendEditGuiaApoyoIds.includes(gid)}
+                                              onCheckedChange={(c) => {
+                                                setBackendEditGuiaApoyoIds((prev) =>
+                                                  c === true
+                                                    ? Array.from(new Set([...prev, gid]))
+                                                    : prev.filter((x) => x !== gid),
+                                                );
+                                              }}
+                                            />
+                                            <span className="font-medium text-gray-900">{getGuideDisplayName(g)}</span>
+                                          </label>
+                                        );
+                                      })}
+                                  </div>
+                                  {filteredEditGuides.filter(
+                                    (g) => String(g.id_empleado) !== String(backendEditForm.id_empleado),
+                                  ).length === 0 ? (
+                                    <p className="text-xs text-gray-500">No hay más guías en el listado filtrado.</p>
+                                  ) : null}
+                                </CardContent>
+                              </Card>
+
                               {renderOperationalSummaryCard({
-                                title: 'Resumen de edición',
-                                subtitle: 'Verifica la operación completa antes de guardar cambios.',
+                                title: isBackendEditPersonalizada ? 'Resumen (personalizada)' : 'Resumen de edición',
+                                subtitle: isBackendEditPersonalizada
+                                  ? 'Mismo criterio operativo: revisa fechas, encuentro y guía antes de guardar.'
+                                  : 'Verifica la operación completa antes de guardar cambios.',
                                 route: selectedEditRoute,
                                 guide: selectedEditGuide,
                                 form: backendEditForm,
@@ -4133,7 +4932,9 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
         <DialogContent
           className={cn(
             '!flex max-h-[92vh] w-full flex-col gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]',
-            isStaffRole ? 'w-[min(96vw,1280px)] max-w-[calc(100vw-2rem)]' : 'max-w-5xl',
+            isStaffRole || (role === 'guide' && canUseBackend)
+              ? 'w-[min(96vw,1280px)] max-w-[calc(100vw-2rem)]'
+              : 'max-w-5xl',
           )}
         >
           <div className="shrink-0 space-y-2 border-b px-6 py-4 pr-12">
@@ -4155,7 +4956,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               className="min-h-0 w-full flex-1 overflow-y-scroll overflow-x-hidden px-6 pb-6 pt-2 [scrollbar-gutter:stable]"
               style={{ maxHeight: 'calc(92vh - 7.5rem)' }}
             >
-              {isStaffRole ? (
+              {(isStaffRole || (role === 'guide' && canUseBackend)) ? (
                 <div className="min-w-0 max-w-full pr-2">
                   {renderStaffOperativeDetailBody()}
                 </div>

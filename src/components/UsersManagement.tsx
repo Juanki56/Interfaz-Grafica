@@ -130,6 +130,10 @@ export function UsersManagement() {
   const [roles, setRoles] = useState<RolOption[]>([]);
   const [users, setUsers] = useState<UserRow[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('__all__');
+  const [statusFilter, setStatusFilter] = useState<string>('__all__');
+  const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('__all__');
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
@@ -179,17 +183,55 @@ export function UsersManagement() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, roleFilter, statusFilter, documentTypeFilter]);
+
+  const roleOptions = useMemo(() => {
+    const fromApi = roles.map((r) => r.nombre).filter(Boolean);
+    const fromUsers = users.map((u) => u.role).filter(Boolean);
+    return [...new Set([...fromApi, ...fromUsers])].sort((a, b) => a.localeCompare(b, 'es'));
+  }, [roles, users]);
+
+  const documentTypeOptions = useMemo(() => {
+    const tipos = users.map((u) => u.tipo_documento).filter((t) => t && t !== '−');
+    const base = ['C.C.', 'C.E.', 'Pasaporte', 'T.I.', 'NIT'];
+    return [...new Set([...base, ...tipos])].sort((a, b) => a.localeCompare(b, 'es'));
+  }, [users]);
+
+  const hasActiveFilters =
+    roleFilter !== '__all__' || statusFilter !== '__all__' || documentTypeFilter !== '__all__';
+
+  const clearFilters = () => {
+    setRoleFilter('__all__');
+    setStatusFilter('__all__');
+    setDocumentTypeFilter('__all__');
+  };
 
   const filteredUsers = useMemo(() => {
-    if (!searchTerm) return users;
-    const term = searchTerm.toLowerCase();
-
     return users.filter((item) => {
-      const searchable = Object.values(item).join(' ').toLowerCase();
+      if (roleFilter !== '__all__' && item.role !== roleFilter) return false;
+      if (statusFilter !== '__all__') {
+        const st = String(item.status || '').toLowerCase();
+        if (statusFilter === 'Activo' && st !== 'activo') return false;
+        if (statusFilter === 'Inactivo' && st !== 'inactivo') return false;
+      }
+      if (documentTypeFilter !== '__all__' && item.tipo_documento !== documentTypeFilter) return false;
+      if (!searchTerm.trim()) return true;
+      const term = searchTerm.toLowerCase();
+      const searchable = [
+        item.name,
+        item.email,
+        item.numero_documento,
+        item.tipo_documento,
+        item.role,
+        item.status,
+        item.phone,
+        item.joinDate,
+      ]
+        .join(' ')
+        .toLowerCase();
       return searchable.includes(term);
     });
-  }, [users, searchTerm]);
+  }, [users, searchTerm, roleFilter, statusFilter, documentTypeFilter]);
 
   const totalPages = Math.max(1, Math.ceil(filteredUsers.length / itemsPerPage));
   const paginatedData = filteredUsers.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -540,19 +582,20 @@ export function UsersManagement() {
         animate={{ opacity: 1, y: 0 }}
         className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0"
       >
-        <div className="flex items-center space-x-4">
+        <div className="flex flex-col gap-3 w-full sm:w-auto">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
           <motion.div
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: 0.1 }}
-            className="relative"
+            className="relative flex-1 min-w-[200px] max-w-md"
           >
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-green-600 w-4 h-4" />
             <Input
-              placeholder="Buscar usuarios..."
+              placeholder="Buscar por nombre, correo, documento, teléfono..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 w-64 border-green-200 focus:border-green-400"
+      className="pl-10 w-full border-green-200 focus:border-green-400"
             />
           </motion.div>
           <motion.div
@@ -560,11 +603,92 @@ export function UsersManagement() {
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.2 }}
           >
-            <Button variant="outline" size="sm" className="border-green-200 hover:bg-green-50 hover:border-green-400">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-green-200 hover:bg-green-50 hover:border-green-400"
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
               <Filter className="w-4 h-4 mr-2 text-green-600" />
               <span className="text-green-700">Filtros</span>
+              {hasActiveFilters ? (
+                <Badge variant="secondary" className="ml-2 bg-emerald-100 text-emerald-800">
+                  Activos
+                </Badge>
+              ) : null}
             </Button>
           </motion.div>
+          </div>
+
+          {filtersOpen ? (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="flex flex-col sm:flex-row flex-wrap gap-3 rounded-lg border border-green-100 bg-green-50/50 p-4"
+            >
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Rol</Label>
+                <Select value={roleFilter} onValueChange={setRoleFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos los roles</SelectItem>
+                    {roleOptions.map((nombre) => (
+                      <SelectItem key={nombre} value={nombre}>
+                        {nombre}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Estado</Label>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    <SelectItem value="Activo">Activo</SelectItem>
+                    <SelectItem value="Inactivo">Inactivo</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5 min-w-[160px] flex-1">
+                <Label className="text-xs text-green-800">Tipo de documento</Label>
+                <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
+                  <SelectTrigger className="border-green-200 bg-white">
+                    <SelectValue placeholder="Todos" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__all__">Todos</SelectItem>
+                    {documentTypeOptions.map((t) => (
+                      <SelectItem key={t} value={t}>
+                        {t}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="text-green-800 hover:bg-green-100"
+                  disabled={!hasActiveFilters && !searchTerm.trim()}
+                  onClick={() => {
+                    clearFilters();
+                    setSearchTerm('');
+                  }}
+                >
+                  Limpiar búsqueda y filtros
+                </Button>
+              </div>
+            </motion.div>
+          ) : null}
         </div>
 
         <motion.div
@@ -683,7 +807,9 @@ export function UsersManagement() {
                   ) : (
                     <TableRow>
                       <TableCell colSpan={columns.length} className="text-center py-8 text-gray-500">
-                        No hay datos disponibles
+                        {users.length === 0
+                          ? 'No hay datos disponibles'
+                          : 'No hay usuarios que coincidan con los filtros o la búsqueda'}
                       </TableCell>
                     </TableRow>
                   )}
@@ -694,17 +820,22 @@ export function UsersManagement() {
         </Card>
 
         {/* Pagination */}
-        {filteredUsers.length > 0 && totalPages > 1 && (
+        {filteredUsers.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
-            className="flex items-center justify-between mt-6 px-4"
+            className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-6 px-4"
           >
             <div className="text-sm text-gray-600">
-              Mostrando {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, filteredUsers.length)} de {filteredUsers.length} registros
+              Mostrando {((currentPage - 1) * itemsPerPage) + 1} - {Math.min(currentPage * itemsPerPage, filteredUsers.length)} de{' '}
+              {filteredUsers.length} registro{filteredUsers.length === 1 ? '' : 's'}
+              {users.length !== filteredUsers.length ? (
+                <span className="text-gray-500"> (de {users.length} en total)</span>
+              ) : null}
             </div>
 
+            {totalPages > 1 ? (
             <div className="flex items-center space-x-2">
               <Button
                 variant="outline"
@@ -746,6 +877,7 @@ export function UsersManagement() {
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             </div>
+            ) : null}
           </motion.div>
         )}
       </motion.div>

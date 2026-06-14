@@ -193,12 +193,26 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
     setIsEditModalOpen(true);
   };
 
-  const handleDelete = (farm: any) => {
+  const handleDelete = async (farm: any) => {
     if (!canDeleteFarm) {
       toast.error('No tienes permiso para eliminar fincas');
       return;
     }
-    setFarms(farms.filter(f => f.id !== farm.id));
+    const id = Number(farm.backendId ?? farm.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      toast.error('ID de finca no válido.');
+      return;
+    }
+    try {
+      await fincasAPI.delete(id);
+      toast.success('Finca eliminada correctamente.');
+      setFarms((prev) => prev.filter((f) => f.id !== farm.id));
+    } catch (e: any) {
+      const msg =
+        e?.message ||
+        'No se pudo eliminar la finca. Si tiene reservas activas, deben cancelarse o cerrarse antes.';
+      toast.error(msg);
+    }
   };
 
   const handleCreate = () => {
@@ -698,6 +712,7 @@ export function FarmsManagement({ canDelete = true }: FarmsManagementProps) {
                                   <AlertDialogTitle>¿Eliminar finca?</AlertDialogTitle>
                                   <AlertDialogDescription>
                                     Esta acción no se puede deshacer. Se eliminará permanentemente la finca "{farm.name}".
+                                    Solo es posible si no tiene reservas de hospedaje activas o con estadía vigente.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>

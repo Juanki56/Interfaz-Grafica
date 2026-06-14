@@ -688,7 +688,7 @@ export default function App() {
       setShowRegister(false);
       
       // Set default view based on role (ahora usando roles en inglés)
-      if (frontendRole === 'admin') {
+      if (frontendRole === 'admin' || frontendRole === 'guide') {
         setCurrentView('dashboard');
       } else {
         setCurrentView('profile');
@@ -1215,7 +1215,7 @@ export default function App() {
   return (
     <AuthContext.Provider value={authValue}>
       <ServicesProvider
-        enabled={hasBackendToken && !!user && (user.role === 'admin' || user.role === 'advisor')}
+        enabled={hasBackendToken && !!user && (user.role === 'admin' || user.role === 'advisor' || user.role === 'guide')}
       >
         <div className="min-h-screen bg-gradient-to-br from-green-50 via-blue-50 to-emerald-50">
         {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (

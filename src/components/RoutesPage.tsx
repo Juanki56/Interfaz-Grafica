@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { rutasAPI, type Ruta } from '../services/api';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
 
 interface RoutesPageProps {
   onViewChange: (view: string, itemId?: string) => void;
@@ -14,12 +15,6 @@ interface RoutesPageProps {
 
 function normalizeString(value: unknown): string {
   return String(value ?? '').trim();
-}
-
-function formatDurationDays(duracion_dias?: number | null): string {
-  if (duracion_dias == null || Number.isNaN(Number(duracion_dias))) return '—';
-  const days = Number(duracion_dias);
-  return days === 1 ? '1 día' : `${days} días`;
 }
 
 export function RoutesPage({ onViewChange }: RoutesPageProps) {
@@ -263,7 +258,7 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
                       <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
                         <div className="flex items-center space-x-1 text-gray-500">
                           <Clock className="w-4 h-4" />
-                          <span>{formatDurationDays(route.duracion_dias)}</span>
+                          <span>{formatRutaDuracionHoras(route.duracion_dias)}</span>
                         </div>
                         <div className="flex items-center space-x-1 text-gray-500">
                           <Users className="w-4 h-4" />
