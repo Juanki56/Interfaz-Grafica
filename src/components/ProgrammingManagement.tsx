@@ -1423,7 +1423,7 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       } catch {
         // Ignore silent refresh errors; the manual state/error already covers initial load.
       }
-    }, 60_000); // Aumentado de 15s a 60s para reducir consumo de EGRESS
+    }, 30_000); // Refresco cada 30s para que las nuevas programaciones aparezcan rápido
 
     return () => window.clearInterval(intervalId);
   }, [canUseBackend, staffActiveTab, backendLoading, isStaffRole, role]);

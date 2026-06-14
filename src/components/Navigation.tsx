@@ -15,10 +15,12 @@ import {
 } from './ui/dropdown-menu';
 import { Badge } from './ui/badge';
 import { useAuth } from '../context/AuthContext';
+import { usePermissionsContext } from '../context/PermissionsContext';
 import { NotificationPanel } from './NotificationPanel';
 
 export function Navigation() {
   const { user, logout, setCurrentView, setAdminActiveTab } = useAuth();
+  const { canPerformAction } = usePermissionsContext();
   const [showNotifications, setShowNotifications] = useState(false);
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
@@ -34,39 +36,39 @@ export function Navigation() {
       id: 'principal',
       label: 'Principal',
       modules: [
-        { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
+        { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp, permissionId: 'dashboard' },
       ]
     },
     {
       id: 'users',
       label: 'Usuarios y Roles',
       modules: [
-        { id: 'users', label: 'Usuarios', icon: Users },
-        { id: 'clients', label: 'Clientes', icon: User },
-        { id: 'owners', label: 'Propietarios', icon: UserCheck },
-        { id: 'employees', label: 'Empleados', icon: Shield },
-        { id: 'roles', label: 'Roles', icon: UserCheck }
+        { id: 'users', label: 'Usuarios', icon: Users, permissionId: 'usuarios' },
+        { id: 'clients', label: 'Clientes', icon: User, permissionId: 'clientes' },
+        { id: 'owners', label: 'Propietarios', icon: UserCheck, permissionId: 'propietarios' },
+        { id: 'employees', label: 'Empleados', icon: Shield, permissionId: 'empleados' },
+        { id: 'roles', label: 'Roles', icon: UserCheck, permissionId: 'roles' }
       ]
     },
     {
       id: 'catalog',
       label: 'Catálogo y Operativa',
       modules: [
-        { id: 'bookings', label: 'Reservas', icon: Calendar },
-        { id: 'farms', label: 'Fincas', icon: TreePine },
-        { id: 'routes', label: 'Rutas', icon: Route },
-        { id: 'services', label: 'Servicios', icon: Settings },
+        { id: 'bookings', label: 'Reservas', icon: Calendar, permissionId: 'reservas' },
+        { id: 'farms', label: 'Fincas', icon: TreePine, permissionId: 'fincas' },
+        { id: 'routes', label: 'Rutas', icon: Route, permissionId: 'rutas' },
+        { id: 'services', label: 'Servicios', icon: Settings, permissionId: 'servicios' },
       ]
     },
     {
       id: 'finance',
       label: 'Ventas y Finanzas',
       modules: [
-        { id: 'sales', label: 'Ventas', icon: CreditCard },
-        { id: 'installments', label: 'Abonos', icon: DollarSign },
-        { id: 'payments', label: 'Pagos', icon: DollarSign },
-        { id: 'providers', label: 'Proveedores', icon: Building2 },
-        { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
+        { id: 'sales', label: 'Ventas', icon: CreditCard, permissionId: 'ventas' },
+        { id: 'installments', label: 'Abonos', icon: DollarSign, permissionId: 'abonos' },
+        { id: 'payments', label: 'Pagos', icon: DollarSign, permissionId: 'pagos' },
+        { id: 'providers', label: 'Proveedores', icon: Building2, permissionId: 'proveedores' },
+        { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag, permissionId: 'tipos_proveedor' },
       ]
     }
   ];
@@ -76,37 +78,9 @@ export function Navigation() {
       id: 'principal',
       label: 'Principal',
       modules: [
-        { id: 'dashboard', label: 'Dashboard Avanzado', icon: TrendingUp },
-      ]
-    },
-    {
-      id: 'users',
-      label: 'Usuarios y Roles',
-      modules: [
-        { id: 'users', label: 'Usuarios', icon: Users },
-        { id: 'owners', label: 'Propietarios', icon: UserCheck },
-        { id: 'employees', label: 'Empleados', icon: Shield },
-        { id: 'roles', label: 'Roles', icon: Shield }
-      ]
-    },
-    {
-      id: 'catalog',
-      label: 'Catálogo y Operativa',
-      modules: [
-        { id: 'bookings', label: 'Reservas', icon: Calendar },
-        { id: 'farms', label: 'Fincas', icon: TreePine },
-        { id: 'routes', label: 'Rutas', icon: Route },
-        { id: 'services', label: 'Servicios', icon: Settings },
-      ]
-    },
-    {
-      id: 'finance',
-      label: 'Ventas y Finanzas',
-      modules: [
-        { id: 'sales', label: 'Ventas', icon: CreditCard },
-        { id: 'installments', label: 'Abonos', icon: DollarSign },
-        { id: 'providers', label: 'Proveedores', icon: Building2 },
-        { id: 'provider-types', label: 'Tipos de Proveedor', icon: Tag },
+        { id: 'reservations', label: 'Gestión de Reservas', icon: Calendar },
+        { id: 'clients', label: 'Clientes', icon: Users },
+        { id: 'management', label: 'Gestión de Estados', icon: Settings },
       ]
     }
   ];
@@ -178,12 +152,27 @@ export function Navigation() {
   };
 
   const renderCategories = (categories: ModuleCategory[], isMobile: boolean = false) => {
+    // Filter categories and modules based on permissions
+    const filteredCategories = categories.map(category => {
+      return {
+        ...category,
+        modules: category.modules.filter(module => {
+          // If the user is client or guide, they don't use permissionId in this logic
+          if (user?.role === 'client' || user?.role === 'guide') return true;
+          // Check read permission for the module using its permissionId
+          return module.permissionId ? canPerformAction(`${module.permissionId}.leer`) : true;
+        })
+      };
+    }).filter(category => category.modules.length > 0);
+
+    if (filteredCategories.length === 0) return null;
+
     return (
       <div className="mt-2 space-y-2 pb-2">
         <div className="pt-2 pb-1 border-t border-green-100">
           <p className="text-xs text-green-600 px-3 font-semibold uppercase tracking-wider">Módulos de Gestión</p>
         </div>
-        {categories.map((category) => (
+        {filteredCategories.map((category) => (
           <div key={category.id} className="space-y-1">
             <Button
               variant="ghost"
@@ -239,15 +228,6 @@ export function Navigation() {
           </div>
 
           <div className="flex items-center space-x-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="relative"
-              onClick={() => setShowNotifications(true)}
-            >
-              <Bell className="w-5 h-5 text-gray-600" />
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-            </Button>
             <Button
               variant="ghost"
               size="sm"
@@ -313,24 +293,14 @@ export function Navigation() {
             <span>{user?.role === 'guide' ? 'Mis programaciones' : 'Programación'}</span>
           </Button>
 
-          <Button
-            variant="ghost"
-            className="w-full justify-start space-x-3 h-10 text-left relative"
-            onClick={() => setShowNotifications(true)}
-          >
-            <Bell className="w-5 h-5" />
-            <span>Notificaciones</span>
-            <span className="absolute right-3 w-2 h-2 bg-red-500 rounded-full"></span>
-          </Button>
 
-          {/* Admin Management Modules */}
-          {user?.role === 'admin' && renderCategories(adminCategories)}
 
-          {/* Advisor Management Modules */}
-          {user?.role === 'advisor' && renderCategories(advisorCategories)}
-
-          {/* Client Management Modules */}
-          {user?.role === 'client' && renderCategories(clientCategories)}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-green-200 scrollbar-track-transparent px-3">
+            {user?.role === 'admin' && renderCategories(adminCategories)}
+            {user?.role === 'advisor' && renderCategories(adminCategories)}
+            {user?.role === 'client' && renderCategories(clientCategories)}
+            {user?.role === 'guide' && renderCategories(clientCategories)}
+          </div>
         </div>
 
         {/* Logout Section */}
@@ -397,8 +367,6 @@ export function Navigation() {
 
             {/* Mobile Navigation */}
             <div className="flex-1 p-4 space-y-2">
-              {/* Remove Panel de Control button from mobile */}
-
               <Button
                 variant="ghost"
                 className="w-full justify-start space-x-3 h-12 text-left"
@@ -423,27 +391,14 @@ export function Navigation() {
                 <span>{user?.role === 'guide' ? 'Mis programaciones' : 'Programación'}</span>
               </Button>
 
-              <Button
-                variant="ghost"
-                className="w-full justify-start space-x-3 h-12 text-left relative"
-                onClick={() => {
-                  setShowNotifications(true);
-                  setIsMobileSidebarOpen(false);
-                }}
-              >
-                <Bell className="w-5 h-5" />
-                <span>Notificaciones</span>
-                <span className="absolute right-3 w-2 h-2 bg-red-500 rounded-full"></span>
-              </Button>
 
-              {/* Admin Management Modules - Mobile */}
-              {user?.role === 'admin' && renderCategories(adminCategories, true)}
 
-              {/* Advisor Management Modules - Mobile */}
-              {user?.role === 'advisor' && renderCategories(advisorCategories, true)}
-
-              {/* Client Management Modules - Mobile */}
-              {user?.role === 'client' && renderCategories(clientCategories, true)}
+              <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-thin scrollbar-thumb-green-200 scrollbar-track-transparent mt-2 px-3">
+                {user?.role === 'admin' && renderCategories(adminCategories, true)}
+                {user?.role === 'advisor' && renderCategories(adminCategories, true)}
+                {user?.role === 'client' && renderCategories(clientCategories, true)}
+                {user?.role === 'guide' && renderCategories(clientCategories, true)}
+              </div>
 
               <div className="pt-4 border-t border-green-100">
                 <Button

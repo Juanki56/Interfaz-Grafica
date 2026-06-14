@@ -215,7 +215,7 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
       try {
         const reservas = await reservasAPI.getMine();
         if (cancelled) return;
-        
+
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
@@ -223,27 +223,25 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
           const status = String(r.estado || '').toLowerCase();
           if (status === 'cancelada' || status === 'completada') return false;
 
+          // Comprobar que esta reserva sea de esta finca
           let hasFinca = false;
-          if (r.id_finca_resumen === id) hasFinca = true;
+          if (Number(r.id_finca_resumen) === id) hasFinca = true;
           if (r.fincas && Array.isArray(r.fincas)) {
-            hasFinca = hasFinca || r.fincas.some((f: any) => f.id_finca === id);
+            hasFinca = hasFinca || r.fincas.some((f: any) => Number(f.id_finca) === id);
           }
           if (!hasFinca) return false;
 
-          // Si ya pasó el checkout, la estadía terminó → permitir nueva reserva
-          const fincaDetalles = r.fincas?.find?.((f: any) => f.id_finca === id);
+          // Usar el campo real del backend: fecha_checkout_finca
           const checkoutRaw =
-            fincaDetalles?.fecha_checkout ??
-            fincaDetalles?.fecha_salida ??
+            r.fecha_checkout_finca ??
             r.fecha_checkout ??
-            r.fecha_salida ??
             null;
 
           if (checkoutRaw) {
             const checkout = new Date(`${String(checkoutRaw).split('T')[0]}T00:00:00`);
             if (checkout < today) return false; // Estadía ya terminó
           }
-
+          // Si no hay fecha de checkout disponible, asumir que aún es vigente
           return true;
         });
 
@@ -315,39 +313,50 @@ export function FarmDetailPage({ farmId, onViewChange }: FarmDetailPageProps) {
 
   if (existingBooking) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-green-50 via-sky-50/40 to-emerald-50 pt-32 pb-16 px-4">
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-emerald-50/60 to-green-100 pt-32 pb-16 px-4">
         <div className="max-w-2xl mx-auto">
-          <Card className="bg-blue-50 border-blue-200 shadow-md">
-            <CardHeader className="pb-2 text-center">
-              <CardTitle className="text-2xl text-blue-900">Ya reservaste esta finca</CardTitle>
-              <CardDescription className="text-blue-800/90 text-base mt-2">
-                Actualmente tienes una reserva activa para esta finca.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6 mt-4">
-              <div className="flex flex-col gap-3 bg-white p-4 rounded border border-blue-100">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-500">Estado:</span>
-                  <Badge variant="outline" className="bg-blue-100 text-blue-800 px-3 py-1 text-sm">{existingBooking.status}</Badge>
+          <Card className="bg-white border-2 border-emerald-200 shadow-xl overflow-hidden">
+            {/* Header verde Occitours */}
+            <div className="bg-gradient-to-r from-emerald-700 to-green-600 px-6 py-5 text-center">
+              <div className="inline-flex items-center justify-center w-14 h-14 bg-white/20 rounded-full mb-3">
+                <Calendar className="w-7 h-7 text-white" />
+              </div>
+              <CardTitle className="text-2xl text-white font-bold">Reserva registrada</CardTitle>
+              <p className="text-white/90 text-sm sm:text-base mt-2 font-medium tracking-wide">
+                Ya tienes una reserva activa para esta finca con fechas vigentes.
+              </p>
+            </div>
+            <CardContent className="space-y-5 p-6">
+              <div className="flex flex-col gap-4 bg-white p-5 rounded-xl border border-emerald-200 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 border-b border-gray-100 pb-3">
+                  <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Estado de reserva</span>
+                  <Badge variant="default" className="bg-emerald-600 text-white px-3 py-1 w-fit shadow-sm text-sm font-bold border-none" style={{ backgroundColor: '#059669', color: 'white' }}>
+                    {existingBooking.status}
+                  </Badge>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-500">Detalle:</span>
-                  <span className="font-medium text-gray-800">{existingBooking.summary}</span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Detalle</span>
+                  <span className="font-bold text-gray-800 text-base">{existingBooking.summary}</span>
                 </div>
               </div>
-              <div className="flex flex-col sm:flex-row gap-3 pt-2">
+              <p className="text-xs text-gray-500 text-center">
+                Si tu estadía anterior ya terminó y aún ves este mensaje, recarga la página o comunícate con OCCITOUR.
+              </p>
+              <div className="flex flex-col sm:flex-row gap-3 mt-2">
                 <Button
                   variant="outline"
                   onClick={() => onViewChange('farms')}
-                  className="flex-1 text-blue-700 border-blue-200 hover:bg-blue-100"
+                  className="flex-1"
+                  style={{ borderColor: '#6ee7b7', color: '#047857', borderWidth: '2px' }}
                 >
                   Volver a Fincas
                 </Button>
                 <Button
                   onClick={() => onViewChange('dashboard', `reserva-${existingBooking.id}`)}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  className="flex-1"
+                  style={{ backgroundColor: '#059669', color: 'white' }}
                 >
-                  Ver mi reserva o Pagar
+                  Ver mi reserva
                 </Button>
               </div>
             </CardContent>

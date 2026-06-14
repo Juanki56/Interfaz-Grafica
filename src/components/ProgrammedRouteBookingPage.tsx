@@ -30,6 +30,20 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
   const [error, setError] = useState<string | null>(null);
   const [existingBooking, setExistingBooking] = useState<{ id: number, status: string, summary: string } | null>(null);
   const [isLoadingExisting, setIsLoadingExisting] = useState(false);
+  const [timeLimitExceeded, setTimeLimitExceeded] = useState(false);
+
+  useEffect(() => {
+    if (programacion?.fecha_salida) {
+      const fechaSalidaDate = new Date(`${String(programacion.fecha_salida).split('T')[0]}T${programacion.hora_salida || '00:00:00'}-05:00`);
+      // Subtract 1 hour for the limit
+      const limitDate = new Date(fechaSalidaDate.getTime() - 60 * 60 * 1000);
+      if (new Date() > limitDate) {
+        setTimeLimitExceeded(true);
+      } else {
+        setTimeLimitExceeded(false);
+      }
+    }
+  }, [programacion]);
 
   const load = useCallback(async (options?: { silent?: boolean }) => {
     const id = Number(programacionId);
@@ -164,16 +178,32 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
       try {
         const reservas = await reservasAPI.getMine();
         if (cancelled) return;
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
         const activeReserva = reservas.find((r: any) => {
           const status = String(r.estado || '').toLowerCase();
-          
+          if (status === 'cancelada' || status === 'completada') return false;
+
           let hasProg = false;
-          if (r.id_programacion_resumen === id) hasProg = true;
+          if (Number(r.id_programacion_resumen) === id) hasProg = true;
           if (r.programaciones && Array.isArray(r.programaciones)) {
-            hasProg = hasProg || r.programaciones.some((p: any) => p.id_programacion === id);
+            hasProg = hasProg || r.programaciones.some((p: any) => Number(p.id_programacion) === id);
           }
-          
-          return hasProg && status !== 'cancelada' && status !== 'completada';
+          if (!hasProg) return false;
+
+          // Usar el campo real del backend: fecha_regreso_programacion o fecha_salida_programacion
+          const fechaFinRaw =
+            r.fecha_regreso_programacion ??
+            r.fecha_salida_programacion ??
+            null;
+
+          if (fechaFinRaw) {
+            const fechaFin = new Date(`${String(fechaFinRaw).split('T')[0]}T00:00:00`);
+            if (fechaFin < today) return false; // La ruta ya ocurrió
+          }
+          return true;
         });
 
         if (activeReserva) {
@@ -233,6 +263,25 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
     );
   }
 
+  if (timeLimitExceeded) {
+    return (
+      <div className="max-w-lg mx-auto px-4 py-16 text-center space-y-4">
+        <div className="bg-orange-50 border border-orange-200 p-6 rounded-xl shadow-sm">
+          <div className="flex justify-center mb-4">
+            <span className="text-4xl">⏳</span>
+          </div>
+          <h3 className="text-lg font-bold text-orange-800 mb-2">Tiempo agotado</h3>
+          <p className="text-orange-700">
+            El tiempo límite para reservar esta salida ha finalizado. Las reservas se cierran 1 hora antes de la hora de inicio de la ruta.
+          </p>
+        </div>
+        <Button onClick={() => onViewChange('home')} className="bg-green-600 hover:bg-green-700 mt-4">
+          Volver al inicio
+        </Button>
+      </div>
+    );
+  }
+
   if (isLoadingExisting) {
     return (
       <div className="min-h-[60vh] flex flex-col items-center justify-center gap-4 text-gray-600 px-4">
@@ -245,37 +294,47 @@ export function ProgrammedRouteBookingPage({ programacionId, onViewChange }: Pro
   if (existingBooking) {
     return (
       <div className="max-w-2xl mx-auto px-4 py-16">
-        <Card className="bg-blue-50 border-blue-200 shadow-md">
-          <CardHeader className="pb-2 text-center">
-            <CardTitle className="text-2xl text-blue-900">Ya reservaste esta salida</CardTitle>
-            <CardDescription className="text-blue-800/90 text-base mt-2">
-              Actualmente tienes una reserva activa para esta fecha y ruta.
+        <Card className="bg-white border-2 border-emerald-200 shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-emerald-700 to-green-600 px-6 py-5 text-center">
+            <div className="inline-flex items-center justify-center w-14 h-14 bg-white/20 rounded-full mb-3">
+              <span className="text-3xl">🌿</span>
+            </div>
+            <CardTitle className="text-2xl text-white font-bold">Salida reservada</CardTitle>
+            <CardDescription className="text-white/90 text-sm sm:text-base mt-2 font-medium tracking-wide">
+              Tienes un cupo activo para esta salida con fecha vigente.
             </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 mt-4">
-            <div className="flex flex-col gap-3 bg-white p-4 rounded border border-blue-100">
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">Estado:</span>
-                <Badge variant="outline" className="bg-blue-100 text-blue-800 px-3 py-1 text-sm">{existingBooking.status}</Badge>
+          </div>
+          <CardContent className="space-y-5 p-6">
+            <div className="flex flex-col gap-4 bg-white p-5 rounded-xl border border-emerald-200 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 border-b border-gray-100 pb-3">
+                <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Estado de reserva</span>
+                <Badge variant="default" className="bg-emerald-600 text-white px-3 py-1 w-fit shadow-sm text-sm font-bold border-none" style={{ backgroundColor: '#059669', color: 'white' }}>
+                  {existingBooking.status}
+                </Badge>
               </div>
-              <div className="flex justify-between items-center">
-                <span className="text-gray-500">Detalle:</span>
-                <span className="font-medium text-gray-800">{existingBooking.summary}</span>
+              <div className="flex flex-col gap-1">
+                <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Detalle</span>
+                <span className="font-bold text-gray-800 text-base">{existingBooking.summary}</span>
               </div>
             </div>
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+            <p className="text-xs text-gray-500 text-center">
+              Si la salida ya ocurrió y aún ves este mensaje, recarga la página o contacta a OCCITOUR.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 mt-2">
               <Button
                 variant="outline"
                 onClick={() => onViewChange('home')}
-                className="flex-1 text-blue-700 border-blue-200 hover:bg-blue-100"
+                className="flex-1"
+                style={{ borderColor: '#6ee7b7', color: '#047857', borderWidth: '2px' }}
               >
                 Volver al inicio
               </Button>
               <Button
                 onClick={() => onViewChange('dashboard', `reserva-${existingBooking.id}`)}
-                className="flex-1 bg-blue-600 hover:bg-blue-700"
+                className="flex-1"
+                style={{ backgroundColor: '#059669', color: 'white' }}
               >
-                Ver mi reserva o Pagar
+                Ver mi reserva
               </Button>
             </div>
           </CardContent>

@@ -72,7 +72,9 @@ export function HomePage({ onViewChange }: HomePageProps) {
       });
 
     programacionAPI
-      .getPublicas({ limit: 40, cacheTtlMs: 60_000 })
+      // cacheTtlMs: 0 → siempre fresco para que las nuevas programaciones
+      // aparezcan de inmediato sin esperar expiración de caché
+      .getPublicas({ limit: 40, cacheTtlMs: 0 })
       .then((progData) => {
         if (cancelled) return;
         setProgramaciones(Array.isArray(progData) ? progData : []);
@@ -192,24 +194,53 @@ export function HomePage({ onViewChange }: HomePageProps) {
           </Button>
         </div>
 
-        {upcomingProgramaciones.length > 0 ? (
+        {loadingProgramaciones ? (
+          /* Skeleton cards mientras carga */
+          <div className="relative px-12">
+            <div className="flex gap-6 overflow-hidden">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="min-w-[calc(33.333%-12px)] flex-shrink-0">
+                  <div className="bg-white rounded-xl shadow-lg overflow-hidden border border-green-100 animate-pulse">
+                    <div className="h-48 bg-gradient-to-br from-green-100 to-emerald-100" />
+                    <div className="p-5 space-y-3">
+                      <div className="h-4 bg-green-100 rounded-full w-3/4" />
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="h-10 bg-green-50 rounded-lg border border-green-100" />
+                        <div className="h-10 bg-green-50 rounded-lg border border-green-100" />
+                        <div className="h-10 bg-green-50 rounded-lg border border-green-100" />
+                        <div className="h-10 bg-green-50 rounded-lg border border-green-100" />
+                      </div>
+                      <div className="flex justify-between items-center pt-2 border-t border-gray-100">
+                        <div className="h-6 bg-green-100 rounded-full w-24" />
+                        <div className="h-9 bg-green-100 rounded-lg w-28" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : upcomingProgramaciones.length > 0 ? (
           <div className="relative px-12">
             <Carousel opts={{ align: 'start' }} className="w-full">
               <CarouselContent>
                 {upcomingProgramaciones.map((p, idx) => {
                   const ruta = routeById.get(Number(p.id_ruta));
-                  const nombre = ruta?.nombre || p.ruta_nombre || `Ruta ${p.id_ruta}`;
-                  const imagen = ruta?.imagen_url || CATALOG_IMAGE_PLACEHOLDER;
-                  const ubicacion = ruta?.ubicacion || '—';
-                  const dificultad = ruta?.dificultad || '—';
+                  // Usar ubicacion directamente del backend (ahora incluida en obtenerActivas)
+                  const nombre = (p as any).ruta_nombre || ruta?.nombre || `Ruta ${p.id_ruta}`;
+                  const imagen = (p as any).imagen_url || ruta?.imagen_url || CATALOG_IMAGE_PLACEHOLDER;
+                  const ubicacion = (p as any).ubicacion || ruta?.ubicacion || '—';
+                  const dificultad = (p as any).dificultad || ruta?.dificultad || '—';
                   const cuposDisponibles = Number(p.cupos_disponibles ?? 0);
                   const cuposTotales = Number(p.cupos_totales ?? 0);
                   const precio =
                     p.precio_programacion != null
                       ? Number(p.precio_programacion)
-                      : ruta?.precio_base != null
-                        ? Number(ruta.precio_base)
-                        : null;
+                      : (p as any).precio_base != null
+                        ? Number((p as any).precio_base)
+                        : ruta?.precio_base != null
+                          ? Number(ruta.precio_base)
+                          : null;
                   const estadoSalida = estadoSalidaParaCliente(p.estado);
 
                   return (
@@ -218,7 +249,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
                         initial={{ opacity: 0, y: 20 }}
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
-                        transition={{ duration: 0.5, delay: idx * 0.1 }}
+                        transition={{ duration: 0.4, delay: Math.min(idx * 0.08, 0.4) }}
                         className="h-full"
                       >
                         <Card className="overflow-hidden bg-white shadow-xl h-full border-green-200 hover:shadow-2xl hover:-translate-y-1 transition-all duration-300">
@@ -312,16 +343,10 @@ export function HomePage({ onViewChange }: HomePageProps) {
               <CarouselNext className="border-green-300" />
             </Carousel>
           </div>
-        ) : loadingProgramaciones ? (
-          <Card className="border-dashed border-green-200 bg-white/80">
-            <CardContent className="py-10 text-center text-gray-600">
-              Cargando rutas programadas...
-            </CardContent>
-          </Card>
         ) : (
           <Card className="border-dashed border-green-200 bg-white/80">
             <CardContent className="py-10 text-center text-gray-600">
-              Aun no hay rutas programadas visibles para el home.
+              Aún no hay rutas programadas disponibles. ¡Próximamente nuevas salidas!
             </CardContent>
           </Card>
         )}
@@ -340,7 +365,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
             className="w-full h-full object-cover"
             loading="eager"
             decoding="async"
-            fetchPriority="high"
+            fetchpriority="high"
             style={{ filter: 'saturate(0.8) opacity(0.9)' }}
           />
           <div className="absolute inset-0 bg-black/50"></div>

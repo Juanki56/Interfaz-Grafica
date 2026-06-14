@@ -38,9 +38,19 @@ import { StatusManager } from './StatusManager';
 import { ChatSimulator } from './ChatSimulator';
 import { CreateModal } from './CreateModal';
 import { BookingDetailsModal } from './BookingDetailsModal';
+import { useAuth } from '../context/AuthContext';
 
 export function AdvisorDashboard() {
-  const [activeTab, setActiveTab] = useState('reservations');
+  const { adminActiveTab, setAdminActiveTab } = useAuth();
+  
+  // Use adminActiveTab as the source of truth, fallback to 'reservations'
+  const activeTab = ['reservations', 'clients', 'management'].includes(adminActiveTab) 
+    ? adminActiveTab 
+    : 'reservations';
+    
+  const setActiveTab = (tab: string) => {
+    setAdminActiveTab(tab);
+  };
   const [showStatusManager, setShowStatusManager] = useState(false);
   const [selectedItem, setSelectedItem] = useState<any>(null);
   const [showChat, setShowChat] = useState(false);

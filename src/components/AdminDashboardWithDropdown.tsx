@@ -3329,17 +3329,17 @@ rol_nombre: payload.rol,
 
     // If providers tab, render ProviderManagement component
     if (activeTab === 'providers') {
-      return <ProviderManagement userRole="admin" />;
+      return <ProviderManagement userRole={(user?.role as any) || 'admin'} />;
     }
 
     // If provider-types tab, render ProviderTypeManagement component
     if (activeTab === 'provider-types') {
-      return <ProviderTypeManagement userRole="admin" />;
+      return <ProviderTypeManagement userRole={(user?.role as any) || 'admin'} />;
     }
 
     // If routes tab, render RoutesManagement component
     if (activeTab === 'routes') {
-      return <RoutesManagement userRole="admin" />;
+      return <RoutesManagement userRole={(user?.role as any) || 'admin'} />;
     }
 
     // If services tab, render dedicated ServiceManagement UI

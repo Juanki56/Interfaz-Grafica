@@ -631,21 +631,9 @@ export function ProgrammedRouteBookingModal({
           Cerrar
         </Button>
       ) : amountDue > 0 ? (
-        <>
-          <Button
-            variant="outline"
-            onClick={() => {
-              toast.info('Reserva creada. Podrás pagarla más tarde cuando habilitemos ese acceso desde tu panel.');
-              onClose();
-            }}
-            disabled={isPaying}
-          >
-            Pagar despues
-          </Button>
-          <Button onClick={handleRegisterPayment} disabled={isPaying} className="bg-green-600 hover:bg-green-700">
-            {isPaying ? 'Enviando pago...' : 'Registrar pago completo'}
-          </Button>
-        </>
+        <Button onClick={handleRegisterPayment} disabled={isPaying} className="bg-green-600 hover:bg-green-700">
+          {isPaying ? 'Enviando pago...' : 'Registrar pago completo'}
+        </Button>
       ) : (
         <Button onClick={onClose}>Cerrar</Button>
       )}
@@ -1259,7 +1247,6 @@ export function ProgrammedRouteBookingModal({
                     </div>
                   </div>
 
-                  <OccitoursPaymentBankDetails />
 
                   <div
                     className={`border-2 rounded-xl p-6 ${
@@ -1337,36 +1324,29 @@ export function ProgrammedRouteBookingModal({
                         className={paymentData.metodo_pago === 'QR' ? 'bg-purple-200' : 'bg-red-200'}
                       />
 
-                      <div className="grid gap-3 md:grid-cols-3 text-left">
-                        <div className="bg-white rounded-lg p-3 border border-white/70">
-                          <p className="text-xs text-gray-500">Valor a pagar</p>
-                          <p className="font-semibold text-gray-900">{formatCurrency(amountDue)}</p>
+                      <div className="grid gap-3 md:grid-cols-2 text-left">
+                        <div className="bg-white rounded-xl p-3 border border-white/70 flex items-center justify-between shadow-sm">
+                          <p className="text-sm text-gray-500 font-medium">Valor a pagar</p>
+                          <p className="font-bold text-lg text-gray-900">{formatCurrency(amountDue)}</p>
                         </div>
-                        <div className="bg-white rounded-lg p-3 border border-white/70">
-                          <p className="text-xs text-gray-500">Referencia</p>
-                          <p className="font-semibold text-gray-900">Reserva #{createdCheckout.id_reserva}</p>
-                        </div>
-                        <div className="bg-white rounded-lg p-3 border border-white/70">
-                          <p className="text-xs text-gray-500">
-                            {paymentData.metodo_pago === 'QR' ? 'Numero de pago' : 'Titular'}
-                          </p>
-                          <p className="font-semibold text-gray-900">
-                            {paymentData.metodo_pago === 'QR'
-                              ? OCCITOURS_PAYMENT_INFO.nequiNumero
-                              : OCCITOURS_PAYMENT_INFO.titular}
-                          </p>
+                        <div className="bg-white rounded-xl p-3 border border-white/70 flex items-center justify-between shadow-sm">
+                          <p className="text-sm text-gray-500 font-medium">Referencia</p>
+                          <p className="font-bold text-lg text-gray-900">Reserva #{createdCheckout.id_reserva}</p>
                         </div>
                       </div>
 
                       <div
-                        className={`mt-2 rounded-lg border p-3 text-left text-xs ${
+                        className={`mt-3 rounded-xl border p-3.5 text-left text-sm flex items-start gap-2.5 ${
                           paymentData.metodo_pago === 'QR'
-                            ? 'bg-purple-100 border-purple-200 text-purple-900'
-                            : 'bg-red-100 border-red-200 text-red-900'
+                            ? 'bg-purple-100/50 border-purple-200 text-purple-900'
+                            : 'bg-red-100/50 border-red-200 text-red-900'
                         }`}
                       >
-                        Usa la referencia <strong>Reserva #{createdCheckout.id_reserva}</strong> en el soporte o
-                        descripción de la transferencia para que el staff identifique el pago más rápido.
+                        <span className="text-xl leading-none">💡</span>
+                        <span className="leading-relaxed">
+                          Recuerda usar la referencia <strong>Reserva #{createdCheckout.id_reserva}</strong> en el detalle o
+                          descripción de la transferencia. Esto nos ayuda a verificar tu pago rápidamente.
+                        </span>
                       </div>
                     </div>
                   </div>

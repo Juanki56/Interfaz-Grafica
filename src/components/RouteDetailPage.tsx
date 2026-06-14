@@ -204,12 +204,25 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
     const checkExistingBooking = async () => {
       setIsLoadingExisting(true);
       try {
-        // Fetch custom requests
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // --- Solicitudes personalizadas ---
         const solicitudes = await solicitudesPersonalizadasAPI.getMine();
         if (cancelled) return;
         const activeSolicitud = solicitudes.find((s: any) => {
           const status = String(s.estado || '').toLowerCase();
-          return s.id_ruta === id && status !== 'cancelada' && status !== 'rechazada';
+          if (status === 'cancelada' || status === 'rechazada' || status === 'completada') return false;
+          if (Number(s.id_ruta) !== id) return false;
+
+          // Si la fecha deseada ya pasó, la solicitud caducó → permitir nueva
+          const fechaRaw = s.fecha_deseada ?? s.fecha_salida ?? null;
+          if (fechaRaw) {
+            const fecha = new Date(`${String(fechaRaw).split('T')[0]}T00:00:00`);
+            if (fecha < today) return false;
+          }
+
+          return true;
         });
 
         if (activeSolicitud) {
@@ -222,20 +235,33 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
           return;
         }
 
-        // Fetch regular bookings
+        // --- Reservas normales (rutas programadas vinculadas a esta ruta) ---
         const reservas = await reservasAPI.getMine();
         if (cancelled) return;
         const activeReserva = reservas.find((r: any) => {
           const status = String(r.estado || '').toLowerCase();
-          // To map a reservation to a route, we look for id_ruta in programaciones or the payload itself
+          if (status === 'cancelada' || status === 'completada') return false;
+
           let hasRuta = false;
-          if (r.id_ruta === id) hasRuta = true;
+          if (Number(r.id_ruta) === id) hasRuta = true;
           if (r.programaciones && Array.isArray(r.programaciones)) {
-            hasRuta = hasRuta || r.programaciones.some((p: any) => p.id_ruta === id || p.ruta?.id_ruta === id);
+            hasRuta = hasRuta || r.programaciones.some((p: any) => Number(p.id_ruta) === id || p.ruta?.id_ruta === id);
           }
           if (r.ruta_detalle && r.ruta_detalle.id_ruta === id) hasRuta = true;
-          
-          return hasRuta && status !== 'cancelada' && status !== 'completada';
+          if (!hasRuta) return false;
+
+          // Usar campo real del backend: fecha_regreso_programacion o fecha_salida_programacion
+          const fechaFinRaw =
+            r.fecha_regreso_programacion ??
+            r.fecha_salida_programacion ??
+            null;
+
+          if (fechaFinRaw) {
+            const fechaFin = new Date(`${String(fechaFinRaw).split('T')[0]}T00:00:00`);
+            if (fechaFin < today) return false; // La ruta ya ocurrió
+          }
+
+          return true;
         });
 
         if (activeReserva) {
@@ -579,36 +605,52 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
             ) : null}
 
             {existingBooking ? (
-              <Card className="bg-blue-50 border-blue-200 shadow-md">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-lg text-blue-900">Ya reservaste esta ruta</CardTitle>
-                  <CardDescription className="text-blue-800/90">
-                    Actualmente tienes una {existingBooking.type === 'solicitud' ? 'solicitud de reserva' : 'reserva'} activa para esta ruta.
+              <Card className="bg-white border-2 border-emerald-200 shadow-xl overflow-hidden">
+                <div className="bg-gradient-to-r from-emerald-700 to-green-600 px-5 py-4 text-center">
+                  <CardTitle className="text-lg text-white font-bold">Ruta ya reservada</CardTitle>
+                  <CardDescription className="text-white/90 text-sm sm:text-base mt-2 font-medium tracking-wide">
+                    Tienes un cupo activo o una solicitud pendiente para esta ruta.
                   </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex flex-col gap-2 bg-white p-3 rounded border border-blue-100">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-500">Estado:</span>
-                      <Badge variant="outline" className="bg-blue-100 text-blue-800">{existingBooking.status}</Badge>
+                </div>
+                <CardContent className="space-y-4 p-5">
+                  <div className="flex flex-col gap-4 bg-white p-5 rounded-xl border border-emerald-200 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 border-b border-gray-100 pb-3">
+                      <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Estado de reserva</span>
+                      <Badge variant="default" className="bg-emerald-600 text-white px-3 py-1 w-fit shadow-sm text-sm font-bold border-none" style={{ backgroundColor: '#059669', color: 'white' }}>
+                        {existingBooking.status}
+                      </Badge>
                     </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-gray-500">Detalle:</span>
-                      <span className="text-sm font-medium text-gray-800">{existingBooking.summary}</span>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-gray-500 text-xs font-bold uppercase tracking-wider">Detalle</span>
+                      <span className="font-bold text-gray-800 text-base">{existingBooking.summary}</span>
                     </div>
                   </div>
-                  <Button
-                    onClick={() => {
-                      if (existingBooking.type === 'solicitud') {
-                        onViewChange('dashboard', `solicitud-${existingBooking.id}`);
-                      } else {
-                        onViewChange('dashboard', `reserva-${existingBooking.id}`);
-                      }
-                    }}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-lg py-3"
-                  >
-                    Ver mi reserva o Pagar
-                  </Button>
+                  <p className="text-xs text-gray-500 text-center">
+                    Si la fecha ya pasó y aún ves esto, recarga la página o contacta a OCCITOUR.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-3 mt-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => onViewChange('home')}
+                      className="flex-1"
+                      style={{ borderColor: '#6ee7b7', color: '#047857', borderWidth: '2px' }}
+                    >
+                      Volver al inicio
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (existingBooking.type === 'solicitud') {
+                          onViewChange('dashboard', `solicitud-${existingBooking.id}`);
+                        } else {
+                          onViewChange('dashboard', `reserva-${existingBooking.id}`);
+                        }
+                      }}
+                      className="flex-1"
+                      style={{ backgroundColor: '#059669', color: 'white' }}
+                    >
+                      Ver mi reserva
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             ) : (

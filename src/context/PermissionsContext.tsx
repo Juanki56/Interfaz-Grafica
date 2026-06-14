@@ -232,8 +232,9 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
       const [module, action] = actionName.split('.');
       if (!module || !action) return false;
 
-      const capitalize = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
-      return hasPermission(`${capitalize(action)} ${capitalize(module)}`);
+      // El backend devuelve los permisos en formato modulo.accion (ej. usuarios.leer)
+      // Por lo que podemos verificar directamente actionName (que viene en formato modulo.accion)
+      return hasPermission(actionName);
     },
     [currentUserRole, hasPermission]
   );

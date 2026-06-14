@@ -52,6 +52,16 @@ interface Proveedor {
   // otros campos si necesitas
 }
 
+// Helper function to convert File to base64 DataURL
+const readFileAsDataUrl = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
+    reader.readAsDataURL(file);
+  });
+};
+
 export function ProviderPaymentManagement() {
   const permisos = usePermissions();
   const pagosPerms = createModulePermissions(permisos, 'Pagos');
@@ -79,7 +89,7 @@ export function ProviderPaymentManagement() {
     fecha_pago: new Date().toISOString().split('T')[0],
     metodo_pago: 'transferencia',
     comprobante_pago: '',
-    estado: 'activo'
+    estado: 'Pagado'
   });
 
   // CARGAR PAGOS Y PROVEEDORES DESDE EL BACKEND
@@ -268,7 +278,7 @@ export function ProviderPaymentManagement() {
         fecha_pago: formData.fecha_pago,
         metodo_pago: formData.metodo_pago,
         comprobante_pago: formData.comprobante_pago,
-        estado: 'activo'
+        estado: formData.estado || 'Pagado'
       };
       await pagosProveedoresAPI.create(pago);
       toast.success('Pago registrado exitosamente.');
@@ -595,14 +605,53 @@ export function ProviderPaymentManagement() {
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <Label htmlFor="comprobante_pago">URL del Comprobante de Pago</Label>
-                <Input
-                  id="comprobante_pago"
-                  value={formData.comprobante_pago}
-                  onChange={(e) => setFormData({ ...formData, comprobante_pago: e.target.value })}
-                  placeholder="Ej: https://.../comprobante.pdf"
-                />
+              <div className="col-span-2">
+                <Label htmlFor="comprobante_pago">Comprobante de Pago (Imagen o PDF)</Label>
+                <div className="mt-1 flex items-center space-x-2">
+                  <Input
+                    id="comprobante_pago"
+                    type="file"
+                    accept="image/jpeg,image/png,image/jpg,image/webp,application/pdf"
+                    className="flex-1"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) {
+                        setFormData({ ...formData, comprobante_pago: '' });
+                        return;
+                      }
+                      
+                      if (file.size > 5 * 1024 * 1024) {
+                        toast.error('El archivo no debe exceder 5 MB.');
+                        e.target.value = '';
+                        return;
+                      }
+
+                      try {
+                        const dataUrl = await readFileAsDataUrl(file);
+                        setFormData({ ...formData, comprobante_pago: dataUrl });
+                        toast.success('Comprobante cargado exitosamente.');
+                      } catch (err: any) {
+                        toast.error(err.message || 'Error al cargar el comprobante');
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  {formData.comprobante_pago && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        setFormData({ ...formData, comprobante_pago: '' });
+                        const fileInput = document.getElementById('comprobante_pago') as HTMLInputElement;
+                        if (fileInput) fileInput.value = '';
+                      }}
+                      title="Quitar archivo"
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -689,9 +738,30 @@ export function ProviderPaymentManagement() {
                 </div>
               </div>
               {selectedPayment.comprobante_pago && (
-                <div>
-                  <Label className="text-gray-600">Comprobante de Pago</Label>
-                  <p className="text-gray-900">{selectedPayment.comprobante_pago}</p>
+                <div className="col-span-2 pt-4 border-t border-gray-100 mt-4">
+                  <Label className="text-gray-600 mb-2 block">Comprobante de Pago</Label>
+                  <div className="mt-2">
+                    {selectedPayment.comprobante_pago.startsWith('data:image') || 
+                     selectedPayment.comprobante_pago.match(/\.(jpeg|jpg|gif|png|webp)$/i) ? (
+                      <div className="relative rounded-lg overflow-hidden border border-gray-200">
+                        <img 
+                          src={selectedPayment.comprobante_pago} 
+                          alt="Comprobante" 
+                          className="max-w-full h-auto max-h-[400px] object-contain mx-auto"
+                        />
+                      </div>
+                    ) : selectedPayment.comprobante_pago.startsWith('data:application/pdf') ||
+                        selectedPayment.comprobante_pago.match(/\.pdf$/i) ? (
+                      <Button variant="outline" asChild className="w-full sm:w-auto">
+                        <a href={selectedPayment.comprobante_pago} download="comprobante.pdf">
+                          <FileText className="w-4 h-4 mr-2" />
+                          Descargar Documento PDF
+                        </a>
+                      </Button>
+                    ) : (
+                      <p className="text-gray-900 break-all">{selectedPayment.comprobante_pago}</p>
+                    )}
+                  </div>
                 </div>
               )}
               {(selectedPayment.estado ?? '').toLowerCase() === 'anulado' && (

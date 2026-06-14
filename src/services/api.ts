@@ -1696,17 +1696,31 @@ export const rutasAPI = {
   },
 
   // Catálogo público (clientes / no autenticado). Tras el listado, rellena imagen desde Storage (home, cards).
-  getActivas: async (opts?: { limit?: number; cacheTtlMs?: number }): Promise<Ruta[]> => {
+  // Tiene reintento automático para soportar arranque en frío del backend (npm run dev)
+  getActivas: async (opts?: { limit?: number; cacheTtlMs?: number; retries?: number }): Promise<Ruta[]> => {
     const endpoint = appendQuery('/api/rutas/activas', { limit: opts?.limit });
     const cacheKey = `GET:${endpoint}:catalog_img_v1`;
     const ttlMs = opts?.cacheTtlMs ?? 0;
+    const maxRetries = opts?.retries ?? 2;
+
     return fetchCached<Ruta[]>(
       cacheKey,
       ttlMs,
       async () => {
-        const response = await fetchAPI<any>(endpoint, { skipAuth: true });
-        const raw = unwrapApiArray<Ruta>(response);
-        return enrichRutasImagenFromStorageIfMissing(raw, true);
+        let lastErr: unknown;
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+          try {
+            const response = await fetchAPI<any>(endpoint, { skipAuth: true });
+            const raw = unwrapApiArray<Ruta>(response);
+            return enrichRutasImagenFromStorageIfMissing(raw, true);
+          } catch (err) {
+            lastErr = err;
+            if (attempt < maxRetries) {
+              await new Promise((res) => setTimeout(res, 1500));
+            }
+          }
+        }
+        throw lastErr;
       },
     );
   },
@@ -2788,16 +2802,51 @@ export const programacionAPI = {
   },
 
   // Público: programaciones activas/futuras para Home (sin token)
-  getPublicas: async (opts?: { limit?: number; cacheTtlMs?: number }): Promise<Programacion[]> => {
+  // Tiene reintento automático para soportar arranque en frío del backend (npm run dev)
+  getPublicas: async (opts?: { limit?: number; cacheTtlMs?: number; retries?: number }): Promise<Programacion[]> => {
     const endpoint = appendQuery('/api/programaciones/publicas', { limit: opts?.limit });
     const cacheKey = `GET:${endpoint}`;
     const ttlMs = opts?.cacheTtlMs ?? 0;
-    const response = await fetchCached<any>(
-      cacheKey,
-      ttlMs,
-      () => fetchAPI<any>(endpoint, { skipAuth: true }),
+    const maxRetries = opts?.retries ?? 2;
+
+    const fetcher = async (): Promise<any> => {
+      let lastErr: unknown;
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          return await fetchAPI<any>(endpoint, { skipAuth: true });
+        } catch (err) {
+          lastErr = err;
+          if (attempt < maxRetries) {
+            // Esperar 1.5s antes del siguiente intento (backend en frío)
+            await new Promise((res) => setTimeout(res, 1500));
+          }
+        }
+      }
+      throw lastErr;
+    };
+
+    const response = await fetchCached<any>(cacheKey, ttlMs, fetcher);
+    const raw = unwrapApiArray<Programacion>(response);
+
+    // Enriquecer la imagen de la ruta asociada usando el storage (igual que en rutasAPI)
+    const enriched = await Promise.all(
+      raw.map(async (p) => {
+        if (!p || typeof p !== 'object') return p;
+        const idRuta = Number(p.id_ruta);
+        if (!Number.isFinite(idRuta) || idRuta <= 0) return p;
+
+        const dbUrl = String((p as any).imagen_url ?? '').trim();
+        if (isExplicitExternalImageUrl(dbUrl)) return p;
+
+        const fromStorage = await getStorageImageUrlCached('rutas', idRuta, true);
+        if (fromStorage) {
+          return { ...p, imagen_url: fromStorage } as Programacion;
+        }
+        return p;
+      })
     );
-    return unwrapApiArray<Programacion>(response);
+
+    return enriched;
   },
 
   getFechasOcupadasRuta: async (idRuta: number): Promise<string[]> => {

@@ -1435,9 +1435,8 @@ export default function App() {
 
     switch (normalizedRole) {
       case 'admin':
-        return <AdminDashboard key="dash-admin" />;
       case 'advisor':
-        return <AdvisorDashboard key="dash-advisor" />;
+        return <AdminDashboard key="dash-admin" />;
       case 'guide':
         return <GuideDashboard key="dash-guide" />;
       case 'client':
