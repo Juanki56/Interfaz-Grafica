@@ -250,6 +250,8 @@ interface ProgrammingManagementProps {
   role: 'admin' | 'advisor' | 'guide' | 'client';
   userId?: string;
   userName?: string;
+  canCreate?: boolean;
+  canChangeStatus?: boolean;
 }
 
 type ProgrammingsSortFilter =
@@ -345,6 +347,10 @@ interface BackendProgrammingEditFormState extends BackendProgrammingFormState {
 export function ProgrammingManagement({ role, userId, userName }: ProgrammingManagementProps) {
   const permissions = usePermissions();
   const programmingPerms = createModulePermissions(permissions, 'Programaciones');
+
+  const [cancelModalProgrammingId, setCancelModalProgrammingId] = useState<string | null>(null);
+  const [cancelModalReason, setCancelModalReason] = useState('');
+  const [isCancellingStatus, setIsCancellingStatus] = useState(false);
 
   const isStaffRole = role === 'admin' || role === 'advisor';
 
@@ -1451,9 +1457,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       try {
         const s = await solicitudesPersonalizadasAPI.getById(Number(p.id_solicitud_personalizada));
         if (cancelled) return;
-        const contratoSalida = normalizeContratoFecha(s.fecha_deseada) || normalizeContratoFecha(p.fecha_salida);
-        const contratoRegreso =
-          normalizeContratoFecha(s.fecha_regreso_deseada) || normalizeContratoFecha(p.fecha_regreso);
+        const contratoSalida = normalizeContratoFecha(p.fecha_salida) || normalizeContratoFecha(s.fecha_deseada);
+        const contratoRegreso = normalizeContratoFecha(p.fecha_regreso) || normalizeContratoFecha(s.fecha_regreso_deseada);
         setBackendEditContratoFechas({ fecha_salida: contratoSalida, fecha_regreso: contratoRegreso });
         setBackendEditForm((prev) => ({
           ...prev,
@@ -1842,10 +1847,17 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       cancelled: 'Cancelado',
     };
 
+    if (newStatus === 'cancelled') {
+      setCancelModalProgrammingId(programmingId);
+      setCancelModalReason('');
+      return;
+    }
+
     try {
       const id = Number(programmingId);
       if (!Number.isFinite(id) || id <= 0) throw new Error('ID inválido');
       const estado = statusToEstado[newStatus];
+      
       await programacionAPI.update(id, { estado } as any);
       setBackendProgramaciones((prev) =>
         prev.map((p) => (p.id_programacion === id ? { ...p, estado } : p))
@@ -1855,6 +1867,27 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
       toast.error('No se pudo actualizar el estado', {
         description: e?.message || 'Error desconocido',
       });
+    }
+  };
+
+  const confirmCancellation = async () => {
+    if (!cancelModalProgrammingId) return;
+    setIsCancellingStatus(true);
+    try {
+      const id = Number(cancelModalProgrammingId);
+      if (!Number.isFinite(id) || id <= 0) throw new Error('ID inválido');
+      
+      const motivo_cancelacion = cancelModalReason.trim() || 'Motivo no especificado por el administrador';
+      await programacionAPI.update(id, { estado: 'Cancelado', motivo_cancelacion } as any);
+      setBackendProgramaciones((prev) =>
+        prev.map((p) => (p.id_programacion === id ? { ...p, estado: 'Cancelado' } : p))
+      );
+      toast.success('Ruta cancelada exitosamente y correos enviados.');
+      setCancelModalProgrammingId(null);
+    } catch (e: any) {
+      toast.error('Error al cancelar', { description: e?.message });
+    } finally {
+      setIsCancellingStatus(false);
     }
   };
 
@@ -1965,8 +1998,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
           : null,
       );
 
-      const contratoSalida = desdeSolicitudSalida || normalizeContratoFecha(p.fecha_salida);
-      const contratoRegreso = desdeSolicitudRegreso || normalizeContratoFecha(p.fecha_regreso);
+      const contratoSalida = normalizeContratoFecha(p.fecha_salida) || desdeSolicitudSalida;
+      const contratoRegreso = normalizeContratoFecha(p.fecha_regreso) || desdeSolicitudRegreso;
 
       setBackendEditContratoFechas({
         fecha_salida: contratoSalida,
@@ -3720,14 +3753,8 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                 toast.error('Ruta inválida');
                                 return;
                               }
-                              const fechaSalidaEnvio =
-                                isBackendEditPersonalizada && backendEditContratoFechas
-                                  ? backendEditContratoFechas.fecha_salida
-                                  : backendEditForm.fecha_salida;
-                              const fechaRegresoEnvio =
-                                isBackendEditPersonalizada && backendEditContratoFechas
-                                  ? backendEditContratoFechas.fecha_regreso
-                                  : backendEditForm.fecha_regreso;
+                              const fechaSalidaEnvio = backendEditForm.fecha_salida;
+                              const fechaRegresoEnvio = backendEditForm.fecha_regreso;
 
                               if (!fechaSalidaEnvio || !fechaRegresoEnvio) {
                                 toast.error('Fechas incompletas');
@@ -3889,28 +3916,6 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                     </div>
                                   ) : null}
 
-                                  {isBackendEditPersonalizada && backendEditContratoFechas ? (
-                                    <>
-                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                        <Label>Fecha salida (pactada con el cliente)</Label>
-                                        <p className="font-semibold text-gray-900 mt-1">
-                                          {formatDisplayDate(backendEditContratoFechas.fecha_salida)}
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          No editable aquí: se mantiene igual que en la solicitud.
-                                        </p>
-                                      </div>
-                                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                                        <Label>Fecha regreso (pactada con el cliente)</Label>
-                                        <p className="font-semibold text-gray-900 mt-1">
-                                          {formatDisplayDate(backendEditContratoFechas.fecha_regreso)}
-                                        </p>
-                                        <p className="text-xs text-gray-500 mt-1">
-                                          No editable aquí: se mantiene igual que en la solicitud (o la definida al convertir).
-                                        </p>
-                                      </div>
-                                    </>
-                                  ) : (
                                     <>
                                       <div>
                                         <Label>Fecha salida *</Label>
@@ -3936,7 +3941,6 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
                                         />
                                       </div>
                                     </>
-                                  )}
 
                                   <div>
                                     <Label>Hora salida</Label>
@@ -6403,6 +6407,55 @@ export function ProgrammingManagement({ role, userId, userName }: ProgrammingMan
               }}
             >
               {backendSolicitudSavingId != null ? 'Rechazando…' : 'Rechazar solicitud'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* DIALOG CANCELACION RUTAS (Programadas / Personalizadas) */}
+      <AlertDialog
+        open={cancelModalProgrammingId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCancelModalProgrammingId(null);
+            setCancelModalReason('');
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-700">Cancelar Ruta Programada</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  Esta ruta pasará a estado <strong>Cancelado</strong>. Todas las reservas asociadas serán movidas a estado "Pendiente de Reprogramar" y el sistema le enviará automáticamente un correo a cada cliente indicando que la ruta fue cancelada y su saldo está a salvo.
+                </p>
+                <div className="space-y-2">
+                  <Label htmlFor="cancel-motivo">
+                    Motivo de cancelación (se incluirá en el correo del cliente) *
+                  </Label>
+                  <Textarea
+                    id="cancel-motivo"
+                    value={cancelModalReason}
+                    onChange={(e) => setCancelModalReason(e.target.value)}
+                    placeholder="Ej.: Lluvias fuertes en la zona de reserva natural."
+                    rows={3}
+                  />
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancellingStatus}>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={isCancellingStatus || cancelModalReason.trim().length < 5}
+              onClick={(e) => {
+                e.preventDefault();
+                void confirmCancellation();
+              }}
+            >
+              {isCancellingStatus ? 'Cancelando y enviando correos...' : 'Confirmar Cancelación'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

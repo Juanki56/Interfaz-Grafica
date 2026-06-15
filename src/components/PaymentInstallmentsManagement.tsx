@@ -14,6 +14,8 @@ import {
   DollarSign,
   CheckCircle2,
   Calendar,
+  Check,
+  ChevronsUpDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Card, CardContent } from './ui/card';
@@ -47,12 +49,27 @@ import {
 } from './ui/alert-dialog';
 import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from './ui/command';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from './ui/popover';
+import { cn } from './ui/utils';
 import { toast } from 'sonner';
 import { usePermissions } from '../hooks/usePermissions';
 import {
   clientesAPI,
   pagosAPI,
   reservasAPI,
+  ventasAPI,
   type Cliente as ClienteBackend,
   type PagoCliente,
   type Reserva,
@@ -499,21 +516,7 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
         return mapPagoToInstallment(pago, venta, undefined);
       });
 
-      // Reservas de finca con saldo pendiente (filtradas desde las ventas sintéticas)
-      const fincaReservations = Array.from(ventasMap.values())
-        .filter((venta) => isReservationFinca(undefined, venta) && toNumber(venta.saldo_pendiente) > 0)
-        .map((venta) => {
-          const backendClientId = String(venta.id_cliente || '');
-          return mapReservationSummary(
-            venta,
-            buildReservaSummaryFromVenta(venta) ?? undefined,
-            backendClientId ? buildClientFromVenta(venta) : undefined,
-          );
-        })
-        .sort((a, b) => b.backendId - a.backendId);
-
       setInstallments(mappedInstallments);
-      setAvailableReservations(fincaReservations);
 
       setSelectedInstallment((previous) => {
         if (!previous) return null;
@@ -535,23 +538,41 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
     if (viewMode !== 'create' || !canCreateAbono) return;
 
     let cancelled = false;
-    const loadCreateClients = async () => {
+    const loadCreateData = async () => {
       try {
-        const clientes = await clientesAPI.getAll();
+        const [clientes, ventas] = await Promise.all([
+          clientesAPI.getAll(),
+          ventasAPI.getAll()
+        ]);
         if (cancelled) return;
+
         setAvailableClients(
           clientes
             .map(mapCliente)
             .sort((a, b) => a.name.localeCompare(b.name, 'es')),
         );
+
+        const pendingReservations = ventas
+          .filter((venta) => toNumber(venta.saldo_pendiente) > 0)
+          .map((venta) => {
+            const backendClientId = String(venta.id_cliente || '');
+            return mapReservationSummary(
+              venta,
+              buildReservaSummaryFromVenta(venta) ?? undefined,
+              backendClientId ? buildClientFromVenta(venta) : undefined,
+            );
+          })
+          .sort((a, b) => b.backendId - a.backendId);
+
+        setAvailableReservations(pendingReservations);
       } catch (error: any) {
         if (!cancelled) {
-          toast.error(error?.message || 'No se pudieron cargar los clientes');
+          toast.error(error?.message || 'No se pudieron cargar los datos');
         }
       }
     };
 
-    void loadCreateClients();
+    void loadCreateData();
     return () => {
       cancelled = true;
     };
@@ -1211,6 +1232,7 @@ function CreateInstallmentView({
   submitting,
 }: CreateInstallmentViewProps) {
   const [selectedClient, setSelectedClient] = useState('');
+  const [openClientSelect, setOpenClientSelect] = useState(false);
   const [selectedReservation, setSelectedReservation] = useState('');
   const [installmentAmount, setInstallmentAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('transferencia');
@@ -1232,6 +1254,12 @@ function CreateInstallmentView({
     ? installments.filter((installment) => installment.client.id === selectedClient).slice(0, 3)
     : [];
 
+  useEffect(() => {
+    if (reservationData?.serviceType === 'Ruta') {
+      setInstallmentAmount(String(reservationData.pendingBalance));
+    }
+  }, [reservationData?.id, reservationData?.serviceType, reservationData?.pendingBalance]);
+
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1252,7 +1280,7 @@ function CreateInstallmentView({
     }
 
     if (!reservationData) {
-      toast.error('Debes seleccionar una reserva de finca asociada');
+      toast.error('Debes seleccionar una reserva asociada');
       return;
     }
 
@@ -1284,7 +1312,7 @@ function CreateInstallmentView({
         </Button>
         <div>
           <h1 className="text-green-800">Registrar Nuevo Abono</h1>
-          <p className="text-gray-600 mt-1">Solo se permiten abonos para reservas de finca con saldo pendiente</p>
+          <p className="text-gray-600 mt-1">Solo se permiten abonos para reservas con saldo pendiente</p>
         </div>
       </div>
 
@@ -1296,21 +1324,57 @@ function CreateInstallmentView({
               <div className="space-y-4">
                 <div>
                   <Label>Cliente *</Label>
-                  <Select value={selectedClient} onValueChange={(value) => {
-                    setSelectedClient(value);
-                    setSelectedReservation('');
-                  }}>
-                    <SelectTrigger className="mt-2 border-gray-200 focus:border-green-500">
-                      <SelectValue placeholder="Selecciona un cliente..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {clients.map((client) => (
-                        <SelectItem key={client.id} value={client.id}>
-                          {client.name} — {client.document}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={openClientSelect} onOpenChange={setOpenClientSelect}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={openClientSelect}
+                        className="w-full justify-between mt-2 border-gray-200 focus:border-green-500 font-normal"
+                      >
+                        {selectedClient
+                          ? clients.find((c) => c.id === selectedClient)?.name
+                          : 'Selecciona o busca un cliente...'}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-full p-0 max-w-sm" align="start">
+                      <Command>
+                        <CommandInput placeholder="Buscar por nombre o documento..." />
+                        <CommandList>
+                          <CommandEmpty>No se encontraron clientes.</CommandEmpty>
+                          <CommandGroup>
+                            {clients.map((client) => (
+                              <CommandItem
+                                key={client.id}
+                                value={`${client.name} ${client.document}`.toLowerCase()}
+                                onSelect={() => {
+                                  if (selectedClient !== client.id) {
+                                    setSelectedClient(client.id);
+                                    setSelectedReservation('');
+                                    setInstallmentAmount('');
+                                    setPaymentMethod('transferencia');
+                                    setTransactionNumber('');
+                                    setObservations('');
+                                    setReceiptFile(null);
+                                  }
+                                  setOpenClientSelect(false);
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    'mr-2 h-4 w-4',
+                                    selectedClient === client.id ? 'opacity-100' : 'opacity-0'
+                                  )}
+                                />
+                                {client.name} — {client.document}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
                 {clientData && (
@@ -1357,7 +1421,7 @@ function CreateInstallmentView({
               <h2 className="text-green-800 mb-4">Sección 2: Información del Servicio Asociado</h2>
               <div className="space-y-4">
                 <div>
-                  <Label>Reserva de Finca *</Label>
+                  <Label>Reserva Asociada *</Label>
                   <Select
                     value={selectedReservation}
                     onValueChange={setSelectedReservation}
@@ -1375,7 +1439,7 @@ function CreateInstallmentView({
                         ))
                       ) : (
                         <SelectItem value="none" disabled>
-                          No hay reservas de finca con saldo pendiente
+                          No hay reservas con saldo pendiente
                         </SelectItem>
                       )}
                     </SelectContent>
@@ -1410,14 +1474,17 @@ function CreateInstallmentView({
                     <div className="pt-3 border-t border-blue-300">
                       <p className="text-xs text-gray-600 mb-1">Monto sugerido:</p>
                       <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setInstallmentAmount(String(Math.ceil(reservationData.pendingBalance / 2)))}
-                          className="text-xs border-green-300 text-green-700 hover:bg-green-50"
-                        >
-                          50% — {formatCurrency(Math.ceil(reservationData.pendingBalance / 2))}
-                        </Button>
+                        {reservationData?.serviceType !== 'Ruta' && (
+                          <Button
+                            variant="outline"
+                            type="button"
+                            size="sm"
+                            onClick={() => setInstallmentAmount(String(Math.ceil(reservationData.pendingBalance / 2)))}
+                            className="text-xs border-green-300 text-green-700 hover:bg-green-50"
+                          >
+                            50% — {formatCurrency(Math.ceil(reservationData.pendingBalance / 2))}
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
@@ -1446,6 +1513,7 @@ function CreateInstallmentView({
                       type="number"
                       placeholder="Ingresa el monto abonado..."
                       value={installmentAmount}
+                      readOnly={reservationData?.serviceType === 'Ruta'}
                       onChange={(e) => setInstallmentAmount(e.target.value)}
                       className="pl-10 border-gray-200 focus:border-green-500"
                       min="0"

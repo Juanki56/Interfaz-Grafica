@@ -49,6 +49,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from './ui/dialog';
 import {
   Select,
@@ -427,7 +428,20 @@ export function BookingsManagement() {
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [isLoadingReservaPagos, setIsLoadingReservaPagos] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deleteProgramacionId, setDeleteProgramacionId] = useState<number | null>(null);
   const [deleteCancelMotivo, setDeleteCancelMotivo] = useState('');
+  
+  const [reprogramarItem, setReprogramarItem] = useState<any>(null);
+  const [isReprogramarModalOpen, setIsReprogramarModalOpen] = useState(false);
+  const [reprogramarTargetId, setReprogramarTargetId] = useState('');
+  const [reprogramarCustomDate, setReprogramarCustomDate] = useState('');
+  const [reprogramarCustomTime, setReprogramarCustomTime] = useState('');
+  const [reprogramarCustomDateEnd, setReprogramarCustomDateEnd] = useState('');
+  const [reprogramarCustomTimeEnd, setReprogramarCustomTimeEnd] = useState('');
+  const [reprogramarOccupiedDates, setReprogramarOccupiedDates] = useState<Set<string>>(new Set());
+  const [isReprogramarCalendarLoading, setIsReprogramarCalendarLoading] = useState(false);
+  const [reprogramarAvailabilityWarning, setReprogramarAvailabilityWarning] = useState(false);
+  const [isReprogramando, setIsReprogramando] = useState(false);
   const [staffCancelDialogOpen, setStaffCancelDialogOpen] = useState(false);
   const [staffCancelMotivo, setStaffCancelMotivo] = useState('');
   const [isCancellingStaffReserva, setIsCancellingStaffReserva] = useState(false);
@@ -937,6 +951,41 @@ export function BookingsManagement() {
   }, [formData.serviceType, formData.rutaReservaModo, formData.routeId]);
 
   // (useEffect duplicado eliminado — la lógica de carga del calendario taquilla está en el bloque anterior)
+
+  useEffect(() => {
+    if (!isReprogramarModalOpen || !reprogramarItem?.id_ruta || !(reprogramarItem?.es_personalizada || reprogramarItem?.id_solicitud_personalizada)) {
+      setReprogramarOccupiedDates(new Set());
+      setReprogramarAvailabilityWarning(false);
+      return;
+    }
+    const idRuta = Number(reprogramarItem.id_ruta);
+    if (!Number.isFinite(idRuta) || idRuta <= 0) {
+      setReprogramarOccupiedDates(new Set());
+      return;
+    }
+    let cancelled = false;
+    setIsReprogramarCalendarLoading(true);
+    setReprogramarAvailabilityWarning(false);
+    programacionAPI
+      .getFechasOcupadasRuta(idRuta)
+      .then((dates) => {
+        if (cancelled) return;
+        setReprogramarOccupiedDates(
+          new Set((dates || []).map((d) => normalizeOccupiedYmd(String(d))).filter(Boolean))
+        );
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setReprogramarOccupiedDates(new Set());
+        setReprogramarAvailabilityWarning(true);
+      })
+      .finally(() => {
+        if (!cancelled) setIsReprogramarCalendarLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isReprogramarModalOpen, reprogramarItem]);
 
   useEffect(() => {
     if (activeView !== 'detail' && activeView !== 'edit') return;
@@ -3332,6 +3381,7 @@ export function BookingsManagement() {
                           <TableHead>Personas</TableHead>
                           <TableHead>Precio</TableHead>
                           <TableHead>Subtotal</TableHead>
+                          <TableHead></TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -3359,6 +3409,8 @@ export function BookingsManagement() {
                             <TableCell>{item.cantidad_personas}</TableCell>
                             <TableCell>{formatCurrency(p.precioUnitarioMostrado)}</TableCell>
                             <TableCell>{formatCurrency(p.subtotalMostrado)}</TableCell>
+                            <TableCell>
+                            </TableCell>
                           </TableRow>
                           );
                         })}
@@ -3787,6 +3839,199 @@ export function BookingsManagement() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* DIALOG ELIMINAR PROGRAMACION DE RESERVA */}
+      <AlertDialog
+        open={deleteProgramacionId !== null}
+        onOpenChange={(open) => {
+          if (!open) setDeleteProgramacionId(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-700">¿Quitar ruta de la reserva?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Estás a punto de quitar esta ruta de la reserva. Esto te permitirá usar la opción "Agregar Programación" para asignar la nueva fecha elegida por el cliente, conservando el dinero ya pagado.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+              onClick={async () => {
+                if (!selectedBooking || !deleteProgramacionId) return;
+                try {
+                  const res = await reservasAPI.eliminarProgramacion(Number(selectedBooking.id), deleteProgramacionId);
+                  if (res?.success) {
+                    toast.success('Ruta eliminada. Ahora puedes agregar la nueva programación.');
+                    void loadReservaDetail(Number(selectedBooking.id));
+                  } else {
+                    toast.error('Error al quitar la ruta.');
+                  }
+                } catch (e) {
+                  console.error(e);
+                  toast.error('Error de conexión al quitar la ruta.');
+                } finally {
+                  setDeleteProgramacionId(null);
+                }
+              }}
+            >
+              Sí, quitar ruta
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* DIALOG REPROGRAMAR */}
+      <Dialog
+        open={isReprogramarModalOpen}
+        onOpenChange={(open) => {
+          setIsReprogramarModalOpen(open);
+          if (!open) {
+            setReprogramarItem(null);
+            setReprogramarTargetId('');
+            setReprogramarCustomDate('');
+            setReprogramarCustomTime('');
+            setReprogramarCustomDateEnd('');
+            setReprogramarCustomTimeEnd('');
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="text-blue-700">Reprogramar Salida</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-gray-600 mb-4">
+              Estás reprogramando la salida completa de la ruta <strong>{reprogramarItem?.ruta_nombre || 'Ruta'}</strong>.
+              <br />
+              <span className="text-orange-600 font-medium">Nota: Esto cambiará la fecha para TODOS los participantes en esta salida y les enviará un correo notificándoles.</span>
+            </p>
+            
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 mb-2">Selecciona la nueva fecha en el calendario:</p>
+              <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm flex justify-center overflow-x-auto">
+                <BookingCalendar
+                  mode="single"
+                  weekStartsOn={1}
+                  selected={
+                    reprogramarCustomDate
+                      ? new Date(`${reprogramarCustomDate}T00:00:00`)
+                      : undefined
+                  }
+                  onSelect={(date) => {
+                    if (!date) return;
+                    const ymd = toYMD(date);
+                    setReprogramarCustomDate(ymd);
+                    const duracion = Number(reprogramarItem?.duracion_dias) || 1;
+                    const end = addDays(date, duracion - 1);
+                    setReprogramarCustomDateEnd(toYMD(end));
+                  }}
+                  disabled={(date) => {
+                    const base = new Date(date);
+                    base.setHours(0, 0, 0, 0);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    if (base < today) return true;
+                    
+                    const duracion = Number(reprogramarItem?.duracion_dias) || 1;
+                    for (let i = 0; i < duracion; i += 1) {
+                      if (reprogramarOccupiedDates.has(toYMD(addDays(base, i)))) return true;
+                    }
+                    return false;
+                  }}
+                  modifiers={{
+                    past: (date: Date) => {
+                      const d = new Date(date);
+                      d.setHours(0, 0, 0, 0);
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      return d < today;
+                    },
+                    reserved: (date: Date) => reprogramarOccupiedDates.has(toYMD(date)),
+                  }}
+                  modifiersClassNames={{
+                    past: 'rdp-day-past bg-slate-100 text-slate-400 line-through decoration-slate-400/90 opacity-65',
+                    reserved: 'rdp-day-reserved bg-gray-200 text-gray-600 line-through decoration-gray-500 shadow-inner opacity-95 border border-gray-400/50',
+                  }}
+                  defaultMonth={
+                    reprogramarCustomDate
+                      ? new Date(`${reprogramarCustomDate}T00:00:00`)
+                      : new Date()
+                  }
+                  className="rounded-md"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Nueva Hora Salida</Label>
+                  <input
+                    type="time"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    value={reprogramarCustomTime}
+                    onChange={(e) => setReprogramarCustomTime(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Nueva Hora Regreso</Label>
+                  <input
+                    type="time"
+                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    value={reprogramarCustomTimeEnd}
+                    onChange={(e) => setReprogramarCustomTimeEnd(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsReprogramarModalOpen(false)}
+              disabled={isReprogramando}
+            >
+              Cancelar
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              disabled={
+                isReprogramando ||
+                !reprogramarCustomDate || !reprogramarCustomTime || !reprogramarCustomDateEnd || !reprogramarCustomTimeEnd
+              }
+              onClick={async () => {
+                if (!selectedBooking || !reprogramarItem) return;
+                setIsReprogramando(true);
+                try {
+                  const idReserva = Number(selectedBooking.id);
+                  
+                  // Update existing programacion and notify EVERYONE in it
+                  await programacionAPI.update(Number(reprogramarItem.id_programacion), {
+                    fecha_salida: reprogramarCustomDate,
+                    hora_salida: reprogramarCustomTime,
+                    fecha_regreso: reprogramarCustomDateEnd,
+                    hora_regreso: reprogramarCustomTimeEnd,
+                    estado: 'Programado',
+                  } as any);
+                  
+                  await reservasAPI.update(idReserva, { estado: 'Confirmada' });
+                  
+                  toast.success('Ruta reprogramada exitosamente. Se envió notificación a los participantes.');
+                  
+                  setIsReprogramarModalOpen(false);
+                  void loadReservaDetail(idReserva);
+                } catch (e: any) {
+                  console.error(e);
+                  toast.error('Error al reprogramar.', { description: e?.message });
+                } finally {
+                  setIsReprogramando(false);
+                }
+              }}
+            >
+              {isReprogramando ? 'Guardando...' : 'Confirmar Reprogramación'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1440,6 +1440,19 @@ export const reservasAPI = {
     });
   },
 
+  eliminarProgramacion: async (idReserva: number, idDetalle: number) => {
+    return fetchAPI(`/api/reservas/${idReserva}/programacion/${idDetalle}`, {
+      method: 'DELETE',
+    });
+  },
+
+  notificarReprogramacion: async (idReserva: number, idProgramacion: number) => {
+    return fetchAPI(`/api/reservas/${idReserva}/notificar-reprogramacion`, {
+      method: 'POST',
+      body: JSON.stringify({ id_programacion: idProgramacion }),
+    });
+  },
+
   buscar: async (termino: string): Promise<Reserva[]> => {
     const response = await fetchAPI<any>(`/api/reservas/buscar?q=${termino}`);
     return unwrapApiArray<Reserva>(response);
