@@ -4413,7 +4413,6 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
                             onChange={(e) =>
                               setFincaSaldoPagoForm((p) => ({ ...p, observaciones: e.target.value }))
                             }
-                            placeholder="Ej. segundo abono 50 % — mismo titular"
                             className="min-h-[72px]"
                           />
                         </div>

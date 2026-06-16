@@ -192,6 +192,8 @@ export function ServiceManagement() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showViewDialog, setShowViewDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showConfirmToggle, setShowConfirmToggle] = useState(false);
+  const [serviceToToggle, setServiceToToggle] = useState<ServicioConProveedor | null>(null);
   const [selectedService, setSelectedService] = useState<ServicioConProveedor | null>(null);
 
   const itemsPerPage = 10;
@@ -317,17 +319,40 @@ export function ServiceManagement() {
     return;
   }
 
-  if (!formData.nombre) {
+  if (!formData.nombre.trim()) {
     toast.error("El nombre es obligatorio");
     return;
   }
+  if (!formData.precio.trim()) {
+    toast.error("El precio es obligatorio");
+    return;
+  }
+  if (!formData.descripcion.trim()) {
+    toast.error("La descripción es obligatoria");
+    return;
+  }
+  if (!formData.id_proveedores) {
+    toast.error("El proveedor es obligatorio");
+    return;
+  }
+  if (!formData.aplica_a) {
+    toast.error("El ámbito del servicio es obligatorio");
+    return;
+  }
+
+  const numericPrice = Number(formData.precio.replace(/\./g, ""));
+  if (isNaN(numericPrice) || numericPrice <= 0) {
+    toast.error("El precio debe ser un número positivo");
+    return;
+  }
+
   try {
     await serviciosAPI.create({
       nombre: formData.nombre,
       descripcion: formData.descripcion,
-      precio: formData.precio ? Number(formData.precio) : undefined,
+      precio: numericPrice,
       imagen_url: formData.imagen_url || undefined,
-      id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
+      id_proveedores: Number(formData.id_proveedores),
       aplica_a: formData.aplica_a,
     });
     toast.success("Servicio creado exitosamente");
@@ -365,13 +390,41 @@ export function ServiceManagement() {
   }
 
   if (!selectedService) return;
+
+  if (!formData.nombre.trim()) {
+    toast.error("El nombre es obligatorio");
+    return;
+  }
+  if (!formData.precio.trim()) {
+    toast.error("El precio es obligatorio");
+    return;
+  }
+  if (!formData.descripcion.trim()) {
+    toast.error("La descripción es obligatoria");
+    return;
+  }
+  if (!formData.id_proveedores) {
+    toast.error("El proveedor es obligatorio");
+    return;
+  }
+  if (!formData.aplica_a) {
+    toast.error("El ámbito del servicio es obligatorio");
+    return;
+  }
+
+  const numericPrice = Number(formData.precio.replace(/\./g, ""));
+  if (isNaN(numericPrice) || numericPrice <= 0) {
+    toast.error("El precio debe ser un número positivo");
+    return;
+  }
+
   try {
     await serviciosAPI.update(selectedService.id_servicio, {
       nombre: formData.nombre,
       descripcion: formData.descripcion,
-      precio: formData.precio ? Number(formData.precio) : undefined,
+      precio: numericPrice,
       imagen_url: formData.imagen_url || undefined,
-      id_proveedores: formData.id_proveedores ? Number(formData.id_proveedores) : undefined,
+      id_proveedores: Number(formData.id_proveedores),
       aplica_a: formData.aplica_a,
     } as any);
     toast.success("Servicio actualizado exitosamente");
@@ -402,21 +455,29 @@ export function ServiceManagement() {
     }
   };
 
-  const handleToggleEstado = async (service: ServicioConProveedor) => {
+  const handleToggleEstado = (service: ServicioConProveedor) => {
     if (!canEditService) {
       toast.error('No tienes permiso para editar servicios');
       return;
     }
+    setServiceToToggle(service);
+    setShowConfirmToggle(true);
+  };
 
-    const activo = servicioEstaActivo(service);
+  const confirmToggleEstado = async () => {
+    if (!serviceToToggle) return;
+    const activo = servicioEstaActivo(serviceToToggle);
     try {
-      await serviciosAPI.update(service.id_servicio, {
+      await serviciosAPI.update(serviceToToggle.id_servicio, {
         estado: !activo,
       } as any);
       toast.success(`Servicio ${!activo ? 'activado' : 'desactivado'}`);
       await cargarServicios();
     } catch (error: any) {
       toast.error(error?.message || "No se pudo cambiar el estado");
+    } finally {
+      setShowConfirmToggle(false);
+      setServiceToToggle(null);
     }
   };
 
@@ -687,7 +748,7 @@ export function ServiceManagement() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-green-800">Crear Nuevo Servicio</DialogTitle>
-            <DialogDescription>Completa los campos para registrar un nuevo servicio.</DialogDescription>
+            <DialogDescription>Completa todos los campos obligatorios para registrar un nuevo servicio.</DialogDescription>
           </DialogHeader>
           <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
@@ -704,7 +765,7 @@ export function ServiceManagement() {
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-green-800">Editar Servicio</DialogTitle>
-            <DialogDescription>Modifica la información del servicio.</DialogDescription>
+            <DialogDescription>Modifica la información del servicio. Todos los campos son obligatorios.</DialogDescription>
           </DialogHeader>
           <ServicioFormFields formData={formData} setFormData={setFormData} proveedores={proveedores} />
           <DialogFooter>
@@ -754,6 +815,26 @@ export function ServiceManagement() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Alert Cambio de Estado */}
+      <AlertDialog open={showConfirmToggle} onOpenChange={setShowConfirmToggle}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar cambio de estado</AlertDialogTitle>
+            <AlertDialogDescription>
+              {serviceToToggle && servicioEstaActivo(serviceToToggle)
+                ? `¿Desactivar el servicio "${serviceToToggle.nombre}"? Los clientes no podrán verlo en las reservas.`
+                : `¿Activar el servicio "${serviceToToggle?.nombre}"? Estará disponible en las reservas.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmToggleEstado} className="bg-green-600 hover:bg-green-700">
+              Confirmar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Dialog Eliminar */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
