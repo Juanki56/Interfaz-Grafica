@@ -212,7 +212,8 @@ export function RouteDetailPage({ routeId, onViewChange }: RouteDetailPageProps)
         if (cancelled) return;
         const activeSolicitud = solicitudes.find((s: any) => {
           const status = String(s.estado || '').toLowerCase();
-          if (status === 'cancelada' || status === 'rechazada' || status === 'completada') return false;
+          const reservaStatus = String(s.reserva_estado || '').toLowerCase();
+          if (status === 'cancelada' || status === 'rechazada' || status === 'completada' || reservaStatus === 'cancelada') return false;
           if (Number(s.id_ruta) !== id) return false;
 
           // Si la fecha deseada ya pasó, la solicitud caducó → permitir nueva

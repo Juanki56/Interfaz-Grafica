@@ -1179,6 +1179,34 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                       </div>
                     </div>
 
+                    {/* Devoluciones Warning */}
+                    <div className="bg-emerald-50 border-2 border-emerald-500 rounded-lg p-5 mt-6 mb-4 shadow-sm">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="w-6 h-6 text-emerald-600 shrink-0 mt-0.5" />
+                        <div className="space-y-3">
+                          <h4 className="font-bold text-emerald-800 text-lg">Política de Devoluciones y Cancelaciones</h4>
+                          <div className="text-emerald-700 text-sm leading-relaxed space-y-2">
+                            <p>Al confirmar tu reserva, aseguras tu cupo en la experiencia.</p>
+                            <p>
+                              Para garantizar la organización del viaje, los pagos <strong>no aplican para reembolso</strong> en caso de cancelación o no asistencia. En situaciones de fuerza mayor, podremos reprogramar tu experiencia.
+                            </p>
+                            <p>Si tienes dudas, estamos para ayudarte.</p>
+                          </div>
+                          <div className="pt-2">
+                            <a 
+                              href="https://api.whatsapp.com/send/?phone=573043898018&text&type=phone_number&app_absent=0" 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 px-4 py-2.5 rounded-md font-medium transition-colors border border-emerald-300 shadow-sm"
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                              Contactar por WhatsApp (+57 304 389 8018)
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex justify-end mt-4">
                       <Button
                         className="bg-green-700 hover:bg-green-800"
