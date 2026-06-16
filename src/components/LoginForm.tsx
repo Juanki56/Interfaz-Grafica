@@ -37,13 +37,6 @@ export function LoginForm({ onShowRegister, onShowForgotPassword, onShowVerifyEm
     setIsLoading(false);
   };
 
-  const demoAccounts = [
-    { email: 'admin@occitours.com', role: 'Administrador' },
-    { email: 'asesor@occitours.com', role: 'Asesor' },
-    { email: 'guia@occitours.com', role: 'Guía Turístico' },
-    { email: 'cliente@occitours.com', role: 'Cliente' }
-  ];
-
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       {/* Back to Home Button */}
@@ -199,23 +192,7 @@ export function LoginForm({ onShowRegister, onShowForgotPassword, onShowVerifyEm
                 ¿Ya tienes código? Verificar correo
               </button>
               
-              <div className="pt-2">
-                <p className="text-xs text-center text-gray-500 mb-3">Cuentas de demostración (contraseña: password123):</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {demoAccounts.map((account) => (
-                    <button
-                      key={account.email}
-                      onClick={() => {
-                        setEmail(account.email);
-                        setPassword('password123');
-                      }}
-                      className="text-xs bg-gray-100 hover:bg-gray-200 p-2 rounded text-center transition-colors"
-                    >
-                      {account.role}
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </div>
           </CardContent>
         </Card>

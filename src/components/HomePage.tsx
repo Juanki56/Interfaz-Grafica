@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from './ui/carousel';
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, CarouselDots } from './ui/carousel';
+import Autoplay from 'embla-carousel-autoplay';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { authAPI, fincasAPI, programacionAPI, rutasAPI, type Finca, type Programacion, type Ruta } from '../services/api';
 import { filterFincasActivas } from '../utils/fincaActiva';
@@ -222,7 +223,11 @@ export function HomePage({ onViewChange }: HomePageProps) {
           </div>
         ) : upcomingProgramaciones.length > 0 ? (
           <div className="relative px-12">
-            <Carousel opts={{ align: 'start' }} className="w-full">
+            <Carousel 
+              opts={{ align: 'start', loop: true }} 
+              plugins={[Autoplay({ delay: 3000, stopOnInteraction: false })]}
+              className="w-full"
+            >
               <CarouselContent>
                 {upcomingProgramaciones.map((p, idx) => {
                   const ruta = routeById.get(Number(p.id_ruta));
@@ -339,8 +344,9 @@ export function HomePage({ onViewChange }: HomePageProps) {
                   );
                 })}
               </CarouselContent>
-              <CarouselPrevious className="border-green-300" />
-              <CarouselNext className="border-green-300" />
+              <CarouselPrevious className="z-10 border-green-300 bg-white/90 hover:bg-green-50 text-green-700 shadow-md h-12 w-12 left-2 md:left-4" />
+              <CarouselNext className="z-10 border-green-300 bg-white/90 hover:bg-green-50 text-green-700 shadow-md h-12 w-12 right-2 md:right-4" />
+              <CarouselDots />
             </Carousel>
           </div>
         ) : (
