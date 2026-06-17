@@ -545,6 +545,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       value={profileData.name}
                       onChange={(e) => setProfileData(prev => ({ ...prev, name: e.target.value.replace(/[0-9]/g, '') }))}
                       placeholder="Tu nombre completo"
+                      maxLength={35}
                     />
                   </div>
                   
@@ -566,6 +567,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
                       placeholder="+57 300 123 4567"
                       type="tel"
+                      maxLength={15}
                     />
                   </div>
 

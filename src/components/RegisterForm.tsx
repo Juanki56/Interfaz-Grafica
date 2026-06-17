@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mountain, Mail, Lock, User, UserCheck, Phone } from 'lucide-react';
+import { Mountain, Mail, Lock, User, UserCheck, Phone, Eye, EyeOff } from 'lucide-react';
 import { isValidClientPhone, sanitizePhoneInput } from '../utils/clientFormValidation';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -11,6 +11,7 @@ import { useAuth } from '../context/AuthContext';
 interface RegisterFormProps {
   onBackToLogin: () => void;
   onShowVerifyEmail?: (emailDraft: string, password: string) => void;
+  onBackToHome?: () => void;
 }
 
 const isStrongPassword = (password: string) => {
@@ -22,7 +23,7 @@ const isStrongPassword = (password: string) => {
   return true;
 };
 
-export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormProps) {
+export function RegisterForm({ onBackToLogin, onShowVerifyEmail, onBackToHome }: RegisterFormProps) {
   const { register, registerPending, authFlags } = useAuth();
   const [formData, setFormData] = useState({
     nombre: '',
@@ -35,6 +36,8 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const handleInputChange = (field: string, value: string) => {
     let finalValue = value;
@@ -201,6 +204,7 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                       value={formData.nombre}
                       onChange={(e) => handleInputChange('nombre', e.target.value)}
                       className="pl-10 bg-white border-green-200 focus:border-green-500"
+                      maxLength={35}
                       required
                     />
                   </div>
@@ -217,6 +221,7 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                       value={formData.apellido}
                       onChange={(e) => handleInputChange('apellido', e.target.value)}
                       className="pl-10 bg-white border-green-200 focus:border-green-500"
+                      maxLength={35}
                       required
                     />
                   </div>
@@ -258,31 +263,26 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                 </div>
               </div>
 
-              <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                <div className="flex items-center space-x-2 mb-2">
-                  <UserCheck className="w-5 h-5 text-green-600" />
-                  <span className="font-medium text-green-800">Tipo de Cuenta</span>
-                </div>
-                <p className="text-sm text-green-700">
-                  Se creará una cuenta de <strong>Cliente</strong> que te permitirá reservar y disfrutar tours.
-                </p>
-                <p className="text-xs text-green-600 mt-2">
-                  💡 El administrador puede cambiar tu rol más adelante si necesitas otros permisos.
-                </p>
-              </div>
-
               <div className="space-y-2">
                 <label className="text-sm text-green-800">Contraseña</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <Input
-                    type="password"
+                    type={showPassword ? "text" : "password"}
                     placeholder="Mínimo 6 caracteres"
                     value={formData.password}
                     onChange={(e) => handleInputChange('password', e.target.value)}
-                    className="pl-10 bg-white border-green-200 focus:border-green-500"
+                    className="pl-10 pr-10 bg-white border-green-200 focus:border-green-500"
+                    minLength={6}
                     required
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-green-600 focus:outline-none"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
@@ -291,13 +291,21 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <Input
-                    type="password"
+                    type={showConfirmPassword ? "text" : "password"}
                     placeholder="Repite tu contraseña"
                     value={formData.confirmPassword}
                     onChange={(e) => handleInputChange('confirmPassword', e.target.value)}
-                    className="pl-10 bg-white border-green-200 focus:border-green-500"
+                    className="pl-10 pr-10 bg-white border-green-200 focus:border-green-500"
+                    minLength={6}
                     required
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-green-600 focus:outline-none"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
                 </div>
               </div>
 
@@ -313,13 +321,24 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
                 </Alert>
               )}
 
-              <Button 
-                type="submit" 
-                className="w-full bg-green-600 hover:bg-green-700 text-white"
-                disabled={isLoading}
-              >
-                {isLoading ? 'Creando cuenta...' : 'Crear Cuenta'}
-              </Button>
+              <div className="flex gap-3 pt-2">
+                <Button 
+                  type="button" 
+                  variant="outline"
+                  onClick={onBackToHome || onBackToLogin}
+                  className="flex-1 border-green-200 text-green-800 hover:bg-green-50"
+                  disabled={isLoading}
+                >
+                  Volver al inicio
+                </Button>
+                <Button 
+                  type="submit" 
+                  className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                  disabled={isLoading}
+                >
+                  {isLoading ? 'Creando cuenta...' : 'Crear Cuenta'}
+                </Button>
+              </div>
             </form>
 
             <div className="pt-4 border-t border-gray-200 text-center">

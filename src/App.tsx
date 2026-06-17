@@ -1389,6 +1389,10 @@ export default function App() {
                 setShowRegister(false);
                 setShowVerifyEmail(true);
               }}
+              onBackToHome={() => {
+                setShowRegister(false);
+                setCurrentView('home');
+              }}
             />
           ) : showForgotPassword ? (
             <ForgotPasswordForm
