@@ -564,7 +564,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     <label className="text-sm font-medium text-gray-700">Teléfono</label>
                     <Input
                       value={profileData.phone}
-                      onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value }))}
+                      onChange={(e) => setProfileData(prev => ({ ...prev, phone: e.target.value.replace(/[^0-9\s+\-]/g, '') }))}
                       placeholder="+57 300 123 4567"
                       type="tel"
                       maxLength={15}
@@ -603,6 +603,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                         }))
                       }
                       placeholder="Ej. 1234567890"
+                      maxLength={15}
                     />
                   </div>
                   
