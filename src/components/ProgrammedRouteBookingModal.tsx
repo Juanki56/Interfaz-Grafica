@@ -10,6 +10,8 @@ import {
   CreditCard,
   MapPin,
   MessageCircle,
+  Minus,
+  Plus,
   QrCode,
   Sparkles,
   UserCircle,
@@ -1095,26 +1097,63 @@ export function ProgrammedRouteBookingModal({
                   `detalle_reserva_acompanante`. No se les crea una cuenta ni un perfil de cliente automaticamente.
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="companionsCount">Numero de acompanantes</Label>
-                    <Input
-                      id="companionsCount"
-                      type="number"
-                      min={0}
-                      max={maxCompanions}
-                      value={companions.length}
-                      onChange={(event) => handleCompanionCountChange(Number(event.target.value))}
-                    />
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div className="space-y-3">
+                    <Label htmlFor="companionsCount" className="text-gray-700">Número de acompañantes</Label>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10 shrink-0 rounded-full border-green-200 text-green-700 hover:bg-green-50 hover:text-green-800"
+                        onClick={() => handleCompanionCountChange(Math.max(0, companions.length - 1))}
+                        disabled={companions.length <= 0}
+                      >
+                        <Minus className="h-4 w-4" />
+                      </Button>
+                      <Input
+                        id="companionsCount"
+                        type="text"
+                        inputMode="numeric"
+                        value={companions.length.toString()}
+                        onChange={(event) => {
+                          const val = event.target.value.replace(/[^0-9]/g, '');
+                          if (val === '') {
+                            handleCompanionCountChange(0);
+                          } else {
+                            handleCompanionCountChange(Math.min(maxCompanions, parseInt(val, 10)));
+                          }
+                        }}
+                        className="h-10 w-20 text-center text-lg font-medium shadow-sm focus-visible:ring-green-500"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10 shrink-0 rounded-full border-green-200 text-green-700 hover:bg-green-50 hover:text-green-800"
+                        onClick={() => handleCompanionCountChange(Math.min(maxCompanions, companions.length + 1))}
+                        disabled={companions.length >= maxCompanions}
+                      >
+                        <Plus className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {maxCompanions > 0 && companions.length >= maxCompanions && (
+                      <p className="text-xs text-amber-600 font-medium">Límite alcanzado ({maxCompanions} máx).</p>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="bookingNotes">Notas para el asesor</Label>
+                  <div className="space-y-2 flex flex-col">
+                    <div className="flex justify-between items-center">
+                      <Label htmlFor="bookingNotes" className="text-gray-700">Notas para el asesor</Label>
+                      <span className="text-xs font-medium text-gray-500">{notes.length}/100</span>
+                    </div>
                     <Textarea
                       id="bookingNotes"
                       value={notes}
-                      onChange={(event) => setNotes(event.target.value)}
+                      onChange={(event) => setNotes(event.target.value.slice(0, 100))}
                       placeholder="Ej. observaciones medicas, dudas del grupo o requerimientos especiales."
                       rows={4}
+                      maxLength={100}
+                      className="resize-none"
                     />
                   </div>
                 </div>

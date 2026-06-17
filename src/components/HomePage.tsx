@@ -225,7 +225,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
           <div className="relative px-12">
             <Carousel 
               opts={{ align: 'start', loop: true }} 
-              plugins={[Autoplay({ delay: 3000, stopOnInteraction: false })]}
+              plugins={[Autoplay({ delay: 8000, stopOnInteraction: false })]}
               className="w-full"
             >
               <CarouselContent>

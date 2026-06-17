@@ -37,7 +37,11 @@ export function RegisterForm({ onBackToLogin, onShowVerifyEmail }: RegisterFormP
   const [isLoading, setIsLoading] = useState(false);
 
   const handleInputChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+    let finalValue = value;
+    if (field === 'nombre' || field === 'apellido') {
+      finalValue = value.replace(/[0-9]/g, '');
+    }
+    setFormData(prev => ({ ...prev, [field]: finalValue }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

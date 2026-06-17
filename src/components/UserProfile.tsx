@@ -478,17 +478,15 @@ export function UserProfile({ onClose }: UserProfileProps) {
   // Get available tabs based on user role
   const getAvailableTabs = () => {
     const baseTabs = [
-      { id: 'profile', label: 'Perfil', cols: 'grid-cols-4' },
-      { id: 'security', label: 'Seguridad', cols: 'grid-cols-4' },
-      { id: 'notifications', label: 'Notificaciones', cols: 'grid-cols-4' },
-      { id: 'account', label: 'Cuenta', cols: 'grid-cols-4' }
+      { id: 'profile', label: 'Perfil', cols: 'grid-cols-3' },
+      { id: 'security', label: 'Seguridad', cols: 'grid-cols-3' },
+      { id: 'account', label: 'Cuenta', cols: 'grid-cols-3' }
     ];
 
     if (user?.role === 'client') {
       return [
-        { id: 'profile', label: 'Perfil', cols: 'grid-cols-3' },
-        { id: 'security', label: 'Seguridad', cols: 'grid-cols-3' },
-        { id: 'notifications', label: 'Notificaciones', cols: 'grid-cols-3' },
+        { id: 'profile', label: 'Perfil', cols: 'grid-cols-2' },
+        { id: 'security', label: 'Seguridad', cols: 'grid-cols-2' },
       ];
     }
 
@@ -545,7 +543,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     <label className="text-sm font-medium text-gray-700">Nombre Completo</label>
                     <Input
                       value={profileData.name}
-                      onChange={(e) => setProfileData(prev => ({ ...prev, name: e.target.value }))}
+                      onChange={(e) => setProfileData(prev => ({ ...prev, name: e.target.value.replace(/[0-9]/g, '') }))}
                       placeholder="Tu nombre completo"
                     />
                   </div>
@@ -599,7 +597,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                       onChange={(e) =>
                         setProfileData((prev) => ({
                           ...prev,
-                          numero_documento: sanitizeDocumentInput(e.target.value),
+                          numero_documento: e.target.value.replace(/[^0-9]/g, ''),
                         }))
                       }
                       placeholder="Ej. 1234567890"
@@ -615,26 +613,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     />
                   </div>
                 </div>
-                
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    {user?.role === 'client' ? 'Preferencias de Tours' : 
-                     user?.role === 'guide' ? 'Especialidades y Experiencia' :
-                     user?.role === 'advisor' ? 'Áreas de Especialización' :
-                     'Notas Adicionales'}
-                  </label>
-                  <Textarea
-                    value={profileData.preferences}
-                    onChange={(e) => setProfileData(prev => ({ ...prev, preferences: e.target.value }))}
-                    placeholder={
-                      user?.role === 'client' ? "Describe tus preferencias para tours (actividades, nivel de dificultad, etc.)" :
-                      user?.role === 'guide' ? "Describe tu experiencia como guía, especialidades y certificaciones" :
-                      user?.role === 'advisor' ? "Describe tu experiencia en asesoría turística y áreas de especialización" :
-                      "Información adicional relevante"
-                    }
-                    rows={3}
-                  />
-                </div>
+
                 
                 <Button onClick={handleProfileUpdate} className="bg-green-600 hover:bg-green-700">
                   Actualizar Perfil
@@ -788,55 +767,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     </div>
                   </div>
                   
-                  <Separator />
-                  
-                  <div>
-                    <h3 className="font-medium text-gray-800 mb-4">Configuración de Privacidad</h3>
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label>Visibilidad del Perfil</Label>
-                          <p className="text-sm text-gray-600">Controla quién puede ver tu información básica</p>
-                        </div>
-                        <select 
-                          className="border rounded-md px-3 py-2 bg-white"
-                          value={privacySettings.profileVisibility}
-                          onChange={(e) => setPrivacySettings(prev => ({ ...prev, profileVisibility: e.target.value }))}
-                        >
-                          <option value="private">Privado</option>
-                          <option value="public">Público</option>
-                          <option value="friends">Solo amigos</option>
-                        </select>
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label>Compartir Historial de Reservas</Label>
-                          <p className="text-sm text-gray-600">Permite que otros vean tus tours realizados</p>
-                        </div>
-                        <Switch
-                          checked={privacySettings.shareBookingHistory}
-                          onCheckedChange={(checked: boolean) => setPrivacySettings(prev => ({ ...prev, shareBookingHistory: checked }))}
-                        />
-                      </div>
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-0.5">
-                          <Label>Permitir Recolección de Datos</Label>
-                          <p className="text-sm text-gray-600">Ayúdanos a mejorar con datos de uso anónimo</p>
-                        </div>
-                        <Switch
-                          checked={privacySettings.allowDataCollection}
-                          onCheckedChange={(checked: boolean) => setPrivacySettings(prev => ({ ...prev, allowDataCollection: checked }))}
-                        />
-                      </div>
-                      
-                      <Button onClick={handlePrivacyUpdate} className="bg-green-600 hover:bg-green-700">
-                        <Save className="w-4 h-4 mr-2" />
-                        Guardar Configuración
-                      </Button>
-                    </div>
-                  </div>
+
                 </CardContent>
               </Card>
 
@@ -950,120 +881,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
             </div>
           </TabsContent>
 
-          {/* Notifications Tab */}
-          <TabsContent value="notifications">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-2xl text-gray-800 flex items-center space-x-2">
-                  <Bell className="w-6 h-6" />
-                  <span>Notificaciones</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div>
-                  <h3 className="font-medium text-gray-800 mb-4">Preferencias de Notificación</h3>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label className="flex items-center space-x-2">
-                          <Mail className="w-4 h-4" />
-                          <span>Notificaciones por Email</span>
-                        </Label>
-                        <p className="text-sm text-gray-600">Recibe actualizaciones importantes por correo</p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.emailNotifications}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, emailNotifications: checked }))}
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label className="flex items-center space-x-2">
-                          <Bell className="w-4 h-4" />
-                          <span>Notificaciones Push</span>
-                        </Label>
-                        <p className="text-sm text-gray-600">Alertas instantáneas en tu dispositivo</p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.pushNotifications}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, pushNotifications: checked }))}
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label className="flex items-center space-x-2">
-                          <Phone className="w-4 h-4" />
-                          <span>Mensajes SMS</span>
-                        </Label>
-                        <p className="text-sm text-gray-600">Confirmaciones y recordatorios por mensaje</p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.smsNotifications}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, smsNotifications: checked }))}
-                      />
-                    </div>
-                  </div>
-                </div>
-                
-                <Separator />
-                
-                <div>
-                  <h3 className="font-medium text-gray-800 mb-4">Tipos de Notificación</h3>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label>
-                          {user?.role === 'client' ? 'Actualizaciones de Reservas' :
-                           user?.role === 'guide' ? 'Asignaciones de Tours' :
-                           user?.role === 'advisor' ? 'Consultas de Clientes' :
-                           'Actualizaciones del Sistema'}
-                        </Label>
-                        <p className="text-sm text-gray-600">
-                          {user?.role === 'client' ? 'Confirmaciones, cambios y cancelaciones' :
-                           user?.role === 'guide' ? 'Nuevas asignaciones y cambios de tours' :
-                           user?.role === 'advisor' ? 'Nuevas consultas y seguimientos' :
-                           'Notificaciones importantes del sistema'}
-                        </p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.bookingUpdates}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, bookingUpdates: checked }))}
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label>Promociones y Ofertas</Label>
-                        <p className="text-sm text-gray-600">Descuentos especiales y nuevos tours</p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.promotionsOffers}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, promotionsOffers: checked }))}
-                      />
-                    </div>
-                    
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label>Marketing por Email</Label>
-                        <p className="text-sm text-gray-600">Boletines informativos y contenido exclusivo</p>
-                      </div>
-                      <Switch
-                        checked={notificationSettings.marketingEmails}
-                        onCheckedChange={(checked: boolean) => setNotificationSettings(prev => ({ ...prev, marketingEmails: checked }))}
-                      />
-                    </div>
-                  </div>
-                </div>
-                
-                <Button onClick={handleNotificationUpdate} className="bg-green-600 hover:bg-green-700">
-                  <Save className="w-4 h-4 mr-2" />
-                  Guardar Preferencias
-                </Button>
-              </CardContent>
-            </Card>
-          </TabsContent>
+
 
           {/* Account Tab */}
           <TabsContent value="account">
@@ -1102,19 +920,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                         <Label className="text-gray-600">Última actividad</Label>
                         <p className="font-medium">Hoy</p>
                       </div>
-                      <div>
-                        <Label className="text-gray-600">
-                          {user?.role === 'client' ? 'Tours completados' :
-                           user?.role === 'guide' ? 'Tours guiados' :
-                           user?.role === 'advisor' ? 'Clientes atendidos' :
-                           'Operaciones realizadas'}
-                        </Label>
-                        <p className="font-medium">
-                          {user?.role === 'guide' ? '47' :
-                           user?.role === 'advisor' ? '126' :
-                           '—'}
-                        </p>
-                      </div>
+
                       <div>
                         <Label className="text-gray-600">Tipo de cuenta</Label>
                         <p className="font-medium capitalize">{user?.role}</p>
@@ -1122,39 +928,7 @@ export function UserProfile({ onClose }: UserProfileProps) {
                     </div>
                   </div>
                   
-                  <Separator />
-                  
-                  <div>
-                    <h3 className="font-medium text-gray-800 mb-4">Acciones Avanzadas</h3>
-                    <div className="space-y-3">
-                      <Button variant="outline" className="w-full justify-start">
-                        Descargar mis datos
-                      </Button>
-                      {user?.role === 'client' && (
-                        <Button variant="outline" className="w-full justify-start">
-                          Exportar historial de reservas
-                        </Button>
-                      )}
-                      {user?.role === 'guide' && (
-                        <Button variant="outline" className="w-full justify-start">
-                          Exportar historial de tours
-                        </Button>
-                      )}
-                      {user?.role === 'advisor' && (
-                        <Button variant="outline" className="w-full justify-start">
-                          Exportar reporte de clientes
-                        </Button>
-                      )}
-                      <Button variant="outline" className="w-full justify-start">
-                        Solicitar verificación de cuenta
-                      </Button>
-                      {(user?.role === 'guide' || user?.role === 'advisor') && (
-                        <Button variant="outline" className="w-full justify-start">
-                          Solicitar capacitación adicional
-                        </Button>
-                      )}
-                    </div>
-                  </div>
+
                 </CardContent>
               </Card>
               
