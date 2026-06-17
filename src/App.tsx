@@ -45,6 +45,8 @@ const ProgrammedRouteBookingPage = lazy(() =>
   import('./components/ProgrammedRouteBookingPage').then((m) => ({ default: m.ProgrammedRouteBookingPage }))
 );
 const AboutUsPage = lazy(() => import('./components/AboutUsPage').then((m) => ({ default: m.AboutUsPage })));
+const TermsAndConditionsPage = lazy(() => import('./components/TermsAndConditionsPage').then((m) => ({ default: m.TermsAndConditionsPage })));
+const CancellationPoliciesPage = lazy(() => import('./components/CancellationPoliciesPage').then((m) => ({ default: m.CancellationPoliciesPage })));
 
 const ProgrammingManagement = lazy(() =>
   import('./components/ProgrammingManagement').then((m) => ({ default: m.ProgrammingManagement }))
@@ -1481,6 +1483,10 @@ export default function App() {
         return <FarmDetailPage farmId={selectedItemId} onViewChange={handleViewChange} />;
       case 'programmed-booking':
         return <ProgrammedRouteBookingPage programacionId={selectedItemId} onViewChange={handleViewChange} />;
+      case 'terms':
+        return <TermsAndConditionsPage onViewChange={handleViewChange} />;
+      case 'cancellation':
+        return <CancellationPoliciesPage onViewChange={handleViewChange} />;
       case 'dashboard':
         return user ? renderDashboard() : <HomePage onViewChange={handleViewChange} />;
       default:
@@ -1518,7 +1524,7 @@ export default function App() {
                       currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
                 </main>
               </Suspense>
-            ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking') ? (
+            ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking' || currentView === 'terms' || currentView === 'cancellation') ? (
               <>
                 <HeaderNavigation
                   currentView={currentView}

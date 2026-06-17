@@ -645,7 +645,7 @@ export function HomePage({ onViewChange }: HomePageProps) {
               size="lg"
               variant="outline"
               onClick={() => onViewChange('farms')}
-              className="border-white text-white hover:bg-white hover:text-green-600 px-8 py-3"
+              className="bg-transparent border border-white text-white hover:bg-white hover:text-green-600 px-8 py-3"
             >
               Ver Fincas
             </Button>
@@ -749,9 +749,9 @@ export function HomePage({ onViewChange }: HomePageProps) {
               <h4 className="text-white mb-4">Legal</h4>
               <ul className="space-y-2 text-sm">
                 <li>
-                  <a href="#" className="hover:text-green-400 transition-colors">
+                  <button onClick={() => onViewChange('terms')} className="hover:text-green-400 transition-colors">
                     Términos y Condiciones
-                  </a>
+                  </button>
                 </li>
                 <li>
                   <a href="#" className="hover:text-green-400 transition-colors">
@@ -759,9 +759,9 @@ export function HomePage({ onViewChange }: HomePageProps) {
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="hover:text-green-400 transition-colors">
+                  <button onClick={() => onViewChange('cancellation')} className="hover:text-green-400 transition-colors">
                     Políticas de Cancelación
-                  </a>
+                  </button>
                 </li>
               </ul>
             </div>
