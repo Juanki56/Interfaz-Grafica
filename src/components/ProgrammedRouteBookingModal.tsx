@@ -23,6 +23,7 @@ import {
   authAPI,
   reservasAPI,
   rutasAPI,
+  pagosAPI,
   extractRutaServiciosPredefinidos,
   extractRecomendacionesParticipantes,
   type PagoReservaProgramada,
@@ -178,6 +179,7 @@ export function ProgrammedRouteBookingModal({
   const [routeImages, setRouteImages] = useState<string[]>([]);
   const [selectedRouteImageIndex, setSelectedRouteImageIndex] = useState(0);
   const [isRouteImageLightboxOpen, setIsRouteImageLightboxOpen] = useState(false);
+  const [proofFile, setProofFile] = useState<File | null>(null);
   const [paymentData, setPaymentData] = useState({
     metodo_pago: 'Transferencia',
     numero_transaccion: '',
@@ -232,6 +234,7 @@ export function ProgrammedRouteBookingModal({
       comprobante_tipo: '',
       observaciones: '',
     });
+    setProofFile(null);
     setProofFileName('');
   }, [isOpen, programacion?.id_programacion]);
 
@@ -516,11 +519,23 @@ export function ProgrammedRouteBookingModal({
 
     try {
       setIsPaying(true);
+      
+      let finalComprobanteUrl = paymentData.comprobante_url.trim();
+      
+      if (proofFile) {
+        try {
+          const uploadRes = await pagosAPI.uploadComprobante(proofFile, user.id);
+          finalComprobanteUrl = uploadRes.url;
+        } catch (uploadErr: any) {
+          throw new Error('Error al subir el comprobante: ' + (uploadErr?.message || 'Error desconocido'));
+        }
+      }
+
       const response = await reservasAPI.pagarCompleto(createdCheckout.id_reserva, {
         monto: amountDue,
         metodo_pago: paymentData.metodo_pago || null,
         numero_transaccion: paymentData.numero_transaccion.trim() || null,
-        comprobante_url: paymentData.comprobante_url.trim(),
+        comprobante_url: finalComprobanteUrl,
         comprobante_nombre: paymentData.comprobante_nombre || null,
         comprobante_tipo: paymentData.comprobante_tipo || null,
         observaciones: paymentData.observaciones.trim() || null,
@@ -572,20 +587,10 @@ export function ProgrammedRouteBookingModal({
     }
 
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('No se pudo leer el comprobante seleccionado.'));
-        reader.readAsDataURL(file);
-      });
-
-      if (!dataUrl) {
-        throw new Error('No se pudo procesar el archivo seleccionado.');
-      }
-
+      setProofFile(file);
       setPaymentData((current) => ({
         ...current,
-        comprobante_url: dataUrl,
+        comprobante_url: 'pending-upload', // Marcador para pasar la validación
         comprobante_nombre: file.name,
         comprobante_tipo: file.type || 'application/octet-stream',
       }));
@@ -598,6 +603,7 @@ export function ProgrammedRouteBookingModal({
   };
 
   const removeProofFile = () => {
+    setProofFile(null);
     setPaymentData((current) => ({
       ...current,
       comprobante_url: '',

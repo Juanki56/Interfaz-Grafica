@@ -431,14 +431,7 @@ function mapPagoToInstallment(
   };
 }
 
-async function fileToDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('No se pudo leer el comprobante'));
-    reader.readAsDataURL(file);
-  });
-}
+
 
 export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentInstallmentsManagementProps) {
   const { hasPermission } = usePermissions();
@@ -668,7 +661,9 @@ export function PaymentInstallmentsManagement({ userRole = 'admin' }: PaymentIns
       let comprobanteTipo: string | null = null;
 
       if (payload.receiptFile) {
-        comprobanteUrl = await fileToDataUrl(payload.receiptFile);
+        const clientId = payload.reservation.client?.backendId || payload.reservation.client?.id || 0;
+        const uploadRes = await pagosAPI.uploadComprobante(payload.receiptFile, Number(clientId));
+        comprobanteUrl = uploadRes.url;
         comprobanteNombre = payload.receiptFile.name;
         comprobanteTipo = payload.receiptFile.type;
       }

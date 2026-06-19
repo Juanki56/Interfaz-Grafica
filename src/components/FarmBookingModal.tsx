@@ -51,14 +51,7 @@ const PAYMENT_METHOD_MAP = {
 } as const;
 
 
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('No se pudo leer el comprobante seleccionado.'));
-    reader.readAsDataURL(file);
-  });
-}
+
 
 export function FarmBookingModal({ isOpen, onClose, farm, availableServices, selectedServices: initialSelectedServices }: FarmBookingModalProps) {
   const { user } = useAuth();
@@ -394,7 +387,9 @@ export function FarmBookingModal({ isOpen, onClose, farm, availableServices, sel
 
     setIsSubmitting(true);
     try {
-      const comprobanteUrl = await fileToDataUrl(bookingData.paymentProof);
+      const uploadRes = await pagosAPI.uploadComprobante(bookingData.paymentProof, user.id);
+      const comprobanteUrl = uploadRes.url;
+      
       const notes: string[] = [];
       if (bookingData.medicalIndications.trim()) {
         notes.push(`Indicaciones médicas: ${bookingData.medicalIndications.trim()}`);

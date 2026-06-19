@@ -1583,14 +1583,7 @@ const CLIENT_COMPROBANTE_NOMBRE_MAX = 180;
 const CLIENT_METODO_PAGO_MAX = 40;
 const CLIENT_TRANSACCION_MAX = 80;
 
-function fileToDataUrlForPago(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('No se pudo leer el archivo.'));
-    reader.readAsDataURL(file);
-  });
-}
+
 
 function mergePagosClienteDedupe(pagosLists: Array<PagoCliente[] | undefined | null>): PagoCliente[] {
   const seen = new Set<number>();
@@ -1702,6 +1695,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
     comprobante_tipo: '',
     observaciones: '',
   });
+  const [requestProofFile, setRequestProofFile] = useState<File | null>(null);
   const requestProofInputRef = useRef<HTMLInputElement>(null);
   const bookingDetailLoadTokenRef = useRef(0);
   const requestDetailLoadTokenRef = useRef(0);
@@ -1713,6 +1707,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
   const [resubmitProofName, setResubmitProofName] = useState('');
   const [resubmitProofDataUrl, setResubmitProofDataUrl] = useState('');
   const [resubmitProofMime, setResubmitProofMime] = useState('');
+  const [resubmitProofFile, setResubmitProofFile] = useState<File | null>(null);
   const [isSubmittingResubmitPago, setIsSubmittingResubmitPago] = useState(false);
   const [fincaSaldoComprobanteBloqueado, setFincaSaldoComprobanteBloqueado] = useState(false);
   const [isCheckingFincaSaldoGate, setIsCheckingFincaSaldoGate] = useState(false);
@@ -1730,6 +1725,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
       setResubmitProofName('');
       setResubmitProofDataUrl('');
       setResubmitProofMime('');
+      setResubmitProofFile(null);
     }
   }, [selectedPayment]);
 
@@ -2918,11 +2914,10 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
       return;
     }
     try {
-      const dataUrl = await fileToDataUrlForPago(file);
-      if (!String(dataUrl || '').trim()) throw new Error('No se pudo leer el archivo.');
+      setRequestProofFile(file);
       setRequestPaymentData((prev) => ({
         ...prev,
-        comprobante_url: dataUrl,
+        comprobante_url: 'pending-upload', // placeholder para pasar validación vacía
         comprobante_nombre: file.name,
         comprobante_tipo: file.type || 'application/octet-stream',
       }));
@@ -2940,6 +2935,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
       comprobante_nombre: '',
       comprobante_tipo: '',
     }));
+    setRequestProofFile(null);
     if (requestProofInputRef.current) requestProofInputRef.current.value = '';
   };
 
@@ -3032,7 +3028,9 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
 
     setIsSubmittingFincaSaldoPago(true);
     try {
-      const comprobanteUrl = await fileToDataUrlForPago(fincaSaldoProofFile);
+      const uploadRes = await pagosAPI.uploadComprobante(fincaSaldoProofFile, user?.id || 0);
+      const comprobanteUrl = uploadRes.url;
+      
       const observaciones =
         fincaSaldoPagoForm.observaciones.trim() ||
         `Abono saldo restante — reserva #${idReserva}`;
@@ -3082,17 +3080,10 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
       event.target.value = '';
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setResubmitProofDataUrl(String(reader.result || ''));
-      setResubmitProofName(file.name);
-      setResubmitProofMime(file.type || 'application/octet-stream');
-    };
-    reader.onerror = () => {
-      toast.error('No se pudo leer el archivo.');
-      event.target.value = '';
-    };
-    reader.readAsDataURL(file);
+    setResubmitProofFile(file);
+    setResubmitProofDataUrl('pending-upload'); // marcador de subida
+    setResubmitProofName(file.name);
+    setResubmitProofMime(file.type || 'application/octet-stream');
   };
 
   const handleResubmitRejectedPago = async () => {
@@ -3131,6 +3122,9 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
 
     setIsSubmittingResubmitPago(true);
     try {
+      const uploadRes = await pagosAPI.uploadComprobante(resubmitProofFile!, user?.id || 0);
+      const comprobanteUrl = uploadRes.url;
+
       const observaciones =
         resubmitPago.observaciones.trim() ||
         `Reenvío de comprobante tras rechazo del pago #${selectedPayment.paymentId}`;
@@ -3144,7 +3138,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
           monto: Number(selectedPayment.amount),
           metodo_pago: resubmitPago.metodo_pago || null,
           numero_transaccion: resubmitPago.numero_transaccion.trim() || null,
-          comprobante_url: resubmitProofDataUrl.trim(),
+          comprobante_url: comprobanteUrl,
           comprobante_nombre: resubmitProofName || 'comprobante',
           comprobante_tipo: resubmitProofMime || 'application/octet-stream',
           observaciones,
@@ -3184,7 +3178,7 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
           monto: montoCompleto,
           metodo_pago: resubmitPago.metodo_pago || null,
           numero_transaccion: resubmitPago.numero_transaccion.trim() || null,
-          comprobante_url: resubmitProofDataUrl.trim(),
+          comprobante_url: comprobanteUrl,
           comprobante_nombre: resubmitProofName || 'comprobante',
           comprobante_tipo: resubmitProofMime || 'application/octet-stream',
           observaciones,
@@ -3811,10 +3805,11 @@ export function ClientDashboardImproved({ initialSelectedItemId }: { initialSele
                             }
 
                             setIsSubmittingRequestPayment(true);
+                            const uploadRes = await pagosAPI.uploadComprobante(requestProofFile!, user?.id || 0);
                             await solicitudesPersonalizadasAPI.crearPago(detail.id_solicitud_personalizada, {
                               metodo_pago: requestPaymentData.metodo_pago || null,
                               numero_transaccion: requestPaymentData.numero_transaccion.trim() || null,
-                              comprobante_url: requestPaymentData.comprobante_url.trim(),
+                              comprobante_url: uploadRes.url,
                               comprobante_nombre: requestPaymentData.comprobante_nombre.trim() || null,
                               comprobante_tipo: requestPaymentData.comprobante_tipo.trim() || null,
                               observaciones: requestPaymentData.observaciones.trim() || null,

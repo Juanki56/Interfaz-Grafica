@@ -1638,6 +1638,18 @@ export const pagosAPI = {
     return unwrapApiArray<PagoCliente>(response);
   },
 
+  uploadComprobante: async (file: File, idCliente: number | string): Promise<{ url: string; path: string }> => {
+    const formData = new FormData();
+    formData.append('comprobante', file);
+    formData.append('id_cliente', String(idCliente));
+    
+    const response = await fetchAPI<{ data: { url: string; path: string } }>('/api/pagos/upload-comprobante', {
+      method: 'POST',
+      body: formData,
+    });
+    return response.data;
+  },
+
   getById: async (id: number): Promise<PagoCliente> => {
     const response = await fetchAPI<any>(`/api/pagos/${id}`);
     const inner = response?.data ?? response;
