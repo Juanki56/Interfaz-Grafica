@@ -1326,10 +1326,10 @@ export default function App() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 bg-green-600 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
-            <Mountain className="w-8 h-8 text-white" />
+          <div className="w-32 h-32 mx-auto mb-6 flex items-center justify-center animate-pulse">
+            <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md" />
           </div>
-          <p className="text-green-800">Cargando Occitours...</p>
+          <p className="text-green-800 font-medium">Cargando Occitours...</p>
         </div>
       </div>
     );
@@ -1506,7 +1506,12 @@ export default function App() {
             {user && (currentView === 'dashboard' || currentView === 'programming' || currentView === 'profile') ? (
               <Suspense
                 fallback={
-                  <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                  <div className="min-h-screen flex flex-col items-center justify-center">
+                    <div className="w-24 h-24 mb-4 flex items-center justify-center animate-pulse">
+                      <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md" />
+                    </div>
+                    <p className="text-gray-600 font-medium">Cargando...</p>
+                  </div>
                 }
               >
                 <Navigation />
@@ -1534,7 +1539,12 @@ export default function App() {
                 <main className="pt-16 min-h-screen">
                   <Suspense
                     fallback={
-                      <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                      <div className="min-h-screen flex flex-col items-center justify-center">
+                        <div className="w-24 h-24 mb-4 flex items-center justify-center animate-pulse">
+                          <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md" />
+                        </div>
+                        <p className="text-gray-600 font-medium">Cargando...</p>
+                      </div>
                     }
                   >
                     {renderPublicView()}
@@ -1552,7 +1562,12 @@ export default function App() {
                 <main className="lg:pl-64 pt-16 lg:pt-0 min-h-screen min-w-0 overflow-x-hidden">
                   <Suspense
                     fallback={
-                      <div className="min-h-screen flex items-center justify-center text-gray-600">Cargando...</div>
+                      <div className="min-h-screen flex flex-col items-center justify-center">
+                        <div className="w-24 h-24 mb-4 flex items-center justify-center animate-pulse">
+                          <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md" />
+                        </div>
+                        <p className="text-gray-600 font-medium">Cargando...</p>
+                      </div>
                     }
                   >
                     {renderPublicView()}

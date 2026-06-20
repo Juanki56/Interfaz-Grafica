@@ -106,7 +106,23 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
     setDifficultyFilter('all');
     setPriceFilter('all');
     setLocationFilter('all');
+    setCurrentPage(1);
   };
+
+  const ITEMS_PER_PAGE = 12;
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [difficultyFilter, priceFilter, locationFilter]);
+
+  const paginatedRoutes = useMemo(() => {
+    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredRoutes.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredRoutes, currentPage]);
+
+  const totalPages = Math.ceil(filteredRoutes.length / ITEMS_PER_PAGE);
 
   return (
     <div className="relative min-h-screen bg-gradient-to-br from-green-50 via-sky-50/50 to-emerald-50 pt-20">
@@ -139,60 +155,98 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
         </div>
 
         {/* Filters */}
-        <div className="bg-white rounded-lg shadow-sm p-6 mb-8">
-          <div className="flex items-center space-x-4 mb-4">
-            <Filter className="w-5 h-5 text-gray-600" />
-            <h3 className="text-lg text-gray-800">Filtrar Rutas</h3>
+        <div className="bg-white/80 backdrop-blur-md border border-green-100 rounded-2xl shadow-sm p-6 mb-10">
+          <div className="flex items-center space-x-4 mb-6 border-b border-gray-100 pb-4">
+            <Filter className="w-5 h-5 text-green-600" />
+            <h3 className="text-xl font-semibold text-gray-800">Encuentra tu ruta ideal</h3>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-6">
+            {/* Ubicación Chips */}
             <div>
-              <label className="block text-sm text-gray-600 mb-2">Ubicación</label>
-              <Select value={locationFilter} onValueChange={setLocationFilter}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar ubicación" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas</SelectItem>
-                  {availableLocations.map((loc) => (
-                    <SelectItem key={loc} value={loc}>
-                      {loc}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <label className="block text-sm font-medium text-gray-700 mb-3">Ubicación</label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setLocationFilter('all')}
+                  className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                    locationFilter === 'all'
+                      ? 'bg-green-600 text-white shadow-md'
+                      : 'bg-green-50 text-green-700 hover:bg-green-100'
+                  }`}
+                >
+                  Todas
+                </button>
+                {availableLocations.map((loc) => (
+                  <button
+                    key={loc}
+                    onClick={() => setLocationFilter(loc)}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                      locationFilter === loc
+                        ? 'bg-green-600 text-white shadow-md'
+                        : 'bg-green-50 text-green-700 hover:bg-green-100'
+                    }`}
+                  >
+                    {loc}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div>
-              <label className="block text-sm text-gray-600 mb-2">Dificultad</label>
-              <Select value={difficultyFilter} onValueChange={setDifficultyFilter}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar dificultad" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todas</SelectItem>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-4 border-t border-gray-50">
+              {/* Dificultad Chips */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">Dificultad</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setDifficultyFilter('all')}
+                    className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                      difficultyFilter === 'all'
+                        ? 'bg-green-600 text-white shadow-md'
+                        : 'bg-green-50 text-green-700 hover:bg-green-100'
+                    }`}
+                  >
+                    Todas
+                  </button>
                   {availableDifficulties.map((d) => (
-                    <SelectItem key={d} value={d}>
+                    <button
+                      key={d}
+                      onClick={() => setDifficultyFilter(d)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                        difficultyFilter === d
+                          ? 'bg-green-600 text-white shadow-md'
+                          : 'bg-green-50 text-green-700 hover:bg-green-100'
+                      }`}
+                    >
                       {d}
-                    </SelectItem>
+                    </button>
                   ))}
-                </SelectContent>
-              </Select>
-            </div>
+                </div>
+              </div>
 
-            <div>
-              <label className="block text-sm text-gray-600 mb-2">Rango de Precio</label>
-              <Select value={priceFilter} onValueChange={setPriceFilter}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Seleccionar precio" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Todos los precios</SelectItem>
-                  <SelectItem value="low">Menos de $100,000</SelectItem>
-                  <SelectItem value="medium">$100,000 - $150,000</SelectItem>
-                  <SelectItem value="high">Más de $150,000</SelectItem>
-                </SelectContent>
-              </Select>
+              {/* Precio Chips */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-3">Rango de Precio</label>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { value: 'all', label: 'Todos' },
+                    { value: 'low', label: '< $100k' },
+                    { value: 'medium', label: '$100k - $150k' },
+                    { value: 'high', label: '> $150k' },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => setPriceFilter(option.value)}
+                      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                        priceFilter === option.value
+                          ? 'bg-green-600 text-white shadow-md'
+                          : 'bg-green-50 text-green-700 hover:bg-green-100'
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -217,7 +271,7 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
           <>
             {/* Routes Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {filteredRoutes.map((route) => {
+              {paginatedRoutes.map((route) => {
                 const price = route.precio_base != null ? Number(route.precio_base) : null;
                 const location = normalizeString(route.ubicacion) || '—';
                 const difficulty = normalizeString(route.dificultad) || '—';
@@ -226,62 +280,94 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
                 return (
                   <Card
                     key={route.id_ruta}
-                    className="overflow-hidden shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-1"
+                    className="group overflow-hidden rounded-2xl border-green-100 shadow-md hover:shadow-2xl transition-all duration-300 hover:-translate-y-1.5 flex flex-col h-full"
                   >
-                    <div className="relative h-48">
+                    <div className="relative w-full h-48 sm:h-56 shrink-0 overflow-hidden bg-gray-100">
                       <ImageWithFallback
                         src={normalizeString(route.imagen_url) || CATALOG_IMAGE_PLACEHOLDER}
                         alt={route.nombre}
                         loading="lazy"
                         decoding="async"
-                        className="h-full w-full object-cover"
+                        className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                       />
+                      {/* Gradient Overlay */}
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80" />
+                      
                       <div className="absolute top-4 left-4 flex flex-col space-y-2">
-                        {route.destacado && <Badge className="bg-green-600 text-white">Destacado</Badge>}
-                        <Badge className={getDifficultyColor(difficulty)}>{difficulty}</Badge>
+                        {route.destacado && (
+                          <Badge className="bg-yellow-400 text-yellow-900 border-none shadow-sm backdrop-blur-md">
+                            ⭐ Destacado
+                          </Badge>
+                        )}
+                        <Badge className={`${getDifficultyColor(difficulty)} border-none shadow-sm backdrop-blur-md bg-opacity-90`}>
+                          {difficulty}
+                        </Badge>
                       </div>
-                      <div className="absolute bottom-4 right-4">
-                        <div className="bg-white/90 backdrop-blur-sm rounded-lg px-3 py-1">
-                          <span className="text-lg text-green-600">
+                      
+                      <div className="absolute bottom-4 left-4 right-4 flex justify-between items-end">
+                        <div className="text-white">
+                          <p className="text-xs font-medium text-green-300 uppercase tracking-wider mb-1">Precio por persona</p>
+                          <span className="text-2xl font-bold">
                             {price == null ? 'Consultar' : `$${price.toLocaleString()}`}
                           </span>
                         </div>
                       </div>
                     </div>
 
-                    <CardContent className="p-6">
-                      <h3 className="text-xl mb-2 text-gray-800">{route.nombre}</h3>
-                      <p className="text-gray-600 mb-4 line-clamp-2">
-                        {normalizeString(route.descripcion) || 'Sin descripción'}
+                    <CardContent className="p-6 flex flex-col flex-grow">
+                      <h3 className="text-xl font-bold mb-2 text-gray-800 line-clamp-1 group-hover:text-green-700 transition-colors">{route.nombre}</h3>
+                      <p className="text-gray-600 mb-6 line-clamp-2 text-sm flex-grow">
+                        {normalizeString(route.descripcion) || 'Explora esta maravillosa ruta y conéctate con la naturaleza...'}
                       </p>
 
-                      <div className="grid grid-cols-2 gap-2 mb-4 text-sm">
-                        <div className="flex items-center space-x-1 text-gray-500">
-                          <Clock className="w-4 h-4" />
-                          <span>{formatRutaDuracionHoras(route.duracion_dias)}</span>
+                      <div className="flex flex-col gap-3 mb-6 bg-green-50/50 rounded-xl p-4 border border-green-50">
+                        <div className="flex items-center space-x-2 text-gray-700">
+                          <Clock className="w-4 h-4 text-green-600 shrink-0" />
+                          <span className="text-sm font-medium">{formatRutaDuracionHoras(route.duracion_dias)}</span>
                         </div>
-                        <div className="flex items-center space-x-1 text-gray-500">
-                          <Users className="w-4 h-4" />
-                          <span>{capacity == null ? 'Capacidad —' : `Máx. ${capacity}`}</span>
-                        </div>
-                        <div className="flex items-center space-x-1 text-gray-500 col-span-2">
-                          <MapPin className="w-4 h-4" />
-                          <span>{location}</span>
+                        <div className="flex items-center space-x-2 text-gray-700">
+                          <MapPin className="w-4 h-4 text-red-500 shrink-0" />
+                          <span className="text-sm font-medium truncate">{location}</span>
                         </div>
                       </div>
 
                       <Button
                         onClick={() => onViewChange('route-detail', String(route.id_ruta))}
-                        className="w-full bg-green-600 hover:bg-green-700"
+                        className="w-full bg-green-600 hover:bg-green-700 rounded-xl py-6 font-semibold shadow-md hover:shadow-green-600/30 transition-all"
                       >
-                        Ver Detalles
-                        <ChevronRight className="ml-2 w-4 h-4" />
+                        Ver Detalles de la Ruta
+                        <ChevronRight className="ml-2 w-5 h-5" />
                       </Button>
                     </CardContent>
                   </Card>
                 );
               })}
             </div>
+
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-center items-center mt-12 space-x-4">
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                  disabled={currentPage === 1}
+                  className="px-6 py-2 rounded-full border-green-200 text-green-700 hover:bg-green-50"
+                >
+                  Anterior
+                </Button>
+                <span className="text-gray-600 font-medium">
+                  Página {currentPage} de {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                  disabled={currentPage === totalPages}
+                  className="px-6 py-2 rounded-full border-green-200 text-green-700 hover:bg-green-50"
+                >
+                  Siguiente
+                </Button>
+              </div>
+            )}
 
             {/* No Results */}
             {filteredRoutes.length === 0 && (
