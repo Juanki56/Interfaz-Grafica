@@ -68,7 +68,7 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
       setLoadError(null);
       setIsLoading(true);
       try {
-        const backendFarms = await fincasAPI.getAll();
+        const backendFarms = await fincasAPI.getPublicas();
         if (cancelled) return;
         const list = Array.isArray(backendFarms) ? backendFarms : [];
         setAllFarms(filterFincasActivas(list).map(mapBackendFarmToCard));

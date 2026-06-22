@@ -1195,8 +1195,12 @@ export function ProgrammedRouteBookingModal({
                             <Input
                               id={`companion-name-${index}`}
                               value={companion.nombre}
-                              onChange={(event) => updateCompanion(index, 'nombre', event.target.value)}
+                              onChange={(event) => {
+                                const val = event.target.value.replace(/[0-9]/g, '').slice(0, 50);
+                                updateCompanion(index, 'nombre', val);
+                              }}
                               placeholder="Nombre"
+                              maxLength={50}
                             />
                           </div>
                           <div className="space-y-2">
@@ -1204,8 +1208,12 @@ export function ProgrammedRouteBookingModal({
                             <Input
                               id={`companion-lastname-${index}`}
                               value={companion.apellido}
-                              onChange={(event) => updateCompanion(index, 'apellido', event.target.value)}
+                              onChange={(event) => {
+                                const val = event.target.value.replace(/[0-9]/g, '').slice(0, 50);
+                                updateCompanion(index, 'apellido', val);
+                              }}
                               placeholder="Apellido"
+                              maxLength={50}
                             />
                           </div>
                           <div className="space-y-2">
@@ -1222,8 +1230,12 @@ export function ProgrammedRouteBookingModal({
                             <Input
                               id={`companion-doc-number-${index}`}
                               value={companion.numero_documento}
-                              onChange={(event) => updateCompanion(index, 'numero_documento', event.target.value)}
+                              onChange={(event) => {
+                                const val = event.target.value.replace(/\D/g, '').slice(0, 15);
+                                updateCompanion(index, 'numero_documento', val);
+                              }}
                               placeholder="Documento"
+                              maxLength={15}
                               required
                             />
                           </div>
@@ -1232,8 +1244,12 @@ export function ProgrammedRouteBookingModal({
                             <Input
                               id={`companion-phone-${index}`}
                               value={companion.telefono}
-                              onChange={(event) => updateCompanion(index, 'telefono', event.target.value)}
+                              onChange={(event) => {
+                                const val = event.target.value.replace(/\D/g, '').slice(0, 15);
+                                updateCompanion(index, 'telefono', val);
+                              }}
                               placeholder="Telefono"
+                              maxLength={15}
                             />
                           </div>
                           <div className="space-y-2">
@@ -1243,6 +1259,8 @@ export function ProgrammedRouteBookingModal({
                               type="date"
                               value={companion.fecha_nacimiento}
                               onChange={(event) => updateCompanion(index, 'fecha_nacimiento', event.target.value)}
+                              max={new Date().toISOString().split("T")[0]}
+                              min={new Date(new Date().setFullYear(new Date().getFullYear() - 100)).toISOString().split("T")[0]}
                             />
                           </div>
                         </div>

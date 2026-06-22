@@ -857,8 +857,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                               <Label>Nombre *</Label>
                               <Input
                                 value={companion.nombre}
-                                onChange={(e) => updateCompanionField(index, 'nombre', e.target.value)}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/[0-9]/g, '').slice(0, 50);
+                                  updateCompanionField(index, 'nombre', val);
+                                }}
                                 placeholder="Ej: Laura"
+                                maxLength={50}
                               />
                             </div>
 
@@ -866,8 +870,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                               <Label>Apellido *</Label>
                               <Input
                                 value={companion.apellido}
-                                onChange={(e) => updateCompanionField(index, 'apellido', e.target.value)}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/[0-9]/g, '').slice(0, 50);
+                                  updateCompanionField(index, 'apellido', val);
+                                }}
                                 placeholder="Ej: Gómez"
+                                maxLength={50}
                               />
                             </div>
 
@@ -893,8 +901,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                               <Label>Número de documento *</Label>
                               <Input
                                 value={companion.numero_documento}
-                                onChange={(e) => updateCompanionField(index, 'numero_documento', e.target.value)}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/\D/g, '').slice(0, 15);
+                                  updateCompanionField(index, 'numero_documento', val);
+                                }}
                                 placeholder="Ej: 123456789"
+                                maxLength={15}
                                 required
                               />
                             </div>
@@ -903,8 +915,12 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                               <Label>Teléfono</Label>
                               <Input
                                 value={companion.telefono}
-                                onChange={(e) => updateCompanionField(index, 'telefono', e.target.value)}
+                                onChange={(e) => {
+                                  const val = e.target.value.replace(/\D/g, '').slice(0, 15);
+                                  updateCompanionField(index, 'telefono', val);
+                                }}
                                 placeholder="Ej: 3001234567"
+                                maxLength={15}
                               />
                             </div>
 
@@ -914,6 +930,8 @@ export function TourBookingModal({ isOpen, onClose, tour, type = 'ruta', availab
                                 type="date"
                                 value={companion.fecha_nacimiento}
                                 onChange={(e) => updateCompanionField(index, 'fecha_nacimiento', e.target.value)}
+                                max={new Date().toISOString().split("T")[0]}
+                                min={new Date(new Date().setFullYear(new Date().getFullYear() - 100)).toISOString().split("T")[0]}
                               />
                             </div>
                           </div>
