@@ -330,7 +330,7 @@ export function AboutUsPage({ onViewChange }: AboutUsPageProps) {
       {/* ─────────────────────────────────────────
           CTA FINAL
       ───────────────────────────────────────── */}
-      <section className="py-24 bg-white text-center">
+      <section className="pt-24 bg-white text-center" style={{ paddingBottom: '80px' }}>
         <div style={{ maxWidth: '620px', margin: '0 auto', padding: '0 24px' }}>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -345,7 +345,7 @@ export function AboutUsPage({ onViewChange }: AboutUsPageProps) {
               style={{ fontSize: 'clamp(1.8rem, 4vw, 2.8rem)' }}>
               Viaja con propósito,<br />descubre con el corazón.
             </h2>
-            <p className="text-gray-500 mb-10 leading-relaxed">
+            <p className="text-gray-500 leading-relaxed" style={{ marginBottom: '80px' }}>
               ¿Listo para vivir la magia del Occidente de Antioquia?
               Únete a nosotros y construyamos juntos recuerdos inolvidables.
             </p>

@@ -64,20 +64,20 @@ export function HeaderNavigation({ currentView, onViewChange, onLogin }: HeaderN
   };
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-sm border-b border-green-100 shadow-sm">
+    <nav className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-green-100 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-20">
+        <div className="flex justify-between items-center h-24">
           {/* Logo */}
           <div 
-            className="flex items-center cursor-pointer group"
+            className="flex items-center cursor-pointer group h-full py-2"
             onClick={() => onViewChange('home')}
           >
-            <div className="w-[60px] h-[60px] shrink-0 overflow-hidden">
+            <div className="w-auto h-full shrink-0 flex items-center justify-center">
               <img 
-                src="/logo.png" 
+                src="/logo_sin_fondo-removebg-preview.png" 
                 alt="Occitours Logo" 
-                className="w-full h-full object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-105" 
-                style={{ maxWidth: '60px', maxHeight: '60px' }}
+                className="h-full w-auto object-contain transition-transform duration-300 group-hover:scale-105" 
+                style={{ border: 'none', outline: 'none' }}
               />
             </div>
           </div>

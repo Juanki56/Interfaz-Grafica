@@ -9,6 +9,7 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { fincasAPI, type Finca as BackendFinca } from '../services/api';
 import { filterFincasActivas } from '../utils/fincaActiva';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
+import { Footer } from './Footer';
 
 interface FarmsPageProps {
   onViewChange: (view: string, itemId?: string) => void;
@@ -409,6 +410,7 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
           </div>
         </div>
       </div>
+      <Footer onViewChange={onViewChange} />
     </div>
   );
 }

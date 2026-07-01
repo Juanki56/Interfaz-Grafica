@@ -644,11 +644,11 @@ export default function App() {
 
     if (frontendRole === 'client') {
       setAdminActiveTab('bookings');
-      setCurrentView('dashboard');
+      setCurrentView('home');
     } else if (frontendRole === 'admin' || frontendRole === 'guide' || frontendRole === 'advisor') {
-      setCurrentView('dashboard');
+      setCurrentView('home');
     } else {
-      setCurrentView('profile');
+      setCurrentView('home');
     }
 
     return { success: true };
@@ -822,11 +822,11 @@ export default function App() {
 
       if (frontendRole === 'client') {
         setAdminActiveTab('bookings');
-        setCurrentView('dashboard');
+        setCurrentView('home');
       } else if (frontendRole === 'admin' || frontendRole === 'guide' || frontendRole === 'advisor') {
-        setCurrentView('dashboard');
+        setCurrentView('home');
       } else {
-        setCurrentView('profile');
+        setCurrentView('home');
       }
 
       return { success: true };
@@ -1529,7 +1529,7 @@ export default function App() {
                       currentView === 'profile' ? <UserProfile onClose={() => handleViewChange('dashboard')} /> : null}
                 </main>
               </Suspense>
-            ) : (currentView === 'home' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking' || currentView === 'terms' || currentView === 'cancellation') ? (
+            ) : (currentView === 'home' || currentView === 'about' || currentView === 'routes' || currentView === 'route-detail' || currentView === 'farms' || currentView === 'farm-detail' || currentView === 'programmed-booking' || currentView === 'terms' || currentView === 'cancellation') ? (
               <>
                 <HeaderNavigation
                   currentView={currentView}

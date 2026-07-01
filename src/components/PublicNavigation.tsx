@@ -62,14 +62,14 @@ export function PublicNavigation({ currentView, onViewChange, onLogin }: PublicN
   return (
     <>
       {/* Mobile Header */}
-      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white/95 backdrop-blur-sm border-b border-green-100 shadow-sm">
+      <div className="lg:hidden fixed top-0 left-0 right-0 z-50 bg-white border-b border-green-100 shadow-sm">
         <div className="flex items-center justify-between h-20 px-4">
           <div 
-            className="flex items-center cursor-pointer group"
+            className="flex items-center cursor-pointer group h-full py-2"
             onClick={() => onViewChange('home')}
           >
-            <div className="w-[60px] h-[60px] shrink-0 overflow-hidden">
-              <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-105" style={{ maxWidth: '60px', maxHeight: '60px' }} />
+            <div className="w-auto h-full shrink-0 flex items-center justify-center">
+              <img src="/logo_sin_fondo-removebg-preview.png" alt="Occitours Logo" className="h-full w-auto object-contain transition-transform duration-300 group-hover:scale-105" />
             </div>
           </div>
           
@@ -101,14 +101,14 @@ export function PublicNavigation({ currentView, onViewChange, onLogin }: PublicN
       </div>
 
       {/* Desktop Sidebar */}
-      <div className="hidden lg:flex lg:flex-col lg:fixed lg:left-0 lg:top-0 lg:bottom-0 lg:w-64 lg:bg-white/95 lg:backdrop-blur-sm lg:border-r lg:border-green-100 lg:shadow-sm lg:z-40">
+      <div className="hidden lg:flex lg:flex-col lg:fixed lg:left-0 lg:top-0 lg:bottom-0 lg:w-64 lg:bg-white lg:border-r lg:border-green-100 lg:shadow-sm lg:z-40">
         {/* Logo Section */}
         <div 
-          className="flex flex-col items-center p-5 cursor-pointer border-b border-green-100 group"
+          className="flex flex-col items-center py-8 px-4 cursor-pointer border-b border-green-100 group hover:bg-green-50/30 transition-colors"
           onClick={() => onViewChange('home')}
         >
-          <div className="overflow-hidden" style={{ width: '120px', height: '120px' }}>
-            <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105" style={{ maxWidth: '120px', maxHeight: '120px' }} />
+          <div className="w-full flex justify-center">
+            <img src="/logo_sin_fondo-removebg-preview.png" alt="Occitours Logo" className="w-32 h-auto object-contain transition-transform duration-300 group-hover:scale-105" />
           </div>
         </div>
 
@@ -204,14 +204,14 @@ export function PublicNavigation({ currentView, onViewChange, onLogin }: PublicN
             {/* Mobile Sidebar Header */}
             <div className="flex items-center justify-between p-4 border-b border-green-100">
               <div 
-                className="flex items-center cursor-pointer group"
+                className="flex items-center cursor-pointer group h-full py-2"
                 onClick={() => {
                   onViewChange('home');
                   setIsMobileSidebarOpen(false);
                 }}
               >
-                <div className="w-[60px] h-[60px] shrink-0 overflow-hidden">
-                  <img src="/logo.png" alt="Occitours Logo" className="w-full h-full object-contain drop-shadow-md transition-transform duration-300 group-hover:scale-105" style={{ maxWidth: '60px', maxHeight: '60px' }} />
+                <div className="w-auto h-[50px] shrink-0 flex items-center justify-center">
+                  <img src="/logo.png" alt="Occitours Logo" className="h-full w-auto object-contain mix-blend-multiply transition-transform duration-300 group-hover:scale-105" />
                 </div>
               </div>
               <Button

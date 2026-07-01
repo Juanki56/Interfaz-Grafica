@@ -8,6 +8,7 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { rutasAPI, type Ruta } from '../services/api';
 import { CATALOG_IMAGE_PLACEHOLDER } from '../utils/catalogPlaceholders';
 import { formatRutaDuracionHoras } from '../utils/routeDateCalendar';
+import { Footer } from './Footer';
 
 interface RoutesPageProps {
   onViewChange: (view: string, itemId?: string) => void;
@@ -394,6 +395,7 @@ export function RoutesPage({ onViewChange }: RoutesPageProps) {
           </>
         )}
       </div>
+      <Footer onViewChange={onViewChange} />
     </div>
   );
 }
