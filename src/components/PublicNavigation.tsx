@@ -211,7 +211,7 @@ export function PublicNavigation({ currentView, onViewChange, onLogin }: PublicN
                 }}
               >
                 <div className="w-auto h-[50px] shrink-0 flex items-center justify-center">
-                  <img src="/logo.png" alt="Occitours Logo" className="h-full w-auto object-contain mix-blend-multiply transition-transform duration-300 group-hover:scale-105" />
+                  <img src="/logo_sin_fondo-removebg-preview.png" alt="Occitours Logo" className="h-full w-auto object-contain transition-transform duration-300 group-hover:scale-105" />
                 </div>
               </div>
               <Button
