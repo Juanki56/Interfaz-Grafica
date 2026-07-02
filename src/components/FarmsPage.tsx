@@ -265,7 +265,7 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
             {paginatedFarms.map((farm) => (
               <Card
                 key={farm.id}
-                className="group overflow-hidden border-green-100 shadow-md transition-all duration-300 hover:-translate-y-1.5 hover:shadow-2xl rounded-2xl flex flex-col h-full"
+                className="group overflow-hidden border-green-100 shadow-md transition-all duration-300 hover:-translate-y-1.5 hover:shadow-2xl rounded-2xl flex flex-col h-full bg-white"
               >
                 <div className="relative w-full h-48 sm:h-56 shrink-0 overflow-hidden bg-gray-100">
                   <ImageWithFallback
@@ -299,9 +299,11 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
                   </div>
                 </div>
 
-                <CardContent className="flex flex-col p-6 flex-grow bg-white relative">
+                <CardContent className="flex flex-col p-6 flex-1 bg-white relative">
                   <h3 className="mb-3 text-2xl font-bold text-gray-800 line-clamp-1 group-hover:text-green-700 transition-colors">{farm.name}</h3>
-                  <p className="mb-6 line-clamp-3 text-sm leading-relaxed text-gray-600 flex-grow">{farm.description}</p>
+                  <div className="flex-1">
+                    <p className="mb-6 line-clamp-3 text-sm leading-relaxed text-gray-600">{farm.description}</p>
+                  </div>
 
                   <div className="mb-6 grid grid-cols-2 gap-3 bg-green-50/50 rounded-xl p-4 border border-green-50">
                     <div className="flex items-center gap-2 text-sm text-gray-700">
@@ -343,26 +345,32 @@ export function FarmsPage({ onViewChange }: FarmsPageProps) {
 
         {/* Pagination Controls */}
         {!isLoading && !loadError && totalPages > 1 && (
-          <div className="flex justify-center items-center mt-12 space-x-4">
-            <Button
-              variant="outline"
-              onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-              disabled={currentPage === 1}
-              className="px-6 py-2 rounded-full border-green-200 text-green-700 hover:bg-green-50"
-            >
-              Anterior
-            </Button>
-            <span className="text-gray-600 font-medium">
-              Página {currentPage} de {totalPages}
-            </span>
-            <Button
-              variant="outline"
-              onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-              disabled={currentPage === totalPages}
-              className="px-6 py-2 rounded-full border-green-200 text-green-700 hover:bg-green-50"
-            >
-              Siguiente
-            </Button>
+          <div className="w-full flex justify-center items-center pt-24 pb-12 mt-8 relative z-10 clear-both">
+            <div className="inline-flex items-center space-x-2 bg-white px-6 py-3 rounded-full shadow-md border border-green-100">
+              <Button
+                variant="ghost"
+                onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-4 py-2 rounded-full text-green-700 hover:bg-green-50 hover:text-green-800 transition-colors"
+              >
+                Anterior
+              </Button>
+              
+              <div className="flex items-center justify-center px-4">
+                <span className="text-gray-600 font-medium text-sm bg-green-50/50 px-4 py-1.5 rounded-full border border-green-50">
+                  Página <span className="text-green-700 font-bold mx-1">{currentPage}</span> de <span className="font-bold ml-1">{totalPages}</span>
+                </span>
+              </div>
+
+              <Button
+                variant="ghost"
+                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-4 py-2 rounded-full text-green-700 hover:bg-green-50 hover:text-green-800 transition-colors"
+              >
+                Siguiente
+              </Button>
+            </div>
           </div>
         )}
 
